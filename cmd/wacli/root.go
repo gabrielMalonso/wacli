@@ -110,6 +110,7 @@ func execute(args []string) error {
 	rootCmd.AddCommand(newChannelsCmd(&flags))
 	rootCmd.AddCommand(newHistoryCmd(&flags))
 	rootCmd.AddCommand(newDraftCmd(&flags))
+	rootCmd.AddCommand(newOutboundCmd(&flags))
 	rootCmd.AddCommand(newPresenceCmd(&flags))
 	rootCmd.AddCommand(newProfileCmd(&flags))
 	rootCmd.AddCommand(newDocsCmd(&flags))
@@ -127,8 +128,8 @@ func execute(args []string) error {
 	}
 	if intent.cursorSet && !intent.help {
 		c, _, findErr := rootCmd.Find(args)
-		if !intent.agent || findErr != nil || (c.CommandPath() != "wacli messages list" && c.CommandPath() != "wacli messages search" && c.CommandPath() != "wacli chats list" && c.CommandPath() != "wacli contacts list" && c.CommandPath() != "wacli contacts search" && c.CommandPath() != "wacli draft list") {
-			err := agentUsageError(fmt.Errorf("--cursor requires --agent messages list, --agent messages search --sort time, --agent chats list or --agent contacts list/search or --agent draft list"))
+		if !intent.agent || findErr != nil || (c.CommandPath() != "wacli messages list" && c.CommandPath() != "wacli messages search" && c.CommandPath() != "wacli chats list" && c.CommandPath() != "wacli contacts list" && c.CommandPath() != "wacli contacts search" && c.CommandPath() != "wacli draft list" && c.CommandPath() != "wacli outbound list" && c.CommandPath() != "wacli outbound show") {
+			err := agentUsageError(fmt.Errorf("--cursor requires --agent messages list, --agent messages search --sort time, --agent chats list or --agent contacts list/search or --agent draft list or --agent outbound list/show"))
 			writeRootError(flags, err)
 			return err
 		}
