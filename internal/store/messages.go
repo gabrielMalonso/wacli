@@ -366,6 +366,12 @@ type ListMessagesParams struct {
 }
 
 func (d *DB) ListMessages(p ListMessagesParams) ([]Message, error) {
+	query, args := listMessagesQuery(p, nil)
+	return d.scanMessages(query, args...)
+}
+
+// listMessagesQuery keeps legacy and paginated reads on the same indexed path.
+func listMessagesQuery(p ListMessagesParams, anchor *messageCursor) (string, []any) {
 	if p.Limit <= 0 {
 		p.Limit = 50
 	}
@@ -375,6 +381,14 @@ func (d *DB) ListMessages(p ListMessagesParams) ([]Message, error) {
 		LEFT JOIN starred s ON s.chat_jid = m.chat_jid AND s.msg_id = m.msg_id
 		WHERE m.deleted_at IS NULL`
 	filter, filterArgs := p.messageFilter()
+	if anchor != nil {
+		op := "<"
+		if p.Asc {
+			op = ">"
+		}
+		filter += " AND (m.ts, m.rowid) " + op + " (?, ?)"
+		filterArgs = append(filterArgs, anchor.TS, anchor.RowID)
+	}
 	order := " ORDER BY m.ts DESC, m.rowid DESC"
 	if p.Asc {
 		order = " ORDER BY m.ts ASC, m.rowid ASC"
@@ -401,7 +415,7 @@ func (d *DB) ListMessages(p ListMessagesParams) ([]Message, error) {
 	}
 	query += order + " LIMIT ?"
 	args = append(args, p.Limit)
-	return d.scanMessages(query, args...)
+	return query, args
 }
 
 // messageFilter is the part of ListMessages' WHERE clause that does not name
@@ -605,6 +619,7 @@ func (d *DB) scanMessages(query string, args ...any) ([]Message, error) {
 		if err := rows.Scan(&m.rowID, &m.ChatJID, &m.ChatName, &m.MsgID, &m.SenderJID, &m.SenderName, &ts, &fromMe, &m.Text, &m.DisplayText, &m.QuotedMsgID, &m.QuotedSenderJID, &forwarded, &forwardingScore, &m.ReactionToID, &m.ReactionEmoji, &m.MediaType, &m.MediaCaption, &m.Filename, &m.MimeType, &m.DirectPath, &m.LocalPath, &downloadedAt, &starred, &starredAt, &revoked, &deletedForMe, &deletedAt, &deletionReason, &payloadPurgedAt, &edited, &buttonsJSON, &m.Snippet); err != nil {
 			return nil, err
 		}
+		m.rowTS = ts
 		m.Timestamp = fromUnix(ts)
 		m.FromMe = fromMe != 0
 		m.IsForwarded = forwarded != 0
