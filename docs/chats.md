@@ -20,6 +20,18 @@ wacli chats mark-unread --chat CHAT [--pick N]
 wacli chats cleanup [--days N] [--jid JID] [--dry-run] [--confirm]
 ```
 
+## Agent pagination
+
+`--agent chats list` defaults to 20 rows (1–200), always returns `meta.page`, and accepts `--cursor TOKEN` with any existing query/state filters. Keep store/query/filters unchanged; limit and `--detail compact|full` may change. `has_more` observes one extra local row; empty/exact-limit ends return a null cursor, with completeness/freshness still unknown.
+
+Agent pages preserve raw stored PN/LID identities and counts. Order is normalized pin DESC (NULL/zero → 0, nonzero → 1), stored activity DESC (NULL → 0, negative values preserved), then stored JID BINARY ASC. Unknown/nonpositive timestamps still display as null. The anchor does not need to survive deletion. Legacy JSON/tables and their display resolution/ordering stay unchanged.
+
+The separate strict/versioned chat token is compact for ordinary identities, with an exceptional ceiling of 16 KiB; message tokens cannot be exchanged with chat tokens. Scope binds the absolute selected store, effective literal query and every tri-state state filter (unset differs from false); malformed or mismatched tokens return `invalid_cursor` exit 2 without echoing the token. Whitespace-only queries disable matching; otherwise percent, underscore and backslash match literally, preserving input whitespace in the scope. A stored identity that cannot generate a supported bounded continuation returns `internal_error` exit 1 with stdout empty, no JID echo and no invalid next page.
+
+Agent filters normalize NULL/zero flags to false and nonzero to true. Muted means forever (-1) or a deadline strictly after one current time per query; NULL, zero, other negatives and equality/earlier deadlines are unmuted. Time is re-evaluated each page, so expiration changes membership without a write. Reads are live: sync identity fusion, pin/activity/state/name changes can move/remove rows and cause repeats/omissions. Restart for a fresh traversal; local end is not evidence of complete remote history.
+
+No OFFSET, schema or index is added. SQL returns limit+1 rows to Go, but SQLite may scan/sort candidates each page. See [the agent contract](agent.md#local-chat-pagination) for token and live-read details.
+
 ## Notes
 
 - `list` is local and sorted by pinned chats first, then newest known message timestamp.

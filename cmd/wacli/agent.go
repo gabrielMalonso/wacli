@@ -296,6 +296,11 @@ func validateAgentCommand(cmd *cobra.Command, args []string, flags *rootFlags) e
 		}
 	}
 	if path == "chats list" {
+		if cmd.Flags().Changed("cursor") {
+			if err := store.ValidateChatsCursor(flags.cursor); err != nil {
+				return classifyAgentError(err)
+			}
+		}
 		for _, name := range []string{"archived", "pinned", "muted", "unread"} {
 			yes, _ := cmd.Flags().GetBool(name)
 			no, _ := cmd.Flags().GetBool("no-" + name)
@@ -342,6 +347,10 @@ func classifyAgentError(err error) *out.AgentError {
 	var cursor *store.MessagesCursorError
 	if errors.As(err, &cursor) {
 		return &out.AgentError{Code: "invalid_cursor", Message: cursor.Error(), Recovery: "Restart messages list/search without --cursor using the selected archive and filters.", ExitCode: 2, Cause: err}
+	}
+	var chatsCursor *store.ChatsCursorError
+	if errors.As(err, &chatsCursor) {
+		return &out.AgentError{Code: "invalid_cursor", Message: chatsCursor.Error(), Recovery: "Restart chats list without --cursor using the selected archive and filters.", ExitCode: 2, Cause: err}
 	}
 	var identity *localIdentityError
 	if errors.As(err, &identity) {
