@@ -283,6 +283,10 @@ func TestAgentPreflightErrorsBeforeEffects(t *testing.T) {
 		{[]string{"--agent", "groups"}, "unsupported_command"},
 		{[]string{"--agent", "completion", "bash"}, "unsupported_command"},
 		{[]string{"--agent", "messages", "purge"}, "unsupported_command"},
+		{[]string{"--agent", "messages", "purge", "--dry-run"}, "unsupported_command"},
+		{[]string{"chats", "cleanup", "--dry-run", "--agent"}, "unsupported_command"},
+		{[]string{"--agent", "groups", "prune", "--dry-run"}, "unsupported_command"},
+		{[]string{"store", "cleanup", "--agent", "--dry-run"}, "unsupported_command"},
 		{[]string{"contacts", "alias", "set", "--agent"}, "unsupported_command"},
 		{[]string{"--agent", "messages", "show"}, "invalid_arguments"},
 		{[]string{"messages", "show", "--agent", "--unknown"}, "invalid_arguments"},
@@ -557,5 +561,48 @@ func TestAgentUnreadableIdentityState(t *testing.T) {
 		if stdout != "" || commandExitCode(err) != 4 || decodeAgentTest(t, stderr).Error.Code != "store_unavailable" || strings.Contains(stderr, "session.db") {
 			t.Fatalf("bad identity-state failure: %v %s", err, stderr)
 		}
+	}
+}
+
+func TestAgentErrorsKeepInternalCausesPrivate(t *testing.T) {
+	raw := errors.New("SECRET_INTERNAL_FIXTURE /private/session.db authenticated-media-url key-bytes")
+	for _, typed := range []*out.AgentError{agentStoreError(raw), classifyAgentError(raw)} {
+		var recovered *out.AgentError
+		if !errors.As(typed, &recovered) || !errors.Is(typed, raw) {
+			t.Fatal("lost typed cause")
+		}
+		stderr := captureRootStderr(t, func() { writeRootError(rootFlags{agent: true, detail: "full"}, typed) })
+		if strings.Contains(stderr, "SECRET_INTERNAL_FIXTURE") || strings.Contains(stderr, "/private/session.db") || strings.Contains(stderr, "key-bytes") {
+			t.Fatalf("raw failure leaked: %s", stderr)
+		}
+		env := decodeAgentTest(t, stderr)
+		if env.Error.Code != typed.Code || env.Meta.Recovery != "" {
+			t.Fatalf("misleading recovery: %s", stderr)
+		}
+	}
+}
+
+func TestAgentSelectionStaysWithResolvedAccount(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfg := &config.AccountsConfig{DefaultAccount: "fixture", Accounts: map[string]config.AccountEntry{"fixture": {Store: "first"}}}
+	if err := config.SaveAccountsConfig(cfgPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	flags := &rootFlags{agent: true}
+	first, err := resolveStoreDirWithConfig(flags, cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Accounts["fixture"] = config.AccountEntry{Store: "second"}
+	if err := config.SaveAccountsConfig(cfgPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := resolveStoreDirWithConfig(flags, cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened != first || flags.agentAccount.StoreRef == nil || *flags.agentAccount.StoreRef != opened {
+		t.Fatalf("selection changed between envelope and opener: first=%s opened=%s", first, opened)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -298,7 +299,17 @@ func agentUsageError(err error) *out.AgentError {
 	return &out.AgentError{Code: "invalid_arguments", Message: err.Error(), ExitCode: 2, Cause: err}
 }
 func agentStoreError(err error) *out.AgentError {
-	return &out.AgentError{Code: "store_unavailable", Message: err.Error(), ExitCode: 4, Cause: err}
+	message := "Selected local archive or configuration is unreadable or incompatible."
+	recovery := "Inspect offline with doctor without --agent or --connect; inspect session observations separately with auth status --agent."
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		message = "Selected local archive or configuration is missing."
+		recovery = "Select an existing initialized archive with --store or --account."
+	case errors.Is(err, os.ErrPermission):
+		message = "Selected local archive or configuration is not readable with current permissions."
+		recovery = "Check local read permissions for the selected archive and account configuration."
+	}
+	return &out.AgentError{Code: "store_unavailable", Message: message, Recovery: recovery, ExitCode: 4, Cause: err}
 }
 func classifyAgentError(err error) *out.AgentError {
 	var typed *out.AgentError
@@ -312,7 +323,7 @@ func classifyAgentError(err error) *out.AgentError {
 	if errors.Is(err, sql.ErrNoRows) {
 		return &out.AgentError{Code: "not_found", Message: "Requested item was not found in the selected local archive.", ExitCode: 3, Cause: err}
 	}
-	return &out.AgentError{Code: "internal_error", Message: err.Error(), ExitCode: 1, Cause: err}
+	return &out.AgentError{Code: "internal_error", Message: "Local query failed.", ExitCode: 1, Cause: err}
 }
 func commandExitCode(err error) int {
 	if err == nil {

@@ -214,6 +214,11 @@ func resolveStoreDir(flags *rootFlags) (string, error) {
 }
 
 func resolveStoreDirWithConfig(flags *rootFlags, configPath string) (string, error) {
+	// Resolve an agent selection once so its envelope and opener cannot disagree
+	// if the default account configuration changes during the invocation.
+	if flags != nil && flags.agent && flags.agentAccount.StoreRef != nil {
+		return *flags.agentAccount.StoreRef, nil
+	}
 	storeDir := ""
 	account := ""
 	if flags != nil {

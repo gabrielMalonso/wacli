@@ -2,6 +2,7 @@ package out
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -60,7 +61,14 @@ func WriteAgentJSON[T any](w io.Writer, account AgentAccount, meta AgentMeta, da
 	if meta.Detail == "full" {
 		limit = 8 << 20
 	}
-	return writeAgent(w, agentSuccess[T]{1, true, account, meta, data}, limit)
+	err := writeAgent(w, agentSuccess[T]{1, true, account, meta, data}, limit)
+	if meta.Detail == "full" {
+		var tooLarge *AgentError
+		if errors.As(err, &tooLarge) && tooLarge.Code == "payload_too_large" {
+			tooLarge.Recovery = "Use --detail compact, or narrow the query with smaller list/context limits, fewer resolve inputs, or one selected item."
+		}
+	}
+	return err
 }
 func WriteAgentError(w io.Writer, account AgentAccount, meta AgentMeta, err *AgentError) error {
 	return writeAgent(w, agentFailure{1, false, account, meta, err}, 1<<20)
@@ -71,7 +79,8 @@ func writeAgent(w io.Writer, value any, limit int) error {
 		return err
 	}
 	if len(b)+1 > limit {
-		return &AgentError{Code: "payload_too_large", Message: fmt.Sprintf("agent output exceeds %d bytes", limit), Recovery: "Reduce --limit or context --before/--after; use messages show for one message.", ExitCode: 1}
+		recovery := "Narrow the query with smaller list/context limits, fewer resolve inputs, or one selected item."
+		return &AgentError{Code: "payload_too_large", Message: fmt.Sprintf("agent output exceeds %d bytes", limit), Recovery: recovery, ExitCode: 1}
 	}
 	_, err = fmt.Fprintln(w, string(b))
 	if isPlatformBrokenPipe(err) {

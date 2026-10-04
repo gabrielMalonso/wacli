@@ -27,7 +27,7 @@ wacli --store /path/to/archive --agent doctor
 
 Other commands, including mutations, downloads, `history fill/backfill`, and `doctor --connect`, fail before their argument validators or store/network operations with `unsupported_command`. Help, root help without a command, and version retain their normal text semantics. Unknown commands/flags are usage errors. Shell completion is outside the agent contract. `--events` is rejected with `--agent` to keep one error envelope on stderr.
 
-All archive queries use the existing read-only opener, validate the archive schema without migration, and work while the writer lock is held. They never initialize a missing archive. Authentication status reads the public session JID and local revocation observation, without loading credentials or opening a WhatsApp client; an existing directory without a session reports unauthenticated. Offline doctor requires a readable current-schema archive; store failures are error envelopes. Neither command connects.
+All archive queries use the existing read-only opener, validate the archive schema without migration, and work while the writer lock is held. They never initialize a missing archive. Authentication status reads the public session JID and local revocation observation, without loading credentials or opening a WhatsApp client; an existing directory without a session reports unauthenticated. Offline doctor requires a readable current-schema archive; store failures are error envelopes with exit 4. Inspect session state separately with `auth status --agent` even if `wacli.db` is unreadable, or run legacy `doctor --json` (without `--agent` or `--connect`) to retain its diagnostic report, including archive errors. Neither command connects.
 
 ## Envelope and identity
 
@@ -47,7 +47,7 @@ Agent lists default to **20** rows; explicit `--limit` must be **1–200** in bo
 
 Compact message `text` is display text, capped at **320 Unicode code points**, preserving valid UTF-8. `text_truncated` explicitly records cutting; there is no appended ellipsis that changes the text. Other selected labels (names, aliases, filenames) have the same cap and report affected fields in `fields_truncated`. Identifiers are never truncated. `meta.recovery` documents full retrieval. Full exposes only selected public DTO fields: it does not serialize internal structs, keys, authenticated media URLs, session paths, raw protobufs or blobs. It does not expose local download paths or button URLs; `downloaded`/`downloaded_at` are the selected download observations. The selected `account.store_ref` is the intentional path exception.
 
-The total encoded envelope, including newline, is capped at **1 MiB compact / 8 MiB full**, checked before writing any success bytes. `payload_too_large` is an error with guidance to reduce row/context limits or retrieve one message. Full removes per-text truncation, not row/envelope bounds.
+The total encoded envelope, including newline, is capped at **1 MiB compact / 8 MiB full**, checked before writing any success bytes. `payload_too_large` is a typed exit-1 error with stdout entirely empty and guidance to narrow the query; full also suggests `--detail compact`. Full removes per-text truncation, not row/envelope bounds. These are encoded **output** bounds, not total memory bounds: database rows/DTOs and the JSON envelope are materialized before the size check.
 
 List/search and context neighbors retain legacy exclusion of tombstones, explicitly reported as `meta.excluded=["tombstones"]`. Direct `show` and a context target can return a tombstone with `revoked`, `deleted_for_me`, `deleted_at`, `deletion_reason`, and `payload_purged_at` when present. `edited` remains visible in both details. Full may show retained tombstone content until an explicit purge has erased it. Compact includes essential media type/filename/MIME, quote identity, reaction target/emoji and forwarded state when present; optional full fields are intentionally selected by the documented detail level.
 
@@ -65,7 +65,7 @@ List/search and context neighbors retain legacy exclusion of tombstones, explici
 | 1 | `payload_too_large` | The encoded result exceeds the detail's envelope cap |
 | 1 | `internal_error` | Unclassified failure |
 
-Errors carry `code` and `message`; `recovery` appears only when an actionable step is known. No network retry prediction is emitted. Exit codes outside agent mode keep their legacy behavior.
+Errors carry `code` and `message`; `recovery` appears only when an actionable step is known. Store, session and unclassified failures expose selected public messages rather than raw internal causes or paths; original causes remain available to typed exit handling. No network retry prediction is emitted. Exit codes outside agent mode keep their legacy behavior.
 
 ```json
 {"schema_version":1,"success":false,"account":{"store_ref":"/path/to/archive"},"meta":{"source":"local","detail":"compact","completeness":"unknown","freshness":"unknown"},"error":{"code":"not_found","message":"Requested item was not found in the selected local archive."}}
