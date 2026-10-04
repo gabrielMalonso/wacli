@@ -115,6 +115,9 @@ type Options struct {
 	WADiagnosticWriter io.Writer
 	AllowUnauthed      bool
 	ReadOnly           bool
+	// WAFactory creates the client lazily at OpenWA; nil uses the SDK wrapper.
+	// App owns the returned client's observer and closing lifetime.
+	WAFactory func(wa.Options) (WAClient, error)
 }
 
 type App struct {
@@ -182,7 +185,14 @@ func (a *App) OpenWA() error {
 	}
 	if a.wa == nil {
 		sessionPath := filepath.Join(a.opts.StoreDir, "session.db")
-		cli, err := wa.New(wa.Options{StorePath: sessionPath, KeyStateStore: a.db, DiagnosticWriter: a.opts.WADiagnosticWriter})
+		clientOptions := wa.Options{StorePath: sessionPath, KeyStateStore: a.db, DiagnosticWriter: a.opts.WADiagnosticWriter}
+		var cli WAClient
+		var err error
+		if a.opts.WAFactory != nil {
+			cli, err = a.opts.WAFactory(clientOptions)
+		} else {
+			cli, err = wa.New(clientOptions)
+		}
 		if err != nil {
 			return err
 		}

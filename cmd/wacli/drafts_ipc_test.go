@@ -19,6 +19,10 @@ import (
 )
 
 func draftOwnerFixture(t *testing.T, readOnly bool) (string, *app.App) {
+	return draftOwnerFixtureOptions(t, app.Options{ReadOnly: readOnly})
+}
+
+func draftOwnerFixtureOptions(t *testing.T, opts app.Options) (string, *app.App) {
 	t.Helper()
 	skipPresenceDelegateSocketTestOnUnsupportedOS(t)
 	dir := shortPresenceDelegateStoreDir(t)
@@ -32,7 +36,8 @@ func draftOwnerFixture(t *testing.T, readOnly bool) (string, *app.App) {
 			t.Fatal(err)
 		}
 	}
-	a, err := app.New(app.Options{StoreDir: dir, ReadOnly: readOnly})
+	opts.StoreDir = dir
+	a, err := app.New(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
