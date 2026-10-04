@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/openclaw/wacli/internal/store"
 	"go.mau.fi/whatsmeow/types"
@@ -23,8 +24,30 @@ type HistoryIdentity struct {
 	AccountJID string
 }
 
+// ParseHistoryJID validates a complete input before syntactic AD normalization.
+// The upstream parser accepts server-only and extra-at inputs; recovery keys must not.
+func ParseHistoryJID(raw string) (types.JID, error) {
+	raw = strings.TrimSpace(raw)
+	if strings.Count(raw, "@") != 1 || strings.ContainsFunc(raw, unicode.IsSpace) || strings.ContainsFunc(raw, unicode.IsControl) {
+		return types.JID{}, fmt.Errorf("invalid history chat JID")
+	}
+	jid, err := types.ParseJID(raw)
+	if err != nil || jid.User == "" || jid.Server == "" {
+		return types.JID{}, fmt.Errorf("invalid history chat JID")
+	}
+	return jid.ToNonAD(), nil
+}
+
+func historyMappedJID(user, server string) (types.JID, error) {
+	jid, err := ParseHistoryJID(user + "@" + server)
+	if err != nil || jid.User != user || jid.Server != server {
+		return types.JID{}, fmt.Errorf("invalid local history identity mapping")
+	}
+	return jid, nil
+}
+
 func publicHistoryAccount(raw string) string {
-	jid, err := types.ParseJID(strings.TrimSpace(raw))
+	jid, err := ParseHistoryJID(raw)
 	if err != nil || jid.User == "" || jid.Server != types.DefaultUserServer {
 		return ""
 	}
@@ -38,7 +61,7 @@ func (a *App) ReadHistoryIdentities(ctx context.Context, inputs []string) ([]His
 	result := make([]HistoryIdentity, 0, len(inputs))
 	seen := map[string]bool{}
 	for _, raw := range inputs {
-		jid, err := types.ParseJID(strings.TrimSpace(raw))
+		jid, err := ParseHistoryJID(raw)
 		if err != nil || jid.User == "" {
 			return nil, fmt.Errorf("invalid history identity")
 		}
@@ -82,7 +105,7 @@ func (a *App) ReadHistoryIdentities(ctx context.Context, inputs []string) ([]His
 		}
 		count++
 		account = publicHistoryAccount(raw)
-		lid, parseErr := types.ParseJID(lidText)
+		lid, parseErr := ParseHistoryJID(lidText)
 		if parseErr == nil && lid.Server == types.HiddenUserServer && lid.User != "" {
 			ownAlias = lid.ToNonAD().String()
 		} else {
@@ -116,9 +139,9 @@ func (a *App) ReadHistoryIdentities(ctx context.Context, inputs []string) ([]His
 			if err != nil {
 				return nil, err
 			}
-			alias := types.NewJID(other, types.HiddenUserServer)
-			if alias.User == "" {
-				return nil, fmt.Errorf("invalid local history identity mapping")
+			alias, err := historyMappedJID(other, types.HiddenUserServer)
+			if err != nil {
+				return nil, err
 			}
 			var reverse string
 			if err = tx.QueryRowContext(ctx, `SELECT pn FROM whatsmeow_lid_map WHERE lid=?`, other).Scan(&reverse); err != nil {
@@ -143,7 +166,11 @@ func (a *App) ReadHistoryIdentities(ctx context.Context, inputs []string) ([]His
 			if reverse != jid.User || other == "" {
 				return nil, fmt.Errorf("inconsistent local history identity mapping")
 			}
-			result[i].ChatJID = types.NewJID(other, types.DefaultUserServer).String()
+			pn, err := historyMappedJID(other, types.DefaultUserServer)
+			if err != nil {
+				return nil, err
+			}
+			result[i].ChatJID = pn.String()
 			result[i].AliasJID = jid.String()
 		}
 	}

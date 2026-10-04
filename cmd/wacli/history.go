@@ -187,8 +187,9 @@ func newHistoryBackfillCmd(flags *rootFlags) *cobra.Command {
 				return err
 			}
 			opts.AttemptID, err = app.NewHistoryAttemptID()
+			flags.agentHistoryAttemptID = opts.AttemptID
 			if err != nil {
-				return err
+				return &app.BackfillError{History: app.HistoryFailure{Phase: store.HistoryPreparing, Outcome: "not_dispatched", Code: "operational_error"}, Cause: err}
 			}
 			// Resolve once so lock acquisition and delegation select the same
 			// archive even if the default account changes while waiting.
@@ -216,7 +217,7 @@ func newHistoryBackfillCmd(flags *rootFlags) *cobra.Command {
 				return err
 			}
 
-			return writeBackfillResult(os.Stdout, res, flags.asJSON)
+			return writeHistoryBackfillResult(flags, res)
 		},
 	}
 

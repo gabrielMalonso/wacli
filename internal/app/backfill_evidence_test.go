@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -75,6 +76,10 @@ func TestBackfillEvidenceCheckpointFailurePreventsNetworkRequest(t *testing.T) {
 	_, err := a.BackfillHistory(context.Background(), backfillRetryOptions(chat))
 	if err == nil {
 		t.Fatal("success despite checkpoint failure")
+	}
+	var failure *BackfillError
+	if !errors.As(err, &failure) || failure.History.Outcome != "not_dispatched" || failure.History.Phase != store.HistoryObserving || failure.History.Code != "store_state" {
+		t.Fatalf("pre-dispatch certainty: %v", err)
 	}
 	requests := calls.Load()
 	if requests != 0 {
@@ -194,5 +199,21 @@ func TestBackfillEvidencePrimaryKeepsFrozenScopeOnMappingChange(t *testing.T) {
 	got := readAttempt(t, a, pn.String())
 	if got.Latest.WindowChatJID != pn.String() || got.Latest.WindowAliasJID != lid.String() || got.Latest.PrimaryNoMoreObservedAt == nil || got.Latest.PrimaryResponseChatJID != lid.String() {
 		t.Fatalf("lost/reassigned observation: %+v", got.Latest)
+	}
+}
+
+func TestBackfillEvidenceSilentStandaloneDiagnostics(t *testing.T) {
+	a, f, chat, base := newBackfillRetryTest(t, "first", "second")
+	a.opts.Events = out.NewEventWriter(io.Discard, true)
+	f.onDemandHistory = func(info types.MessageInfo, _ int) *events.HistorySync {
+		if info.ID == "first" {
+			return nil
+		}
+		return backfillTestResponse(chat, "older", base.Add(-time.Second))
+	}
+	var err error
+	stderr := captureStderr(t, func() { _, err = a.BackfillHistory(context.Background(), backfillRetryOptions(chat)) })
+	if err != nil || stderr != "" {
+		t.Fatalf("agent diagnostics: %v %q", err, stderr)
 	}
 }

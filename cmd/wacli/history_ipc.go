@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/openclaw/wacli/internal/app"
@@ -50,9 +49,9 @@ func delegateHistoryBackfill(ctx context.Context, flags *rootFlags, lockErr erro
 		return err
 	}
 	if resp.Backfill == nil {
-		return fmt.Errorf("running sync returned no backfill result; history may already have been persisted; check before retrying")
+		return historyIPCUncertain(sendDelegateRequest{Backfill: &backfillDelegateOptions{AttemptID: opts.AttemptID}}, fmt.Errorf("running sync returned no backfill result"))
 	}
-	return writeBackfillResult(os.Stdout, *resp.Backfill, flags.asJSON)
+	return writeHistoryBackfillResult(flags, *resp.Backfill)
 }
 
 func executeDelegatedBackfill(ctx context.Context, a *app.App, req sendDelegateRequest) (sendDelegateResponse, error) {
@@ -88,7 +87,21 @@ func historyIPCUncertain(req sendDelegateRequest, err error) error {
 		Outcome: "uncertain", Code: "backfill_outcome_uncertain", CorrelationConfirmed: false}, Cause: err}
 }
 func historyIPCError(req sendDelegateRequest, failure *app.HistoryFailure, text string) error {
-	if failure == nil || req.Backfill == nil || failure.AttemptID != req.Backfill.AttemptID {
+	valid := failure != nil
+	if valid {
+		switch failure.Phase {
+		case store.HistoryPreparing, store.HistoryObserving, store.HistoryDispatchPossible, store.HistoryFinalizing:
+		default:
+			valid = false
+		}
+		switch failure.Code {
+		case "invalid_arguments", "no_local_anchor", "store_state", "cancelled", "operational_error", "backfill_not_dispatched", "backfill_outcome_uncertain":
+		default:
+			valid = false
+		}
+		valid = valid && (failure.Outcome == "uncertain" || failure.Outcome == "not_dispatched")
+	}
+	if !valid || req.Backfill == nil || failure.AttemptID != req.Backfill.AttemptID {
 		return historyIPCUncertain(req, fmt.Errorf("history recovery correlation not confirmed; history may already have been persisted; check before retrying: %s", text))
 	}
 	return &app.BackfillError{History: *failure, Cause: errors.New(text)}

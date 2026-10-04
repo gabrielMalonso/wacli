@@ -5,13 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/openclaw/wacli/internal/app"
 	"github.com/openclaw/wacli/internal/out"
 	"github.com/openclaw/wacli/internal/store"
-	"go.mau.fi/whatsmeow/types"
 )
 
 type historyScopeDTO struct {
@@ -101,7 +99,7 @@ func historyEvidenceInputs(chats []string) ([]string, error) {
 	inputs := make([]string, 0, len(chats))
 	seen := map[string]bool{}
 	for _, raw := range chats {
-		jid, err := types.ParseJID(strings.TrimSpace(raw))
+		jid, err := app.ParseHistoryJID(raw)
 		if err != nil || jid.User == "" {
 			return nil, fmt.Errorf("invalid history evidence chat JID")
 		}

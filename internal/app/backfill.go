@@ -94,7 +94,7 @@ func PrepareBackfillOptions(opts BackfillOptions) (BackfillOptions, error) {
 	if chatStr == "" {
 		return BackfillOptions{}, fmt.Errorf("--chat is required")
 	}
-	chat, err := types.ParseJID(chatStr)
+	chat, err := ParseHistoryJID(chatStr)
 	if err != nil {
 		return BackfillOptions{}, fmt.Errorf("parse chat JID: %w", err)
 	}
@@ -264,6 +264,7 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 		}
 		rec.LastAnchorID = anchor.MsgID
 		rec.PreparedRequestChatJID = requestChat.String()
+		previousPhase := rec.Phase
 		rec.Phase = store.HistoryDispatchPossible
 		// Commit uncertainty before invoking the transport. A failed checkpoint
 		// prevents this call, and cannot undo prior dispatch uncertainty.
@@ -273,6 +274,7 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 			// This invocation did not occur. Prior calls remain uncertain; a
 			// failed checkpoint never makes earlier dispatch certain again.
 			rec.DispatchPossible = previousPossible
+			rec.Phase = previousPhase
 			return onDemandResponse{}, historyFailure(rec.AttemptID, rec.Phase, "store_state", previousPossible, true, err)
 		}
 		requestsSent++

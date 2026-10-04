@@ -39,8 +39,9 @@ When `sync --follow` already holds this archive's `LOCK`, `history backfill`
 delegates through the existing private `.send.sock` to that same connected
 process. Account/store selection is resolved once for locking and delegation.
 No second writer, connection, daemon, or database is opened. Without an owner,
-the existing standalone connect/sync/idle flow runs. `--read-only` and `--agent`
-continue to reject backfill before any effects. Older follow owners explicitly
+the existing standalone connect/sync/idle flow runs. `--read-only` (including `WACLI_READONLY=1`)
+rejects backfill before dispatch. `--agent history backfill` is an explicit live
+action, subject to the same policy and limits. Older follow owners explicitly
 reject the new `history_backfill` kind; restart with the updated binary.
 
 Backfill shares the existing serialized operation slot with delegated sends,
@@ -124,8 +125,8 @@ values `no_older_messages_added`, `no_messages_returned`, and
 `empty_response`, and `primary_no_more_messages`. They also carry `stop_reason`.
 The batch-limit event uses `requested_batch_limit` for both fields. A batch-stop
 event can precede a final idle/counting failure; only the final successful result
-confirms the operation finished normally. `history backfill` remains unsupported
-in `--agent` mode.
+confirms the operation finished normally. The agent contract exposes the final
+correlated observation and typed uncertain outcomes; see [Agent contract](agent.md).
 
 ## Retained recovery observations
 

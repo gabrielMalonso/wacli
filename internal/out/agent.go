@@ -34,14 +34,24 @@ type AgentMeta struct {
 	Recovery     string     `json:"recovery,omitempty"`
 }
 
+// AgentHistoryError is correlation for an explicit history recovery only.
+// It is not a replay token or evidence of rollback/remote completeness.
+type AgentHistoryError struct {
+	AttemptID            string `json:"attempt_id,omitempty"`
+	Phase                string `json:"phase"`
+	Outcome              string `json:"outcome"`
+	CorrelationConfirmed bool   `json:"correlation_confirmed"`
+}
+
 // AgentError carries a stable public code and a typed cause for exit handling.
 // Recovery is emitted only when an actionable next step is known.
 type AgentError struct {
-	Code     string `json:"code"`
-	Message  string `json:"message"`
-	Recovery string `json:"recovery,omitempty"`
-	ExitCode int    `json:"-"`
-	Cause    error  `json:"-"`
+	History  *AgentHistoryError `json:"history,omitempty"`
+	Code     string             `json:"code"`
+	Message  string             `json:"message"`
+	Recovery string             `json:"recovery,omitempty"`
+	ExitCode int                `json:"-"`
+	Cause    error              `json:"-"`
 }
 
 func (e *AgentError) Error() string { return e.Message }

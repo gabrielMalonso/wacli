@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,19 +44,21 @@ func effectiveVersion() string {
 const docsURL = "https://wacli.sh"
 
 type rootFlags struct {
-	agentRunStarted bool
-	agent           bool
-	cursor          string
-	detail          string
-	agentAccount    out.AgentAccount
-	storeDir        string
-	account         string
-	asJSON          bool
-	fullOutput      bool
-	events          bool
-	timeout         time.Duration
-	readOnly        bool
-	lockWait        time.Duration
+	agentCapability       agentCapability
+	agentHistoryAttemptID string
+	agentRunStarted       bool
+	agent                 bool
+	cursor                string
+	detail                string
+	agentAccount          out.AgentAccount
+	storeDir              string
+	account               string
+	asJSON                bool
+	fullOutput            bool
+	events                bool
+	timeout               time.Duration
+	readOnly              bool
+	lockWait              time.Duration
 }
 
 func execute(args []string) error {
@@ -69,7 +72,11 @@ func execute(args []string) error {
 		SilenceErrors: true,
 		Version:       effectiveVersion(),
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			wa.SetLibsignalEvents(out.NewEventWriter(os.Stderr, flags.events))
+			events := out.NewEventWriter(os.Stderr, flags.events)
+			if flags.agent && flags.agentCapability == agentHistoryRecovery {
+				events = out.NewEventWriter(io.Discard, true)
+			}
+			wa.SetLibsignalEvents(events)
 		},
 	}
 	rootCmd.SetVersionTemplate("wacli {{.Version}}\n")
@@ -77,7 +84,7 @@ func execute(args []string) error {
 	rootCmd.PersistentFlags().StringVar(&flags.storeDir, "store", "", "store directory (default: $WACLI_STORE_DIR, XDG state dir on Linux, or ~/.wacli)")
 	rootCmd.PersistentFlags().StringVar(&flags.account, "account", "", "named account from config.yaml")
 	rootCmd.PersistentFlags().BoolVar(&flags.asJSON, "json", false, "output JSON instead of human-readable text")
-	rootCmd.PersistentFlags().BoolVar(&flags.agent, "agent", false, "output the versioned agent JSON contract (local queries only)")
+	rootCmd.PersistentFlags().BoolVar(&flags.agent, "agent", false, "output the versioned agent JSON contract (supported queries and explicit history recovery)")
 	rootCmd.PersistentFlags().StringVar(&flags.cursor, "cursor", "", "resume agent list or temporal search pagination")
 	rootCmd.PersistentFlags().StringVar(&flags.detail, "detail", "compact", "agent detail: compact|full (requires --agent)")
 	rootCmd.PersistentFlags().BoolVar(&flags.fullOutput, "full", false, "disable truncation in table output")
@@ -110,6 +117,7 @@ func execute(args []string) error {
 	rootCmd.InitDefaultCompletionCmd()
 	intent := agentFlagIntent(rootCmd, args)
 	flags.agent = intent.agent
+	flags.agentCapability = intent.capability
 	// Resolve the command before installing Args wrappers or letting Cobra add
 	// hidden shell-completion commands. Find performs no parsing or hooks.
 	var agentFindErr error
@@ -150,7 +158,11 @@ func execute(args []string) error {
 			if !flags.agentRunStarted && !errors.As(err, &typed) {
 				err = agentUsageError(err)
 			}
-			err = classifyAgentError(err)
+			if flags.agentCapability == agentHistoryRecovery {
+				err = classifyHistoryAgentError(err, flags.agentHistoryAttemptID)
+			} else {
+				err = classifyAgentError(err)
+			}
 		}
 		writeRootError(flags, err)
 		return err
@@ -165,7 +177,11 @@ func writeRootError(flags rootFlags, err error) {
 	if flags.agent {
 		meta := agentMeta(&flags)
 		meta.Recovery = ""
-		_ = out.WriteAgentError(os.Stderr, flags.agentAccount, meta, classifyAgentError(err))
+		typed := classifyAgentError(err)
+		if flags.agentCapability == agentHistoryRecovery {
+			typed = classifyHistoryAgentError(err, flags.agentHistoryAttemptID)
+		}
+		_ = out.WriteAgentError(os.Stderr, flags.agentAccount, meta, typed)
 		return
 	}
 	if flags.events {
@@ -201,13 +217,20 @@ func newApp(ctx context.Context, flags *rootFlags, needLock bool, allowUnauthed 
 		}
 	}
 
+	events := out.NewEventWriter(os.Stderr, flags.events)
+	var waDiagnostics io.Writer
+	if flags.agent && flags.agentCapability == agentHistoryRecovery {
+		events = out.NewEventWriter(io.Discard, true)
+		waDiagnostics = io.Discard
+	}
 	a, err := app.New(app.Options{
-		StoreDir:      storeDir,
-		Version:       effectiveVersion(),
-		JSON:          flags.asJSON,
-		Events:        out.NewEventWriter(os.Stderr, flags.events),
-		AllowUnauthed: allowUnauthed,
-		ReadOnly:      flags.isReadOnly(),
+		StoreDir:           storeDir,
+		Version:            effectiveVersion(),
+		JSON:               flags.asJSON,
+		Events:             events,
+		WADiagnosticWriter: waDiagnostics,
+		AllowUnauthed:      allowUnauthed,
+		ReadOnly:           flags.isReadOnly(),
 	})
 	if err != nil {
 		if lk != nil {

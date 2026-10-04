@@ -3,6 +3,7 @@ package wa
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -22,6 +23,8 @@ import (
 
 type Options struct {
 	StorePath string
+	// DiagnosticWriter defaults to stderr; explicit agent actions select a silent sink.
+	DiagnosticWriter io.Writer
 	// The application owns durable, account-scoped key recovery metadata.
 	KeyStateStore AppStateKeyStateStore
 }
@@ -207,7 +210,7 @@ func (c *Client) Connect(ctx context.Context, opts ConnectOptions) error {
 		if opts.SuppressInitialAvailablePresence {
 			return nil
 		}
-		sendInitialAvailablePresence(ctx, cli)
+		sendInitialAvailablePresence(ctx, cli, c.diagnosticWriter())
 		return nil
 	}
 
@@ -460,13 +463,20 @@ func (c *Client) SendChatPresence(ctx context.Context, jid types.JID, state type
 	return cli.SendChatPresence(ctx, jid, state, media)
 }
 
-func sendInitialAvailablePresence(ctx context.Context, cli *whatsmeow.Client) {
+func (c *Client) diagnosticWriter() io.Writer {
+	if c.opts.DiagnosticWriter != nil {
+		return c.opts.DiagnosticWriter
+	}
+	return os.Stderr
+}
+
+func sendInitialAvailablePresence(ctx context.Context, cli *whatsmeow.Client, dst io.Writer) {
 	// Whatsmeow recommends this once after connect so the server records the linked-device pushname.
 	if cli == nil || cli.Store == nil || strings.TrimSpace(cli.Store.PushName) == "" {
 		return
 	}
 	if err := cli.SendPresence(ctx, types.PresenceAvailable); err != nil {
-		fmt.Fprintf(os.Stderr, "warn: failed to send initial available presence: %v\n", err)
+		fmt.Fprintf(dst, "warn: failed to send initial available presence: %v\n", err)
 	}
 }
 

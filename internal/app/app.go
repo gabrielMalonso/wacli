@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -107,12 +108,13 @@ type WAClient interface {
 }
 
 type Options struct {
-	StoreDir      string
-	Version       string
-	JSON          bool
-	Events        *out.EventWriter
-	AllowUnauthed bool
-	ReadOnly      bool
+	StoreDir           string
+	Version            string
+	JSON               bool
+	Events             *out.EventWriter
+	WADiagnosticWriter io.Writer
+	AllowUnauthed      bool
+	ReadOnly           bool
 }
 
 type App struct {
@@ -180,7 +182,7 @@ func (a *App) OpenWA() error {
 	}
 	if a.wa == nil {
 		sessionPath := filepath.Join(a.opts.StoreDir, "session.db")
-		cli, err := wa.New(wa.Options{StorePath: sessionPath, KeyStateStore: a.db})
+		cli, err := wa.New(wa.Options{StorePath: sessionPath, KeyStateStore: a.db, DiagnosticWriter: a.opts.WADiagnosticWriter})
 		if err != nil {
 			return err
 		}

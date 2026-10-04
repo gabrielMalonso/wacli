@@ -70,7 +70,7 @@ func TestHistoryBackfillGuardsBeforeDelegation(t *testing.T) {
 	skipPresenceDelegateSocketTestOnUnsupportedOS(t)
 	for _, args := range [][]string{
 		{"--read-only", "history", "backfill", "--chat", "123@g.us"},
-		{"--agent", "history", "backfill", "--chat", "123@g.us"},
+		{"--agent", "--read-only", "history", "backfill", "--chat", "123@g.us"},
 		{"history", "backfill", "--chat", "123@g.us", "--count", "501"},
 		{"history", "backfill", "--chat", "123@g.us", "--wait", "6m"},
 		{"history", "backfill", "--chat", "123@g.us", "--requests", "101"},

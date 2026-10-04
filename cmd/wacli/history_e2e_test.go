@@ -36,7 +36,8 @@ func TestHistoryEvidenceProductionBinaryOffline(t *testing.T) {
 		if app.ValidateHistoryAttemptID(req.Backfill.AttemptID) != nil {
 			t.Error("invalid attempt ID reached fixture")
 		}
-		return sendDelegateResponse{OK: true, Backfill: &app.BackfillResult{AttemptID: req.Backfill.AttemptID, ChatJID: req.Backfill.ChatJID, RequestsSent: 1, ResponsesSeen: 1, StopReason: app.BackfillStopEmptyResponse}}, nil
+		res := fixtureHistoryAgentResult(req.Backfill.AttemptID, req.Backfill.ChatJID)
+		return sendDelegateResponse{OK: true, Backfill: &res}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +66,7 @@ func TestHistoryEvidenceProductionBinaryOffline(t *testing.T) {
 	}{
 		{[]string{"--read-only", "history", "backfill", "--chat", "123@g.us"}, false},
 		{[]string{"history", "backfill", "--chat", "123@g.us"}, true},
-		{[]string{"--agent", "history", "backfill", "--chat", "123@g.us"}, false}, // Still unsupported until the shared capability integration.
+		{[]string{"--agent", "--read-only", "history", "backfill", "--chat", "123@g.us"}, false},
 		{[]string{"history", "backfill", "--chat", "123@g.us", "--count", "501"}, false},
 	} {
 		stdout, _, err := run(tc.args, tc.env)
@@ -84,8 +85,12 @@ func TestHistoryEvidenceProductionBinaryOffline(t *testing.T) {
 			StopReason string `json:"stop_reason"`
 		} `json:"data"`
 	}
-	if err = json.Unmarshal([]byte(stdout), &envelope); err != nil || !envelope.Success || envelope.Data.Chat != "123@g.us" || envelope.Data.StopReason != "empty_response" {
+	if err = json.Unmarshal([]byte(stdout), &envelope); err != nil || !envelope.Success || envelope.Data.Chat != "123@g.us" || envelope.Data.StopReason != "primary_no_more_messages" {
 		t.Fatalf("production output: %s %v", stdout, err)
+	}
+	stdout, stderr, err = run([]string{"--agent", "history", "backfill", "--chat", "123@g.us"}, false)
+	if err != nil || calls.Load() != 2 || !strings.Contains(stdout, `"source":"live"`) || !strings.Contains(stdout, `"attempt_id"`) || !strings.Contains(stdout, `"primary_no_more_observed_at"`) {
+		t.Fatalf("production agent fixture: %v %s %s", err, stdout, stderr)
 	}
 	for _, name := range []string{"wacli.db", "session.db"} {
 		if _, err = os.Stat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {

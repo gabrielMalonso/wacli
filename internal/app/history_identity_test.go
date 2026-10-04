@@ -70,3 +70,33 @@ func TestReadHistoryIdentitiesNullableOwnLIDWithMappedPair(t *testing.T) {
 		t.Fatal("SQL failure became unknown account")
 	}
 }
+
+func TestHistoryInputAndMappedIdentitySyntax(t *testing.T) {
+	for _, input := range []string{"@lid", "123@", "123@g.us@extra", "123 @g.us", "123\n@g.us", "g.us"} {
+		if _, err := ParseHistoryJID(input); err == nil {
+			t.Fatalf("invalid input accepted: %q", input)
+		}
+		if _, err := PrepareBackfillOptions(BackfillOptions{ChatJID: input}); err == nil {
+			t.Fatalf("invalid recovery input: %q", input)
+		}
+	}
+	for _, pair := range []struct{ lid, pn, input string }{
+		{"300@lid", "200", "200@s.whatsapp.net"},
+		{"300", "200@s.whatsapp.net", "300@lid"},
+	} {
+		a := newTestApp(t)
+		historyIdentityFixture(t, a, `CREATE TABLE whatsmeow_device(jid TEXT,lid TEXT); INSERT INTO whatsmeow_device VALUES('100@s.whatsapp.net',NULL); CREATE TABLE whatsmeow_lid_map(lid TEXT PRIMARY KEY,pn TEXT UNIQUE)`)
+		db, err := sql.Open("sqlite3", filepath.Join(a.StoreDir(), "session.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = db.Exec(`INSERT INTO whatsmeow_lid_map VALUES(?,?)`, pair.lid, pair.pn)
+		_ = db.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = a.ReadHistoryIdentities(context.Background(), []string{pair.input}); err == nil {
+			t.Fatal("corrupt public pair became verified scope")
+		}
+	}
+}

@@ -19,12 +19,22 @@ import (
 
 const agentMaxResults = 200
 
+type agentCapability uint8
+
+const (
+	agentUnsupported agentCapability = iota
+	agentLocalRead
+	agentHistoryRecovery
+)
+
 // Recover output intent even if Cobra stops on an earlier parse error. Inspect
 // flag definitions, consume their values (including literal "--agent"), and
-// honor --. This does not parse commands or execute any hooks.
+// honor --. Recognize defined command names for action source without parsing
+// values or executing hooks.
 func agentFlagIntent(root *cobra.Command, args []string) (intent struct {
 	agent, detailSet, cursorSet, help bool
 	store, account                    string
+	capability                        agentCapability
 }) {
 	known := make(map[string]*pflag.Flag)
 	short := make(map[byte]*pflag.Flag)
@@ -43,8 +53,18 @@ func agentFlagIntent(root *cobra.Command, args []string) (intent struct {
 		}
 	}
 	collect(root)
+	node := root
 	for i := 0; i < len(args); i++ {
 		token := args[i]
+		if !strings.HasPrefix(token, "-") {
+			for _, child := range node.Commands() {
+				if child.Name() == token {
+					node = child
+					intent.capability = agentCommandCapability(node)
+					break
+				}
+			}
+		}
 		if token == "--" {
 			break
 		}
@@ -134,7 +154,8 @@ func installAgentGuards(root *cobra.Command, flags *rootFlags) {
 				}
 				return nil
 			}
-			if !agentSupported(c) {
+			flags.agentCapability = agentCommandCapability(c)
+			if flags.agentCapability == agentUnsupported {
 				return &out.AgentError{Code: "unsupported_command", Message: c.CommandPath() + " is not supported with --agent", ExitCode: 2}
 			}
 			if original != nil {
@@ -159,16 +180,21 @@ func installAgentGuards(root *cobra.Command, flags *rootFlags) {
 	})
 }
 
-func agentSupported(cmd *cobra.Command) bool {
+func agentCommandCapability(cmd *cobra.Command) agentCapability {
 	switch strings.TrimPrefix(cmd.CommandPath(), "wacli ") {
 	case "messages list", "messages search", "messages show", "messages context", "chats list", "chats show", "contacts list", "contacts search", "contacts show", "contacts resolve", "history coverage", "auth status":
-		return true
+		return agentLocalRead
+	case "history backfill":
+		return agentHistoryRecovery
 	case "doctor":
 		connect, _ := cmd.Flags().GetBool("connect")
-		return !connect
+		if !connect {
+			return agentLocalRead
+		}
 	default:
-		return false
+		return agentUnsupported
 	}
+	return agentUnsupported
 }
 
 func validateAgentCommand(cmd *cobra.Command, args []string, flags *rootFlags) error {
@@ -197,6 +223,19 @@ func validateAgentCommand(cmd *cobra.Command, args []string, flags *rootFlags) e
 		}
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), "wacli ")
+	if path == "history backfill" {
+		if flags.isReadOnly() {
+			return &out.AgentError{Code: "read_only", Message: "Read-only policy rejects history recovery.", ExitCode: 2}
+		}
+		chat, _ := cmd.Flags().GetString("chat")
+		count, _ := cmd.Flags().GetInt("count")
+		requests, _ := cmd.Flags().GetInt("requests")
+		wait, _ := cmd.Flags().GetDuration("wait")
+		idle, _ := cmd.Flags().GetDuration("idle-exit")
+		if _, err := app.PrepareBackfillOptions(app.BackfillOptions{ChatJID: chat, Count: count, Requests: requests, WaitPerRequest: wait, IdleExit: idle}); err != nil {
+			return usage(fmt.Errorf("invalid history recovery options"))
+		}
+	}
 	switch path {
 	case "messages show", "messages context":
 		chat, _ := cmd.Flags().GetString("chat")
@@ -392,7 +431,11 @@ func agentMeta(flags *rootFlags) out.AgentMeta {
 	if detail != "full" {
 		detail = "compact"
 	}
-	meta := out.AgentMeta{Source: "local", Detail: detail, Completeness: "unknown", Freshness: "unknown"}
+	source := "local"
+	if flags.agentCapability == agentHistoryRecovery {
+		source = "live"
+	}
+	meta := out.AgentMeta{Source: source, Detail: detail, Completeness: "unknown", Freshness: "unknown"}
 	if detail == "compact" {
 		meta.Recovery = "Use --detail full; retrieve one message with messages show --chat CHAT_JID --id ID --detail full."
 	}
