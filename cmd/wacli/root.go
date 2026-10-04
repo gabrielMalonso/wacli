@@ -118,8 +118,8 @@ func execute(args []string) error {
 	}
 	if intent.cursorSet && !intent.help {
 		c, _, findErr := rootCmd.Find(args)
-		if !intent.agent || findErr != nil || (c.CommandPath() != "wacli messages list" && c.CommandPath() != "wacli messages search") {
-			err := agentUsageError(fmt.Errorf("--cursor requires --agent messages list or --agent messages search --sort time"))
+		if !intent.agent || findErr != nil || (c.CommandPath() != "wacli messages list" && c.CommandPath() != "wacli messages search" && c.CommandPath() != "wacli chats list") {
+			err := agentUsageError(fmt.Errorf("--cursor requires --agent messages list, --agent messages search --sort time or --agent chats list"))
 			writeRootError(flags, err)
 			return err
 		}

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Agents: paginate `--agent chats list` with bounded keyset pages, deterministic pinned/activity/JID ties and a separate strict scoped chat cursor. Preserve raw stored PN/LID identities, legacy outputs and message tokens; bind query and all tri-state filters, allow limit/detail changes, re-evaluate mute expiry per page and document live-read/SQLite scan-sort limits without inferring remote freshness or completeness.
+
 - Agents: add opt-in temporal pagination to `--agent messages search QUERY --sort time`, with same-second keyset continuation, search/query/engine/filter-bound cursors and existing page/envelope limits. Preserve default FTS relevance and LIKE ordering without pagination; report effective search mode/order, reject agent-only flags before archive effects, and document live matching and SQLite search costs. List cursors remain compatible.
 
 - History: measure backfill growth only for the selected conversation and verified PN/LID alias, with a post-connect baseline and distinct-ID deduplication. Expose typed `stop_reason` in JSON/human output, prioritize explicit primary-device end evidence over no-progress/empty replies, and propagate count/anchor/on-demand persistence failures and cancellation. Keep `messages_synced` as the global Sync counter and document concurrent-activity and primary-history limits.
