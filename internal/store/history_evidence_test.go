@@ -129,7 +129,7 @@ func TestHistoryEvidenceMigrationWritableOnlyAndBoundedKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.sql.Exec(`DROP TABLE history_recovery_evidence; DELETE FROM schema_migrations WHERE version=29`); err != nil {
+	if _, err = db.sql.Exec(`DROP TABLE draft_revisions; DROP TABLE drafts; DROP TABLE history_recovery_evidence; DELETE FROM schema_migrations WHERE version>=29`); err != nil {
 		t.Fatal(err)
 	}
 	_ = db.Close()
@@ -164,7 +164,7 @@ func TestHistoryEvidenceMigrationWritableOnlyAndBoundedKeys(t *testing.T) {
 	}
 }
 func TestWritableFutureSchemaRefusedBeforeJournalAndPermissions(t *testing.T) {
-	for _, version := range []int{30, 0} {
+	for _, version := range []int{schemaMigrations[len(schemaMigrations)-1].version + 1, 0} {
 		t.Run(fmt.Sprint(version), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "wacli.db")
 			db, err := sql.Open("sqlite3", path)

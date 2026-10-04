@@ -84,7 +84,7 @@ func execute(args []string) error {
 	rootCmd.PersistentFlags().StringVar(&flags.storeDir, "store", "", "store directory (default: $WACLI_STORE_DIR, XDG state dir on Linux, or ~/.wacli)")
 	rootCmd.PersistentFlags().StringVar(&flags.account, "account", "", "named account from config.yaml")
 	rootCmd.PersistentFlags().BoolVar(&flags.asJSON, "json", false, "output JSON instead of human-readable text")
-	rootCmd.PersistentFlags().BoolVar(&flags.agent, "agent", false, "output the versioned agent JSON contract (supported queries and explicit history recovery)")
+	rootCmd.PersistentFlags().BoolVar(&flags.agent, "agent", false, "output the versioned agent JSON contract (supported queries, local drafts and explicit history recovery)")
 	rootCmd.PersistentFlags().StringVar(&flags.cursor, "cursor", "", "resume agent list or temporal search pagination")
 	rootCmd.PersistentFlags().StringVar(&flags.detail, "detail", "compact", "agent detail: compact|full (requires --agent)")
 	rootCmd.PersistentFlags().BoolVar(&flags.fullOutput, "full", false, "disable truncation in table output")
@@ -109,6 +109,7 @@ func execute(args []string) error {
 	rootCmd.AddCommand(newGroupsCmd(&flags))
 	rootCmd.AddCommand(newChannelsCmd(&flags))
 	rootCmd.AddCommand(newHistoryCmd(&flags))
+	rootCmd.AddCommand(newDraftCmd(&flags))
 	rootCmd.AddCommand(newPresenceCmd(&flags))
 	rootCmd.AddCommand(newProfileCmd(&flags))
 	rootCmd.AddCommand(newDocsCmd(&flags))
@@ -126,8 +127,8 @@ func execute(args []string) error {
 	}
 	if intent.cursorSet && !intent.help {
 		c, _, findErr := rootCmd.Find(args)
-		if !intent.agent || findErr != nil || (c.CommandPath() != "wacli messages list" && c.CommandPath() != "wacli messages search" && c.CommandPath() != "wacli chats list" && c.CommandPath() != "wacli contacts list" && c.CommandPath() != "wacli contacts search") {
-			err := agentUsageError(fmt.Errorf("--cursor requires --agent messages list, --agent messages search --sort time, --agent chats list or --agent contacts list/search"))
+		if !intent.agent || findErr != nil || (c.CommandPath() != "wacli messages list" && c.CommandPath() != "wacli messages search" && c.CommandPath() != "wacli chats list" && c.CommandPath() != "wacli contacts list" && c.CommandPath() != "wacli contacts search" && c.CommandPath() != "wacli draft list") {
+			err := agentUsageError(fmt.Errorf("--cursor requires --agent messages list, --agent messages search --sort time, --agent chats list or --agent contacts list/search or --agent draft list"))
 			writeRootError(flags, err)
 			return err
 		}

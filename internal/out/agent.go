@@ -43,9 +43,17 @@ type AgentHistoryError struct {
 	CorrelationConfirmed bool   `json:"correlation_confirmed"`
 }
 
+// AgentDraftError identifies a local result to inspect, never a replay token.
+type AgentDraftError struct {
+	DraftID    string `json:"draft_id,omitempty"`
+	RevisionID string `json:"revision_id,omitempty"`
+	Hash       string `json:"hash,omitempty"`
+}
+
 // AgentError carries a stable public code and a typed cause for exit handling.
 // Recovery is emitted only when an actionable next step is known.
 type AgentError struct {
+	Draft    *AgentDraftError   `json:"draft,omitempty"`
 	History  *AgentHistoryError `json:"history,omitempty"`
 	Code     string             `json:"code"`
 	Message  string             `json:"message"`
