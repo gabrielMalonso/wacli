@@ -558,3 +558,141 @@ func TestContactsBinaryFixturePages(t *testing.T) {
 		t.Fatal("binary changed fixture")
 	}
 }
+
+func TestContactsNullableOwnLIDCLIAndLegacy(t *testing.T) {
+	const ownPN = "15550002009@s.whatsapp.net"
+	const ownLID = "95550002009@lid"
+	for _, mapped := range []bool{false, true} {
+		t.Run(fmt.Sprintf("mapped=%t", mapped), func(t *testing.T) {
+			dir := seedContactReadStore(t, false)
+			db := openSystemImportStore(t, dir)
+			for _, row := range []struct{ jid, name string }{{ownPN, "Valid primary fixture"}, {ownLID, "Valid own fixture"}} {
+				if err := db.UpsertContact(row.jid, "stored-phone", "", row.name, "", ""); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for jid, alias := range map[string]string{contactPN: "Nullable PN alias", contactLID: "Nullable LID alias", ownPN: "Valid own alias"} {
+				if err := db.SetAlias([]string{jid}, alias); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := db.SetSystemName(contactLID, "Split system"); err != nil {
+				t.Fatal(err)
+			}
+			for jid, tag := range map[string]string{contactPN: "PN tag", contactLID: "LID tag"} {
+				if err := db.AddTag([]string{jid}, tag); err != nil {
+					t.Fatal(err)
+				}
+			}
+			db.Close()
+			session, err := sql.Open("sqlite3", filepath.Join(dir, "session.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Keep the valid own pair first for comparison with the unchanged legacy
+			// resolver; the app regression also covers NULL first. A missing own LID
+			// must not suppress the public-map fallback for that phone identity.
+			_, err = session.Exec(`CREATE TABLE whatsmeow_device (jid TEXT PRIMARY KEY,lid TEXT); INSERT INTO whatsmeow_device VALUES ('15550002009:3@s.whatsapp.net','95550002009@lid'),('15550001001:1@s.whatsapp.net',NULL)`)
+			if err == nil && mapped {
+				_, err = session.Exec(`CREATE TABLE whatsmeow_lid_map (lid TEXT PRIMARY KEY,pn TEXT UNIQUE NOT NULL); INSERT INTO whatsmeow_lid_map VALUES ('900000001','15550001001')`)
+			}
+			session.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := snapshotLocalStore(t, dir)
+			a, err := app.New(app.Options{StoreDir: dir, ReadOnly: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer a.Close()
+			resolver, err := contactReadResolver(a)
+			if err != nil {
+				t.Fatal(err)
+			}
+			display, err := contactsForDisplay(context.Background(), a, resolver)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			cursor := ""
+			for n := 0; n < 10; n++ {
+				data, next := agentContactsPage(t, dir, []string{"contacts", "list"}, cursor, 1, "compact")
+				for _, c := range data.Contacts {
+					got = append(got, c.JID)
+					if c.JID == contactLID && c.Phone != "" {
+						t.Fatal("unknown nullable pair reported as phone")
+					}
+				}
+				if next == nil {
+					break
+				}
+				cursor = *next
+			}
+			var want []string
+			for _, d := range display {
+				want = append(want, d.contact.JID)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("list got=%v legacy=%v", got, want)
+			}
+			for _, query := range []string{"Nullable PN alias", "Nullable LID alias", "Alex Phone", "Alex Device", "Split system", contactPN, contactLID, "Valid own fixture", ownPN, ownLID} {
+				reference := referenceContactSearch(t, a, query)
+				data, next := agentContactsPage(t, dir, []string{"contacts", "search", query}, "", 200, "full")
+				if next != nil {
+					t.Fatal("small nullable fixture should be exhausted")
+				}
+				expected := make([]agentContact, 0, len(reference))
+				for _, c := range reference {
+					expected = append(expected, agentContactDTO(c, "full"))
+				}
+				if !reflect.DeepEqual(data.Contacts, expected) {
+					t.Fatalf("query=%s got=%+v want=%+v", query, data.Contacts, expected)
+				}
+				legacy := runContactsSearch(t, dir, query)
+				if !reflect.DeepEqual(legacy, reference) {
+					t.Fatalf("legacy query=%s got=%+v want=%+v", query, legacy, reference)
+				}
+			}
+			pnShow := runContactsShow(t, dir, contactPN)
+			lidShow := runContactsShow(t, dir, contactLID)
+			if mapped {
+				tags := []string{"LID tag", "PN tag"}
+				for _, c := range []store.Contact{pnShow, lidShow} {
+					if c.JID != contactPN || c.Phone != "15550001001" || c.Alias != "Nullable PN alias" || c.SystemName != "Split system" || !reflect.DeepEqual(c.Tags, tags) {
+						t.Fatalf("mapped legacy show %+v", c)
+					}
+				}
+			} else {
+				if pnShow.JID != contactPN || !reflect.DeepEqual(pnShow.Tags, []string{"PN tag"}) || lidShow.JID != contactLID || lidShow.Phone != "" || !reflect.DeepEqual(lidShow.Tags, []string{"LID tag"}) {
+					t.Fatalf("unknown legacy show PN=%+v LID=%+v", pnShow, lidShow)
+				}
+			}
+			for _, jid := range []string{ownPN, ownLID} {
+				if c := runContactsShow(t, dir, jid); c.JID != ownPN || c.Alias != "Valid own alias" {
+					t.Fatalf("valid own show %+v", c)
+				}
+			}
+			if !reflect.DeepEqual(before, snapshotLocalStore(t, dir)) {
+				t.Fatal("nullable public identity reads changed fixture bytes/files/permissions")
+			}
+		})
+	}
+}
+
+func TestContactsIdentityReadErrorsStaySafe(t *testing.T) {
+	dir := seedContactReadStore(t, false)
+	if err := os.WriteFile(filepath.Join(dir, "session.db"), []byte("PRIVATE_CORRUPT_NULLABLE_SESSION"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotLocalStore(t, dir)
+	for _, command := range [][]string{{"contacts", "list"}, {"contacts", "search", "Alex"}, {"contacts", "search", contactPN}, {"contacts", "search", contactLID}} {
+		stdout, stderr, err := runAgentTest(t, append([]string{"--store", dir, "--agent", "--read-only"}, command...)...)
+		if stdout != "" || commandExitCode(err) != 4 || decodeAgentTest(t, stderr).Error.Code != "store_unavailable" || strings.Contains(stderr, "PRIVATE") || strings.Contains(stderr, "session.db") {
+			t.Fatalf("identity error %v %s", err, stderr)
+		}
+	}
+	if !reflect.DeepEqual(before, snapshotLocalStore(t, dir)) {
+		t.Fatal("failed identity reads modified fixture")
+	}
+}

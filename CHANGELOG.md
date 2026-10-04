@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Contacts: add `contacts list` and paginate agent list/search over the existing canonical PN/LID view. Stream identity groups and retain only `limit+1` candidates, preserving original-name/alias/phone matching, metadata on either half and legacy search results/defaults. Use strict semantically scoped contact cursors, explicit readonly public-identity errors and deterministic source ties; document live mapping/name changes, no universal mapping-change detection, and SQLite scan/materialization/sort costs.
+- Contacts: add `contacts list` and paginate agent list/search over the existing canonical PN/LID view. Stream identity groups and retain only `limit+1` candidates, preserving original-name/alias/phone matching, metadata on either half and legacy search results/defaults. Use strict semantically scoped contact cursors, explicit readonly public-identity errors, safe nullable own-device LIDs with public-map fallback, and deterministic source ties; document live mapping/name changes, no universal mapping-change detection, and SQLite scan/materialization/sort costs.
 
 - History: delegate backfill to the connected `sync --follow` owner through the existing `.send.sock` when its archive is locked. Reuse the serialized operation slot and history persistence handler, preserve standalone results/retries, bound queue/request/idle work by one deadline, and isolate callbacks across cancellation. Backfill does not change send pacing or reconnect the owner; connected `messages_synced` is the window delta of the legacy global counter. Document queue impact, ambiguous replies, and late-response limits.
 

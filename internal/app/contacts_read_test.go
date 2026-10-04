@@ -381,3 +381,109 @@ func TestContactContinuationDoesNotNeedSurvivingAnchor(t *testing.T) {
 		t.Fatalf("live name %+v", last)
 	}
 }
+
+func TestContactReadsNullableOwnLID(t *testing.T) {
+	for _, mapped := range []bool{false, true} {
+		for _, nullFirst := range []bool{false, true} {
+			t.Run(fmt.Sprintf("mapped=%t/nullFirst=%t", mapped, nullFirst), func(t *testing.T) {
+				a, dir := newContactPageFixture(t)
+				sessionPath := filepath.Join(dir, "session.db")
+				if !mapped {
+					fixtureSQL(t, sessionPath, `DROP TABLE whatsmeow_lid_map`)
+				}
+				// Both source orders must be safe; the own projection never relies on
+				// WHERE short-circuiting to keep a nullable lid away from its UDFs.
+				if nullFirst {
+					fixtureSQL(t, sessionPath, `DELETE FROM whatsmeow_device; INSERT INTO whatsmeow_device (jid,lid) VALUES ('15550000:1@s.whatsapp.net',NULL),('15550005:3@s.whatsapp.net','9005@lid')`)
+				} else {
+					fixtureSQL(t, sessionPath, `INSERT INTO whatsmeow_device (jid,lid) VALUES ('15550000:1@s.whatsapp.net',NULL)`)
+				}
+				fixtureSQL(t, filepath.Join(dir, "wacli.db"), `UPDATE contacts SET full_name='Nullable fixture contact' WHERE jid='15550000@s.whatsapp.net'; INSERT INTO contacts (jid,phone,full_name,updated_at) VALUES ('9000@lid','9000','Nullable fixture device',1),('9005@lid','9005','Valid own fixture',1)`)
+				before, err := os.ReadFile(sessionPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx := context.Background()
+				list, err := a.ReadContacts(ctx, ContactReadOptions{Operation: ContactList, Limit: 200, Paginate: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantCount := 7
+				if mapped {
+					wantCount = 6
+				}
+				if len(list.Contacts) != wantCount {
+					t.Fatalf("list %+v", list)
+				}
+				for _, query := range []string{"Nullable fixture", "15550000@s.whatsapp.net", "9000@lid", "Valid own fixture", "15550005@s.whatsapp.net", "9005@lid"} {
+					page, err := a.ReadContacts(ctx, ContactReadOptions{Operation: ContactSearch, Query: query, Limit: 200, Paginate: true})
+					if err != nil {
+						t.Fatalf("%s: %v", query, err)
+					}
+					var want []string
+					switch query {
+					case "Nullable fixture":
+						want = []string{"15550000@s.whatsapp.net"}
+						if !mapped {
+							want = append(want, "9000@lid")
+						}
+					case "15550000@s.whatsapp.net":
+						want = []string{query}
+					case "9000@lid":
+						want = []string{"15550000@s.whatsapp.net"}
+						if !mapped {
+							want = []string{query}
+						}
+					default:
+						want = []string{"15550005@s.whatsapp.net"}
+					}
+					var got []string
+					for _, c := range page.Contacts {
+						got = append(got, c.JID)
+						if c.JID == "9000@lid" && c.Phone != "" {
+							t.Fatal("nullable own LID invented a phone")
+						}
+					}
+					if !reflect.DeepEqual(got, want) {
+						t.Fatalf("query=%s got=%v want=%v", query, got, want)
+					}
+				}
+				// Page bounds and continuation also work when a linked device has no LID.
+				first, err := a.ReadContacts(ctx, ContactReadOptions{Operation: ContactList, Limit: 1, Paginate: true})
+				if err != nil || first.NextCursor == nil || len(first.Contacts) != 1 {
+					t.Fatalf("first %+v %v", first, err)
+				}
+				next, err := a.ReadContacts(ctx, ContactReadOptions{Operation: ContactList, Limit: 2, Cursor: *first.NextCursor, Paginate: true})
+				if err != nil || len(next.Contacts) != 2 {
+					t.Fatalf("next %+v %v", next, err)
+				}
+				after, err := os.ReadFile(sessionPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(before, after) {
+					t.Fatal("read changed nullable session fixture")
+				}
+				assertNoAppSQLiteSidecars(t, sessionPath)
+			})
+		}
+	}
+}
+
+func TestContactReadsDeviceWithoutOwnPair(t *testing.T) {
+	a, dir := newContactPageFixture(t)
+	fixtureSQL(t, filepath.Join(dir, "session.db"), `DROP TABLE whatsmeow_lid_map; DELETE FROM whatsmeow_device; INSERT INTO whatsmeow_device (jid,lid) VALUES ('15550000:1@s.whatsapp.net',NULL),(NULL,NULL)`)
+	for _, p := range []ContactReadOptions{{Operation: ContactList, Limit: 20, Paginate: true}, {Operation: ContactSearch, Query: "Tie", Limit: 20, Paginate: true}, {Operation: ContactSearch, Query: "15550000@s.whatsapp.net", Limit: 20, Paginate: true}} {
+		page, err := a.ReadContacts(context.Background(), p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := 6
+		if p.Query == "15550000@s.whatsapp.net" {
+			want = 1
+		}
+		if len(page.Contacts) != want {
+			t.Fatalf("%+v: %+v", p, page)
+		}
+	}
+}

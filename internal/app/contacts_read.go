@@ -298,7 +298,14 @@ func publicContactIdentityCTE(s contactIdentitySources) string {
 	}
 	ownSQL := "SELECT NULL AS lid, NULL AS pn WHERE 0"
 	if s.Own {
-		ownSQL = `SELECT wacli_contact_user(wacli_contact_trim(lid)) AS lid, wacli_contact_user(wacli_contact_trim(jid)) AS pn FROM identity.whatsmeow_device WHERE wacli_contact_kind(wacli_contact_trim(jid))='pn' AND wacli_contact_kind(wacli_contact_trim(lid))='lid'`
+		// A linked device may legitimately have no LID yet. Normalize every
+		// nullable public input before the pure string UDFs, independently of
+		// SQL predicate evaluation order; an absent own pair can use public_map.
+		ownSQL = `SELECT wacli_contact_user(wacli_contact_trim(COALESCE(lid,''))) AS lid,
+ wacli_contact_user(wacli_contact_trim(COALESCE(jid,''))) AS pn
+ FROM identity.whatsmeow_device
+ WHERE wacli_contact_kind(wacli_contact_trim(COALESCE(jid,'')))='pn'
+ AND wacli_contact_kind(wacli_contact_trim(COALESCE(lid,'')))='lid'`
 	}
 	return `WITH public_map AS NOT MATERIALIZED (` + mapSQL + `), own_pair AS MATERIALIZED (` + ownSQL + `)`
 }
