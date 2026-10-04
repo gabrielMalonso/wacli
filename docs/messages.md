@@ -27,6 +27,8 @@ wacli messages forward --chat JID --id MSG_ID --to RECIPIENT [--pick N] [--post-
 
 ## Search
 
+Agent temporal search uses `wacli --agent messages search "invoice" --sort time [--asc] [--cursor TOKEN]`. It returns `meta.page` and resumes by `(ts,rowid)` with the same store, query, engine, filters and order; limit/detail may change. Search `--sort`/`--asc` require `--agent`. Default `--sort relevance` preserves FTS rank or existing LIKE newest-first order, has no cursor/page, and reports `search_mode` plus effective `order`. A cursor or `--asc` with relevance fails with guidance to use `--sort time`. List cursors remain compatible but cannot be exchanged with search cursors. See the [temporal search contract](agent.md#temporal-search-pagination) for matching, cost and live-read limits.
+
 - Uses SQLite FTS5 when the binary was built with `-tags sqlite_fts5`.
 - Falls back to `LIKE` if FTS5 is not available.
 - `--type` accepts `text`, `image`, `video`, `audio`, or `document`.

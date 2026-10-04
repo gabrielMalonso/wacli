@@ -122,6 +122,7 @@ func agentMessageDTO(m store.Message, detail string) agentMessage {
 type agentMessages struct {
 	Messages   []agentMessage `json:"messages"`
 	SearchMode string         `json:"search_mode,omitempty"`
+	Order      string         `json:"order,omitempty"`
 	SelectedID string         `json:"selected_id,omitempty"`
 }
 
@@ -130,7 +131,27 @@ func writeAgentMessagePage(flags *rootFlags, page store.MessagesPage, limit int)
 	meta.Limit = limit
 	meta.Excluded = []string{"tombstones"}
 	meta.Page = &out.AgentPage{Returned: len(page.Messages), HasMore: page.HasMore, NextCursor: page.NextCursor}
-	return writeAgentMessagesWithMeta(flags, page.Messages, meta, "", "")
+	return writeAgentMessagesWithMeta(flags, page.Messages, meta, "", "", "")
+}
+
+func writeAgentSearch(flags *rootFlags, msgs []store.Message, limit int, fts, temporal, asc bool, page *store.MessagesPage) error {
+	meta := agentMeta(flags)
+	meta.Limit = limit
+	meta.Excluded = []string{"tombstones"}
+	if page != nil {
+		meta.Page = &out.AgentPage{Returned: len(msgs), HasMore: page.HasMore, NextCursor: page.NextCursor}
+	}
+	mode, order := "like", "time_desc"
+	if fts {
+		mode = "fts5"
+		if !temporal {
+			order = "relevance"
+		}
+	}
+	if temporal && asc {
+		order = "time_asc"
+	}
+	return writeAgentMessagesWithMeta(flags, msgs, meta, mode, "", order)
 }
 
 func writeAgentMessages(flags *rootFlags, msgs []store.Message, limit int, searchMode, selected string, before, after *int) error {
@@ -139,11 +160,12 @@ func writeAgentMessages(flags *rootFlags, msgs []store.Message, limit int, searc
 	meta.Before = before
 	meta.After = after
 	meta.Excluded = []string{"tombstones"}
-	return writeAgentMessagesWithMeta(flags, msgs, meta, searchMode, selected)
+	return writeAgentMessagesWithMeta(flags, msgs, meta, searchMode, selected, "")
 }
 
-func writeAgentMessagesWithMeta(flags *rootFlags, msgs []store.Message, meta out.AgentMeta, searchMode, selected string) error {
+func writeAgentMessagesWithMeta(flags *rootFlags, msgs []store.Message, meta out.AgentMeta, searchMode, selected, order string) error {
 	data := agentMessages{Messages: make([]agentMessage, 0, len(msgs)), SearchMode: searchMode, SelectedID: selected}
+	data.Order = order
 	for _, m := range msgs {
 		data.Messages = append(data.Messages, agentMessageDTO(m, flags.detail))
 	}
