@@ -65,7 +65,21 @@ func (a *App) addSyncEventHandler(ctx context.Context, opts SyncOptions, message
 	if !opts.WebhookEvents.Enabled(SyncWebhookEventMessage) {
 		enqueueWebhookMessage = func(wa.ParsedMessage) {}
 	}
+	a.waMu.Lock()
+	lifetimeObserver := a.outboundEvents
+	a.waMu.Unlock()
 	handlerID := a.wa.AddEventHandler(func(evt any) {
+		// The lifetime gate also drains legacy sync writes before App closes its DB.
+		ctx := ctx
+		if observer := lifetimeObserver; observer != nil {
+			var done func()
+			var ok bool
+			ctx, done, ok = observer.enter(ctx)
+			if !ok {
+				return
+			}
+			defer done()
+		}
 		eventOpts, finishHistoryEvent := a.historyEventOptions(opts, evt)
 		defer finishHistoryEvent()
 		if mediaQ != nil {
@@ -599,6 +613,12 @@ func (a *App) handleLiveSyncMessage(ctx context.Context, opts SyncOptions, v *ev
 }
 
 func (a *App) downloadAndHandleHistorySync(ctx context.Context, opts SyncOptions, notif *waE2E.HistorySyncNotification, messagesStored, lastEvent *atomic.Int64, enqueueMedia func(string, string), limits ...*syncStorageLimits) {
+	batch, done, ok := a.outboundHistoryBatch(ctx)
+	if !ok {
+		return
+	}
+	defer done()
+	opts.outboundHistory = batch
 	data, err := a.wa.DownloadHistorySync(ctx, notif)
 	if err != nil {
 		a.emitWarning(
@@ -679,6 +699,14 @@ func (w *historyUnhandledPayloadWarnings) flush(a *App) {
 }
 
 func (a *App) handleHistorySync(ctx context.Context, opts SyncOptions, v *events.HistorySync, messagesStored, lastEvent *atomic.Int64, enqueueMedia func(string, string), limits ...*syncStorageLimits) {
+	if opts.outboundHistory == nil {
+		batch, done, ok := a.outboundHistoryBatch(ctx)
+		if !ok {
+			return
+		}
+		defer done()
+		opts.outboundHistory = batch
+	}
 	var unhandledWarnings historyUnhandledPayloadWarnings
 	defer unhandledWarnings.flush(a)
 	a.emitOrPrint("history_sync", map[string]any{"conversations": len(v.Data.Conversations)}, "\nProcessing history sync (%d conversations)...\n", len(v.Data.Conversations))
@@ -695,6 +723,9 @@ func (a *App) handleHistorySync(ctx context.Context, opts SyncOptions, v *events
 			lastEvent.Store(nowUTC().UnixNano())
 			if m.Message == nil {
 				continue
+			}
+			if opts.outboundHistory != nil {
+				opts.outboundHistory.historyEcho(chatID, m.Message)
 			}
 			pm := wa.ParseHistoryMessage(chatID, m.Message)
 			if pm.ID == "" || pm.Chat.IsEmpty() {

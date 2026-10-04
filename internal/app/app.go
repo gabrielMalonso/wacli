@@ -99,6 +99,7 @@ type WAClient interface {
 	Logout(ctx context.Context) error
 	LinkedJID() string
 	LinkedLID() string
+	CheckPublicPair(context.Context, types.JID, types.JID) (wa.PublicPairResult, error)
 
 	SetProfilePicture(ctx context.Context, avatar []byte) (string, error)
 	GetProfilePictureInfo(ctx context.Context, jid types.JID, preview bool, existingID string) (*types.ProfilePictureInfo, error)
@@ -126,6 +127,9 @@ type App struct {
 	wa                      WAClient
 	sessionState            *sessionObservation
 	sessionHandler          uint32
+	outboundEvents          *outboundObserver
+	closed                  bool
+	closeOnce               sync.Once
 	connectGate             chan struct{}
 	sessionResolver         *readOnlySessionResolver
 	db                      *store.DB
@@ -177,6 +181,9 @@ func New(opts Options) (*App, error) {
 func (a *App) OpenWA() error {
 	a.waMu.Lock()
 	defer a.waMu.Unlock()
+	if a.closed {
+		return fmt.Errorf("application is closed")
+	}
 	if a.opts.ReadOnly {
 		if a.wa != nil {
 			return nil
@@ -201,7 +208,9 @@ func (a *App) OpenWA() error {
 	if a.sessionState == nil {
 		state := newSessionObservation(a.opts.StoreDir)
 		a.sessionState = state
-		a.sessionHandler = a.wa.AddEventHandler(func(evt any) { a.observeSessionState(state, evt) })
+		observer := newOutboundObserver(a, a.wa)
+		a.outboundEvents = observer
+		a.sessionHandler = a.wa.AddEventHandler(func(evt any) { observer.event(state, evt) })
 		a.connectGate = make(chan struct{}, 1)
 		a.connectGate <- struct{}{}
 	}
@@ -209,19 +218,33 @@ func (a *App) OpenWA() error {
 }
 
 func (a *App) Close() {
+	a.closeOnce.Do(a.close)
+}
+
+func (a *App) close() {
 	a.appStateRecoveryMu.Lock()
 	a.appStateRecoveryClosing = true
 	a.appStateRecoveryMu.Unlock()
 	a.waMu.Lock()
+	a.closed = true
 	waClient := a.wa
 	sessionResolver := a.sessionResolver
 	sessionState, sessionHandler := a.sessionState, a.sessionHandler
+	observer := a.outboundEvents
 	a.waMu.Unlock()
+	if observer != nil {
+		observer.closeAdmissions()
+	}
 	if waClient != nil {
-		waClient.Disconnect()
 		if sessionState != nil {
 			waClient.RemoveEventHandler(sessionHandler)
 		}
+	}
+	if observer != nil {
+		observer.workers.Wait()
+	}
+	if waClient != nil {
+		waClient.Disconnect()
 	}
 	// A completed command frontier may hand later ready tasks to a background
 	// drainer. Keep SQLite open until that drainer has finished every write.
