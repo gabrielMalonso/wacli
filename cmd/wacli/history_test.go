@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"github.com/openclaw/wacli/internal/app"
 	"strings"
 	"testing"
 	"time"
@@ -83,5 +86,40 @@ func TestHistoryFillDryRunSelectsReadyChats(t *testing.T) {
 	})
 	if !strings.Contains(raw, "Selected 1 chats") || !strings.Contains(raw, "yes") || !strings.Contains(raw, "no") {
 		t.Fatalf("dry-run output missing selection markers: %q", raw)
+	}
+}
+
+func TestBackfillResultOutputPreservesScopeAndStopEvidence(t *testing.T) {
+	res := app.BackfillResult{
+		ChatJID: "123@g.us", RequestsSent: 2, ResponsesSeen: 1,
+		MessagesAdded: 0, MessagesSynced: 7, StopReason: app.BackfillStopPrimaryNoMore,
+	}
+	var dst bytes.Buffer
+	if err := writeBackfillResult(&dst, res, true); err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Chat           string                 `json:"chat"`
+			RequestsSent   int                    `json:"requests_sent"`
+			ResponsesSeen  int                    `json:"responses_seen"`
+			MessagesAdded  int64                  `json:"messages_added"`
+			MessagesSynced int64                  `json:"messages_synced"`
+			StopReason     app.BackfillStopReason `json:"stop_reason"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(dst.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if !envelope.Success || envelope.Data.Chat != res.ChatJID || envelope.Data.RequestsSent != 2 || envelope.Data.ResponsesSeen != 1 || envelope.Data.MessagesAdded != 0 || envelope.Data.MessagesSynced != 7 || envelope.Data.StopReason != res.StopReason {
+		t.Fatalf("JSON result = %s", &dst)
+	}
+	dst.Reset()
+	if err := writeBackfillResult(&dst, res, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(dst.String(), "primary_no_more_messages") || !strings.Contains(dst.String(), "Local conversation grew by 0 messages (2 requests)") || strings.Contains(dst.String(), "complete") {
+		t.Fatalf("human result = %s", &dst)
 	}
 }

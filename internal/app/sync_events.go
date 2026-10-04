@@ -726,9 +726,14 @@ func (a *App) handleHistorySync(ctx context.Context, opts SyncOptions, v *events
 				if pm.Poll != nil || pm.PollAdd != nil || pm.PollVote != nil {
 					pendingPolls = append(pendingPolls, historyPollSideEffect{pm: pm, evt: pollEvt, hist: m.Message})
 				}
-			} else if ctx.Err() != nil {
-				a.handleHistoryPollSideEffectsBatch(context.WithoutCancel(ctx), pendingPolls)
-				return
+			} else {
+				if opts.historyStoreError != nil && v.Data.GetSyncType() == waHistorySync.HistorySync_ON_DEMAND {
+					opts.historyStoreError(pm.Chat, err)
+				}
+				if ctx.Err() != nil {
+					a.handleHistoryPollSideEffectsBatch(context.WithoutCancel(ctx), pendingPolls)
+					return
+				}
 			}
 			if opts.DownloadMedia && pm.Media != nil && pm.ID != "" {
 				enqueueMedia(canonicalJIDString(a.canonicalStoreJID(ctx, pm.Chat)), pm.ID)
