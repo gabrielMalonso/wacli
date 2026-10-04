@@ -26,8 +26,10 @@ func newChatsCleanupCmd(flags *rootFlags) *cobra.Command {
 By default, removes chats with no messages in the last 365 days.
 Use --days to adjust the threshold. Use --dry-run to preview what would be deleted.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := flags.requireWritable(); err != nil {
-				return err
+			if !dryRun {
+				if err := flags.requireWritable(); err != nil {
+					return err
+				}
 			}
 			if strings.TrimSpace(jid) == "" && days <= 0 {
 				return fmt.Errorf("--days must be greater than 0")
@@ -36,7 +38,7 @@ Use --days to adjust the threshold. Use --dry-run to preview what would be delet
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
-			a, lk, err := newApp(ctx, flags, true, false)
+			a, lk, err := newMaintenanceApp(ctx, flags, dryRun)
 			if err != nil {
 				return err
 			}

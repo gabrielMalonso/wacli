@@ -25,14 +25,16 @@ Removes chats with no recent activity and their associated messages.
 Use --days to set the threshold (default: 365 days).
 Use --dry-run to preview what would be deleted.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := flags.requireWritable(); err != nil {
-				return err
+			if !dryRun {
+				if err := flags.requireWritable(); err != nil {
+					return err
+				}
 			}
 
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
-			a, lk, err := newApp(ctx, flags, true, false)
+			a, lk, err := newMaintenanceApp(ctx, flags, dryRun)
 			if err != nil {
 				return err
 			}

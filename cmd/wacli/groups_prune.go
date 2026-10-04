@@ -32,8 +32,10 @@ groups whose last local message is older than the threshold.
 This only deletes local wacli store rows. It does not leave WhatsApp groups
 or delete anything from WhatsApp servers. Use --dry-run to preview targets.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := flags.requireWritable(); err != nil {
-				return err
+			if !dryRun {
+				if err := flags.requireWritable(); err != nil {
+					return err
+				}
 			}
 			if days < 0 {
 				return fmt.Errorf("days must not be negative")
@@ -45,7 +47,7 @@ or delete anything from WhatsApp servers. Use --dry-run to preview targets.`,
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
-			a, lk, err := newApp(ctx, flags, true, false)
+			a, lk, err := newMaintenanceApp(ctx, flags, dryRun)
 			if err != nil {
 				return err
 			}

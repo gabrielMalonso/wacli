@@ -32,12 +32,14 @@ restore the payload. Live messages must first receive an explicit deletion event
 			if chat == "" || id == "" {
 				return fmt.Errorf("--chat and --id are required")
 			}
-			if err := flags.requireWritable(); err != nil {
-				return err
+			if !dryRun {
+				if err := flags.requireWritable(); err != nil {
+					return err
+				}
 			}
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
-			a, lk, err := newApp(ctx, flags, true, false)
+			a, lk, err := newMaintenanceApp(ctx, flags, dryRun)
 			if err != nil {
 				return err
 			}
