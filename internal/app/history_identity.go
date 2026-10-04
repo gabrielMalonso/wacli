@@ -18,10 +18,11 @@ import (
 // HistoryIdentity is a local, strict observation, not remote recipient validation.
 // Missing session/account facts remain unknown; query errors never imply no alias.
 type HistoryIdentity struct {
-	InputJID   string
-	ChatJID    string
-	AliasJID   string
-	AccountJID string
+	InputJID        string
+	ChatJID         string
+	AliasJID        string
+	AccountJID      string
+	AccountAliasJID string
 }
 
 // ParseHistoryJID validates a complete input before syntactic AD normalization.
@@ -55,7 +56,33 @@ func publicHistoryAccount(raw string) string {
 }
 
 func (a *App) ReadHistoryIdentities(ctx context.Context, inputs []string) ([]HistoryIdentity, error) {
-	if len(inputs) > 200 {
+	return a.readLocalIdentities(ctx, inputs, 200)
+}
+
+// Draft preparation may include 200 mentions, a target and two quote senders.
+// History's public 200-input contract remains unchanged.
+func (a *App) ReadDraftIdentities(ctx context.Context, inputs []string) ([]HistoryIdentity, error) {
+	result, err := a.readLocalIdentities(ctx, inputs, 203)
+	if err != nil || len(result) == 0 || result[0].AccountJID == "" || result[0].AccountAliasJID != "" {
+		return result, err
+	}
+	// A nullable device LID permits the same verified public-map fallback used
+	// by history/contact identity reads; no LID digits become a phone.
+	own, err := a.readLocalIdentities(ctx, []string{result[0].AccountJID}, 1)
+	if err != nil {
+		return nil, err
+	}
+	if len(own) != 1 || own[0].AccountJID != result[0].AccountJID {
+		return nil, fmt.Errorf("local draft account changed during observation")
+	}
+	for i := range result {
+		result[i].AccountAliasJID = own[0].AliasJID
+	}
+	return result, nil
+}
+
+func (a *App) readLocalIdentities(ctx context.Context, inputs []string, maxInputs int) ([]HistoryIdentity, error) {
+	if len(inputs) > maxInputs {
 		return nil, fmt.Errorf("history evidence accepts at most 200 inputs")
 	}
 	result := make([]HistoryIdentity, 0, len(inputs))
@@ -123,6 +150,7 @@ func (a *App) ReadHistoryIdentities(ctx context.Context, inputs []string) ([]His
 	}
 	for i := range result {
 		result[i].AccountJID = account
+		result[i].AccountAliasJID = ownAlias
 		jid, _ := types.ParseJID(result[i].InputJID)
 		if account != "" && ownAlias != "" && (jid.String() == account || jid.String() == ownAlias) {
 			result[i].ChatJID = account

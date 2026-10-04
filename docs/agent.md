@@ -1,6 +1,6 @@
 # Agent output contract
 
-Read when: integrating a coding agent with bounded archive queries, explicit history recovery, and stable errors.
+Read when: integrating a coding agent with bounded archive queries, explicit history recovery, local drafts, and stable errors.
 
 `--agent` enables JSON contract **v1**. `--detail compact|full` chooses its public detail level; compact is the default. Flags work before or after the subcommand. `--agent --json` still returns v1. Existing `--json` envelopes, field names, list defaults, tables, and `--full` table behavior remain unchanged. `--detail` without `--agent` is an error; `--full` does not select full agent detail.
 
@@ -23,16 +23,18 @@ wacli --store /path/to/archive --agent doctor
 | `contacts resolve` | `resolutions` array, one per input | Untruncated names |
 | `history coverage` | `coverage` array with local counts/dates/anchor status; opt-in `--evidence` adds independent `recovery_evidence` | Untruncated names; evidence options, anchors and checkpoint measurements |
 | `history backfill --chat JID` | Explicit live action: chat, attempt ID, requests/responses, net growth, stop reason and persisted `evidence` | Evidence options, anchors and scoped global sync counter |
+| `draft show/create/update/discard` | Frozen local revision, identity, payload hash and state | Untruncated content and document expected snapshot path |
+| `draft list` | Stored summary array with page metadata | Same bounded summaries |
 | `auth status` | Local authentication observation, public linked JID/phone when known, `session_revoked`, `connected` | Same observation |
 | `doctor` (offline) | Auth observation, lock state, FTS availability and heartbeat activity date | Store counts and `last_message_at` |
 
-Other commands, including mutations, downloads, `history fill`, and `doctor --connect`, fail before their argument validators or store/network operations with `unsupported_command`. Help, root help without a command, and version retain their normal text semantics. Unknown commands/flags are usage errors. Shell completion is outside the agent contract. `--events` is rejected with `--agent` to keep one error envelope on stderr.
+Other commands, including mutations outside these explicit actions, downloads, `history fill`, and `doctor --connect`, fail before their argument validators or store/network operations with `unsupported_command`. Help, root help without a command, and version retain their normal text semantics. Unknown commands/flags are usage errors. Shell completion is outside the agent contract. `--events` is rejected with `--agent` to keep one error envelope on stderr.
 
 All archive queries use the existing read-only opener, validate the archive schema without migration, and work while the writer lock is held. They never initialize a missing archive. Authentication status reads the public session JID and local revocation observation, without loading credentials or opening a WhatsApp client; an existing directory without a session reports unauthenticated. Offline doctor requires a readable current-schema archive; store failures are error envelopes with exit 4. Inspect session state separately with `auth status --agent` even if `wacli.db` is unreadable, or run legacy `doctor --json` (without `--agent` or `--connect`) to retain its diagnostic report, including archive errors. Neither command connects.
 
 ## History recovery
 
-`--agent history backfill --chat JID` explicitly requests recovery using the existing standalone runner or connected sync owner. It does not authorize any other mutation, connection command, or download. The central command capability remains an explicit allowlist: unsupported, local read, or history recovery. `--read-only` and `WACLI_READONLY=1` reject this action with `read_only` (exit 2); malformed options and `--events` fail with exit 2 before opening/delegating. Bounds remain count 1–500, up to 100 batches, wait/idle up to five minutes (legacy nonpositive defaults preserved). There is no new executor, replay, journal or automatic retry policy.
+`--agent history backfill --chat JID` explicitly requests recovery using the existing standalone runner or connected sync owner. It does not authorize any other mutation, connection command, or download. The central command capability remains an explicit allowlist: unsupported, local read, local draft write, or history recovery. `--read-only` and `WACLI_READONLY=1` reject this action with `read_only` (exit 2); malformed options and `--events` fail with exit 2 before opening/delegating. Bounds remain count 1–500, up to 100 batches, wait/idle up to five minutes (legacy nonpositive defaults preserved). There is no new executor, replay, journal or automatic retry policy.
 
 `meta.source="live"` describes the action's capability, including parsing, policy and pre-dispatch failures; it does not assert a request reached the primary. Coverage remains `source="local"`. Both freshness and completeness stay `unknown`. Success exposes only the final successful operation observation; partial results on errors are available through retained evidence when persistence succeeded.
 
@@ -65,7 +67,7 @@ Message IDs and stored chat/sender/quote JIDs are preserved. Chat views keep sto
 
 Agent lists default to **20** rows; explicit `--limit` must be **1–200** in both details. Context retains defaults of five messages before/after; values must be nonnegative and `before + after + 1` must be at most 200. Its metadata includes the requested `before`, `after`, and total `limit`. Resolve accepts at most 200 inputs and thus at most 200 total results; its metadata reports that cap. `contacts list/search`, `chats list`, `messages list` and temporal `messages search --sort time` support local keyset pagination (below). Other lists have no cursors or inferred next pages. Reaching or falling below a limit does not prove complete WhatsApp history.
 
-Compact message `text` is display text, capped at **320 Unicode code points**, preserving valid UTF-8. `text_truncated` explicitly records cutting; there is no appended ellipsis that changes the text. Other selected labels (names, aliases, filenames) have the same cap and report affected fields in `fields_truncated`. Identifiers are never truncated. `meta.recovery` documents full retrieval. Full exposes only selected public DTO fields: it does not serialize internal structs, keys, authenticated media URLs, session paths, raw protobufs or blobs. It does not expose local download paths or button URLs; `downloaded`/`downloaded_at` are the selected download observations. The selected `account.store_ref` is the intentional path exception.
+Compact message `text` is display text, capped at **320 Unicode code points**, preserving valid UTF-8. `text_truncated` explicitly records cutting; there is no appended ellipsis that changes the text. Other selected labels (names, aliases, filenames) have the same cap and report affected fields in `fields_truncated`. Identifiers are never truncated. `meta.recovery` documents full retrieval. Full exposes only selected public DTO fields: it does not serialize internal structs, keys, authenticated media URLs, session paths, raw protobufs or blobs. It does not expose local download paths or button URLs; `downloaded`/`downloaded_at` are the selected download observations. The selected `account.store_ref` is an intentional path exception. The new [draft contract](drafts.md) also deliberately exposes a derived document `snapshot_path` only in full detail, without opening/statting bytes or certifying current integrity.
 
 The total encoded envelope, including newline, is capped at **1 MiB compact / 8 MiB full**, checked before writing any success bytes. `payload_too_large` is a typed exit-1 error with stdout entirely empty and guidance to narrow the query; full also suggests `--detail compact`. Full removes per-text truncation, not row/envelope bounds. These are encoded **output** bounds, not total memory bounds: database rows/DTOs and the JSON envelope are materialized before the size check.
 
@@ -181,3 +183,9 @@ Errors carry `code` and `message`; `recovery` appears only when an actionable st
 ```
 
 Use `--` to terminate flags, for example `messages search -- "--agent"` searches that literal text in legacy mode. A string value such as `--query="text containing --agent"` does not activate agent mode. A known flag's separate value, including a literal `--agent`, is consumed as its value. Invalid boolean values for the agent flag produce a v1 usage error. Unknown flags never execute a mutator while formatting an error.
+
+## Local draft capability
+
+Only `draft create/update/discard` gain `local_draft_write`; `draft show/list` use `local_read`. Every draft envelope, including policy/parsing failures, remains v1 `source=local`. Other mutation capabilities remain blocked. See [local drafts](drafts.md) for payload/field/file limits, compact review, identity freezing, expected snapshot paths, live pagination and growing retention.
+
+Draft policy/usage/cursor errors use exit 2, not-found exit 3, store/identity/document failures exit 4, and CAS/uncertainty exit 1. Optional `error.draft={draft_id,revision_id,hash}` is confined to this operation. `local_write_uncertain` includes output failure after commit or unconfirmed IPC correlation; check exact IDs without automatic replay. Hashes never authorize sending. Show/list require no current session and never inspect document bytes.

@@ -25,6 +25,7 @@ const (
 	agentUnsupported agentCapability = iota
 	agentLocalRead
 	agentHistoryRecovery
+	agentLocalDraftWrite
 )
 
 // Recover output intent even if Cobra stops on an earlier parse error. Inspect
@@ -184,6 +185,10 @@ func agentCommandCapability(cmd *cobra.Command) agentCapability {
 	switch strings.TrimPrefix(cmd.CommandPath(), "wacli ") {
 	case "messages list", "messages search", "messages show", "messages context", "chats list", "chats show", "contacts list", "contacts search", "contacts show", "contacts resolve", "history coverage", "auth status":
 		return agentLocalRead
+	case "draft show", "draft list":
+		return agentLocalRead
+	case "draft create", "draft update", "draft discard":
+		return agentLocalDraftWrite
 	case "history backfill":
 		return agentHistoryRecovery
 	case "doctor":

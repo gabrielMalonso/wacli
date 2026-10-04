@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Drafts: prepare durable local text/document/contact previews in schema 30 with explicit account/recipient observations, immutable versioned payload hashes, append-only revisions and CAS update/discard. Retain exclusive streaming document snapshots; expose their derived expected path only in full detail. Add narrow agent local-draft-write capability and existing-owner IPC without WA access, pacing, replay or sends; preserve uncertain outcomes and document growing retention with no GC.
+
 - History: retain latest recovery attempt and last successful observation per requested identity in schema 29, with bounded checkpoints, conditional finalization, typed IPC correlation and explicit uncertain outcomes. Add opt-in `history coverage --evidence` independent of chat rows/anchors and explicit `--agent history backfill` with live source and operation-specific typed failures; preserve raw local coverage and unknown remote completeness, and refuse unknown/newer archives before writer-side journal or permission changes.
 - Contacts: add `contacts list` and paginate agent list/search over the existing canonical PN/LID view. Stream identity groups and retain only `limit+1` candidates, preserving original-name/alias/phone matching, metadata on either half and legacy search results/defaults. Use strict semantically scoped contact cursors, explicit readonly public-identity errors, safe nullable own-device LIDs with public-map fallback, and deterministic source ties; document live mapping/name changes, no universal mapping-change detection, and SQLite scan/materialization/sort costs.
 
