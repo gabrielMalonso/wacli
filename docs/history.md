@@ -7,7 +7,7 @@ Read when: trying to fetch older messages for a known chat.
 ## Commands
 
 ```bash
-wacli history coverage [--query TEXT] [--kind KIND] [--include-blocked] [--only-actionable]
+wacli history coverage [--evidence] [--query TEXT] [--kind KIND] [--include-blocked] [--only-actionable]
 wacli history fill --dry-run [--query TEXT] [--kind KIND] [--limit 100]
 wacli history backfill --chat JID [--count 50] [--requests N] [--wait 1m] [--idle-exit 5s] [--events]
 ```
@@ -116,7 +116,7 @@ shows the stop reason and describes the measured local conversation growth.
 
 The primary marker means **no more messages available on that primary device**.
 It does not prove an unlimited global history or a complete local archive.
-Backfill does not persist a coverage/completeness claim.
+Backfill persists bounded recovery observations, without a coverage/completeness claim.
 
 For compatibility, `backfill_stopped` lifecycle events retain the old `reason`
 values `no_older_messages_added`, `no_messages_returned`, and
@@ -126,6 +126,93 @@ The batch-limit event uses `requested_batch_limit` for both fields. A batch-stop
 event can precede a final idle/counting failure; only the final successful result
 confirms the operation finished normally. `history backfill` remains unsupported
 in `--agent` mode.
+
+## Retained recovery observations
+
+Backfill writes recovery evidence to the selected archive's existing `wacli.db`,
+using the same writer lock and connected owner when present. Evidence is specific
+to history recovery: it is not an operation journal, replay token or automatic
+retry mechanism.
+
+```bash
+wacli history coverage --chat 123@s.whatsapp.net --evidence --json
+wacli history coverage --chat 123@s.whatsapp.net --agent --evidence --detail full
+```
+
+`--evidence` adds a separate `data.recovery_evidence` list to JSON output and a
+separate recovery table to human output. Without the flag, legacy coverage fields,
+filters and output stay unchanged. An explicit `--chat` selects retained evidence
+even when that identity has no chat row or anchor, or the coverage filters exclude
+it. Without `--chat`, only identities of returned coverage rows are selected.
+Queries accept at most 200 inputs and select at most 400 keys after including
+currently verified PN/LID aliases; they do not scan the entire evidence catalog.
+With evidence, `--limit` must be 1–200. Inputs are deduplicated and normalized
+syntactically. A device-qualified PN/LID input uses its non-device identity.
+
+Each requested identity retains at most two records: `latest` and `last_success`.
+Both can reference the same successful attempt. A new failed attempt replaces
+`latest` while preserving the previous success. New input identities can grow the
+table; attempts for an existing input do not create a growing attempt history.
+A null slot means **no record retained**, not that recovery never ran. Evidence
+is independent of chat/message rows and is not deleted or reassigned when LID
+messages move to a verified PN. A substituted attempt ID may no longer be retained.
+
+Compact evidence exposes state, phase, attempt ID, observation dates, historical
+conversation/account scope, final request/response counts, stop reason and net
+local growth when measured. Full evidence adds options, anchors, checkpoint
+counts and the explicitly labelled global Sync counter. Agent output keeps its
+existing row and encoded-envelope quotas. Legacy JSON can add these full evidence
+fields with `--full`.
+
+`unfinalized` means no terminal outcome was durably recorded. It does not prove
+that work is running or that the process crashed. Unfinalized request/response
+totals are null in compact output; full checkpoint counts describe only the last
+saved checkpoint. Errors/cancellation after a possible request can leave history
+in the archive. Net growth is null when not reliably measured, rather than an
+invented zero. `dispatch_possible` is a conservative persisted marker; a prepared
+anchor or request identity does not prove delivery. No evidence update happens
+for each message.
+
+The runner saves the start before standalone connection, establishes its counting
+window after alias migration, and saves a checkpoint before each recovery call.
+A checkpoint failure prevents that next call. Normal standalone Sync activity can
+still change the store before any recovery request. After possible dispatch,
+errors never certify no effects. Finishing uses a bounded, synchronous write
+outside the cancelled command context, before releasing the writer lock. A
+failed final write can leave `latest` unfinalized despite network/store activity.
+Success and `last_success` are committed together; every later update is
+conditioned on the attempt ID so old cleanup cannot finalize a newer attempt.
+SQLite durability follows the archive's existing WAL/synchronous settings.
+
+An observed primary end marker includes its callback observation date and the
+response's conversation identity, even when a later step fails and that partial
+observation can be saved. It describes what that primary answered for that
+historical scope. It does not prove a complete local archive, uninterrupted
+identity mapping, remote availability now or global/future completeness. Replies
+have no network correlation ID and can include concurrent or late activity.
+
+`identity_relation=matching_snapshot` only compares the current local public
+account and verified identity set with the historical snapshot. A different
+account or verified set yields `changed`; unavailable comparable facts yield
+`unknown`. A lookup error is an error, not proof of a missing alias. Nullable own
+LIDs remain unknown own pairs and can use the persisted verified pair map.
+Neither matching counts nor this identity comparison validates the message
+catalog. Current raw coverage includes tombstones/placeholders and its date
+interval is not proof of continuous history or retained payloads. Edits,
+revocations, removal, orphaned messages and alias merging do not change these
+limits. A restored archive carries only the evidence from that restored snapshot.
+Unreadable, missing or incompatible archives fail rather than inventing empty
+coverage or successful recovery. Reads never migrate or repair evidence; schema
+29 is created only by an explicit writable archive open. A writer also refuses
+unknown/newer migration versions before changing journal mode or permissions.
+
+The CLI generates an internal random attempt ID before possible delegation and
+passes it to the owner. This is correlation, not idempotency. Missing/mismatched
+reply IDs, socket failures after attempting dispatch or an owner without typed
+correlation produce an uncertain outcome. They do not prove the ID was persisted
+or authorize a direct-writer fallback. Inspect retained observations before an
+explicit new request. Closing the caller socket does not acknowledge cancellation
+at the owner.
 
 ## Examples
 

@@ -125,6 +125,7 @@ type App struct {
 	sessionResolver         *readOnlySessionResolver
 	db                      *store.DB
 	historyMu               sync.Mutex
+	historyBackfillActive   bool
 	historyRuntime          *historyRuntime
 	historyObserver         *historyObserver
 	statusMu                sync.Mutex

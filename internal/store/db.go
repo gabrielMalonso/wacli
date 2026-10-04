@@ -41,8 +41,13 @@ func open(path string, readOnly bool) (*DB, error) {
 		if _, err := os.Stat(path); err != nil {
 			return nil, fmt.Errorf("read local store (initialize explicitly with wacli auth or sync; these commands may connect to WhatsApp): %w", err)
 		}
-	} else if err := fsutil.EnsurePrivateDir(filepath.Dir(path)); err != nil {
-		return nil, fmt.Errorf("create db directory: %w", err)
+	} else {
+		if err := checkWritableSchema(path); err != nil {
+			return nil, err
+		}
+		if err := fsutil.EnsurePrivateDir(filepath.Dir(path)); err != nil {
+			return nil, fmt.Errorf("create db directory: %w", err)
+		}
 	}
 
 	db, err := sql.Open("sqlite3", sqliteURI(path, readOnly))
@@ -68,6 +73,42 @@ func open(path string, readOnly bool) (*DB, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// Inspect existing versions without a writer connection: journal_mode and chmod
+// must not alter an archive produced by a newer or unknown migration.
+func checkWritableSchema(path string) error {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	db, err := sql.Open("sqlite3", sqliteURI(path, true))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	d := &DB{sql: db}
+	exists, err := d.tableExists("schema_migrations")
+	if err != nil || !exists {
+		return err // Unversioned legacy archives retain their writable migration.
+	}
+	rows, err := db.Query(`SELECT version FROM schema_migrations`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	current := schemaMigrations[len(schemaMigrations)-1].version
+	for rows.Next() {
+		var version int
+		if err := rows.Scan(&version); err != nil {
+			return err
+		}
+		if version < 1 || version > current {
+			return fmt.Errorf("local store schema %d is unknown or newer than supported schema %d; upgrade wacli before writing", version, current)
+		}
+	}
+	return rows.Err()
 }
 
 func (d *DB) validateReadable() error {

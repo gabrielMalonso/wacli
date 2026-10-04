@@ -42,6 +42,7 @@ var schemaMigrations = []migration{
 	{version: 26, name: "message identity indexes and selective fts updates", up: migrateMessageIdentityIndexes},
 	{version: 27, name: "repair placeholder chat activity", up: migratePlaceholderChatActivity},
 	{version: 28, name: "unavailable app state keys", up: migrateUnavailableAppStateKeys},
+	{version: 29, name: "history recovery evidence", up: migrateHistoryEvidence},
 }
 
 func migratePlaceholderChatActivity(d *DB) error {
@@ -406,7 +407,7 @@ func (d *DB) ensureCurrentSchema() error {
 	if err := migrateUnavailableAppStateKeys(d); err != nil {
 		return fmt.Errorf("ensure unavailable app state keys: %w", err)
 	}
-	return nil
+	return migrateHistoryEvidence(d)
 }
 
 func migrateGroupsLeftAt(d *DB) error {

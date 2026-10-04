@@ -31,11 +31,27 @@ func newHistoryCoverageCmd(flags *rootFlags) *cobra.Command {
 	var limit int
 	var includeBlocked bool
 	var onlyActionable bool
+	var evidence bool
 
 	cmd := &cobra.Command{
 		Use:   "coverage",
 		Short: "Show local archive coverage by chat",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if evidence {
+				if _, err := historyEvidenceInputs(chats); err != nil {
+					if flags.agent {
+						return agentUsageError(err)
+					}
+					return err
+				}
+				if limit > 200 || limit <= 0 {
+					err := fmt.Errorf("--evidence requires --limit between 1 and 200")
+					if flags.agent {
+						return agentUsageError(err)
+					}
+					return err
+				}
+			}
 			ctx, cancel := withTimeout(cmd.Context(), flags)
 			defer cancel()
 
@@ -56,6 +72,25 @@ func newHistoryCoverageCmd(flags *rootFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if evidence {
+				records, err := readHistoryEvidence(ctx, a, chats, coverage, flags.detail == "full" || (!flags.agent && flags.fullOutput))
+				if err != nil {
+					if flags.agent {
+						return agentStoreError(err)
+					}
+					return err
+				}
+				if flags.agent {
+					return writeHistoryAgentCoverageEvidence(flags, coverage, records, limit)
+				}
+				if flags.asJSON {
+					return out.WriteJSON(os.Stdout, historyCoverageEvidenceData{Coverage: coverage, RecoveryEvidence: records})
+				}
+				if err := writeHistoryCoverageTable(os.Stdout, coverage, fullTableOutput(flags.fullOutput), false); err != nil {
+					return err
+				}
+				return writeHistoryEvidenceTable(os.Stdout, records)
+			}
 			if flags.agent {
 				return writeAgentCoverage(flags, coverage, limit)
 			}
@@ -71,6 +106,7 @@ func newHistoryCoverageCmd(flags *rootFlags) *cobra.Command {
 	cmd.Flags().IntVar(&limit, "limit", 100, "limit rows")
 	cmd.Flags().BoolVar(&includeBlocked, "include-blocked", false, "include chats without a local message anchor")
 	cmd.Flags().BoolVar(&onlyActionable, "only-actionable", false, "show only chats with a local message anchor")
+	cmd.Flags().BoolVar(&evidence, "evidence", false, "include retained recovery observations for selected inputs and verified aliases")
 	return cmd
 }
 
@@ -147,6 +183,10 @@ func newHistoryBackfillCmd(flags *rootFlags) *cobra.Command {
 				ChatJID: chat, Count: count, Requests: requests,
 				WaitPerRequest: wait, IdleExit: idleExit,
 			})
+			if err != nil {
+				return err
+			}
+			opts.AttemptID, err = app.NewHistoryAttemptID()
 			if err != nil {
 				return err
 			}

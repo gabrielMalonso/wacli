@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- History: retain latest recovery attempt and last successful observation per requested identity in schema 29, with bounded checkpoints, conditional finalization, typed IPC correlation and explicit uncertain outcomes. Add opt-in `history coverage --evidence` independent of chat rows/anchors; preserve raw local coverage and unknown remote completeness, and refuse unknown/newer archives before writer-side journal or permission changes.
+
 - History: delegate backfill to the connected `sync --follow` owner through the existing `.send.sock` when its archive is locked. Reuse the serialized operation slot and history persistence handler, preserve standalone results/retries, bound queue/request/idle work by one deadline, and isolate callbacks across cancellation. Backfill does not change send pacing or reconnect the owner; connected `messages_synced` is the window delta of the legacy global counter. Document queue impact, ambiguous replies, and late-response limits.
 
 - Agents: paginate `--agent chats list` with bounded keyset pages, deterministic pinned/activity/JID ties and a separate strict scoped chat cursor. Preserve raw stored PN/LID identities, legacy outputs and message tokens; bind query and all tri-state filters, allow limit/detail changes, re-evaluate mute expiry per page and document live-read/SQLite scan-sort limits without inferring remote freshness or completeness.

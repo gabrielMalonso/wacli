@@ -16,6 +16,7 @@ import (
 )
 
 type BackfillOptions struct {
+	AttemptID      string
 	ChatJID        string
 	Count          int
 	Requests       int
@@ -42,6 +43,8 @@ const (
 )
 
 type BackfillResult struct {
+	AttemptID     string
+	Evidence      *store.HistoryAttempt `json:"evidence,omitempty"`
 	ChatJID       string
 	RequestsSent  int
 	ResponsesSeen int
@@ -56,6 +59,8 @@ type BackfillResult struct {
 }
 
 type onDemandResponse struct {
+	chatJID       string
+	observedAt    time.Time
 	conversations int
 	messages      int
 	endType       waHistorySync.Conversation_EndOfHistoryTransferType
@@ -73,7 +78,7 @@ func (a *App) BackfillHistoryConnected(ctx context.Context, opts BackfillOptions
 	runtime := a.historyRuntime
 	a.historyMu.Unlock()
 	if runtime == nil || runtime.ctx.Err() != nil {
-		return BackfillResult{}, fmt.Errorf("history backfill requires an active sync follow owner")
+		return BackfillResult{}, historyFailure(opts.AttemptID, store.HistoryPreparing, "backfill_not_dispatched", false, false, fmt.Errorf("history backfill requires an active sync follow owner"))
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -93,12 +98,17 @@ func PrepareBackfillOptions(opts BackfillOptions) (BackfillOptions, error) {
 	if err != nil {
 		return BackfillOptions{}, fmt.Errorf("parse chat JID: %w", err)
 	}
-	opts.ChatJID = chat.String()
+	opts.ChatJID = chat.ToNonAD().String()
+	if opts.AttemptID != "" {
+		if err := ValidateHistoryAttemptID(opts.AttemptID); err != nil {
+			return BackfillOptions{}, err
+		}
+	}
 	opts = normalizeBackfillOptions(opts)
 	return opts, validateBackfillOptions(opts)
 }
 
-func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime *historyRuntime) (BackfillResult, error) {
+func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime *historyRuntime) (result BackfillResult, runErr error) {
 	if a.opts.ReadOnly {
 		return BackfillResult{}, fmt.Errorf("read-only mode: history backfill would modify the store")
 	}
@@ -110,6 +120,31 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 	if err := ctx.Err(); err != nil {
 		return BackfillResult{}, err
 	}
+	a.historyMu.Lock()
+	if a.historyBackfillActive {
+		a.historyMu.Unlock()
+		return BackfillResult{}, fmt.Errorf("history backfill is already running")
+	}
+	a.historyBackfillActive = true
+	a.historyMu.Unlock()
+	defer func() { a.historyMu.Lock(); a.historyBackfillActive = false; a.historyMu.Unlock() }()
+	if opts.AttemptID == "" {
+		opts.AttemptID, err = NewHistoryAttemptID()
+		if err != nil {
+			return BackfillResult{}, err
+		}
+	}
+	now := nowUTC()
+	rec := store.HistoryAttempt{RequestedChatJID: opts.ChatJID, AttemptID: opts.AttemptID, StartedAt: now, CheckpointAt: now,
+		State: store.HistoryUnfinalized, Phase: store.HistoryPreparing, ExecutionMode: "standalone", Count: opts.Count, Requests: opts.Requests,
+		WaitMS: max(1, opts.WaitPerRequest.Milliseconds()), IdleMS: max(1, opts.IdleExit.Milliseconds())}
+	if runtime != nil {
+		rec.ExecutionMode = "sync_owner"
+	}
+	if err := a.saveHistoryAttempt(ctx, rec, true); err != nil {
+		return BackfillResult{}, historyFailure(opts.AttemptID, rec.Phase, "store_state", false, false, err)
+	}
+	defer a.finishHistoryAttempt(ctx, &rec, &result, &runErr)
 	if runtime == nil {
 		if err := a.EnsureAuthed(ctx); err != nil {
 			return BackfillResult{}, err
@@ -121,14 +156,38 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 	var mu sync.Mutex
 	var waitCh chan onDemandResponse
 	var windowActive bool
+	var windowChat, windowAlias string
 	var storeErr error
-	observeStoreError := func(jid types.JID, err error) {
-		if a.canonicalStoreJID(ctx, jid) != a.canonicalStoreJID(ctx, chat) {
-			return
+	var observedResponse onDemandResponse
+	var primaryObservedAt *time.Time
+	var primaryResponseChat string
+	checkpoint := func(ctx context.Context) error {
+		mu.Lock()
+		observed := observedResponse
+		if !observed.observedAt.IsZero() {
+			rec.ResponseObservedAt = new(observed.observedAt)
+			rec.ResponseChatJID = observed.chatJID
 		}
+		if primaryObservedAt != nil {
+			rec.PrimaryNoMoreObservedAt = new(*primaryObservedAt)
+			rec.PrimaryResponseChatJID = primaryResponseChat
+		}
+		mu.Unlock()
+		rec.CheckpointAt = nowUTC()
+		err := a.saveHistoryAttempt(ctx, rec, false)
+		if err != nil {
+			return historyFailure(rec.AttemptID, rec.Phase, "store_state", rec.DispatchPossible, true, err)
+		}
+		return nil
+	}
+	observeStoreError := func(jid types.JID, err error) {
 		mu.Lock()
 		defer mu.Unlock()
-		if windowActive && storeErr == nil {
+		identity := jid.ToNonAD().String()
+		if !windowActive || (identity != windowChat && identity != windowAlias) {
+			return
+		}
+		if storeErr == nil {
 			storeErr = fmt.Errorf("persist on-demand history for %s: %w", jid, err)
 		}
 	}
@@ -143,19 +202,37 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 			return
 		}
 		for _, conv := range hs.Data.GetConversations() {
-			if a.canonicalStoreJIDString(ctx, strings.TrimSpace(conv.GetID())) != a.canonicalStoreJID(ctx, chat).String() {
+			jid, err := types.ParseJID(strings.TrimSpace(conv.GetID()))
+			if err != nil {
 				continue
 			}
+			resp := onDemandResponse{
+				chatJID: strings.TrimSpace(conv.GetID()), observedAt: nowUTC(),
+				conversations: len(hs.Data.GetConversations()),
+				messages:      len(conv.GetMessages()),
+				endType:       conv.GetEndOfHistoryTransferType(),
+			}
 			mu.Lock()
+			if !windowActive {
+				mu.Unlock()
+				return
+			}
+			// Match the immutable window scope, not a resolver whose map or
+			// context may change while persistence/cancellation is in flight.
+			identity := jid.ToNonAD().String()
+			if identity != windowChat && identity != windowAlias {
+				mu.Unlock()
+				continue
+			}
+			observedResponse = resp
+			if resp.endType == waHistorySync.Conversation_COMPLETE_AND_NO_MORE_MESSAGE_REMAIN_ON_PRIMARY {
+				primaryObservedAt = new(resp.observedAt)
+				primaryResponseChat = resp.chatJID
+			}
 			ch := waitCh
 			mu.Unlock()
 			if ch == nil {
 				return
-			}
-			resp := onDemandResponse{
-				conversations: len(hs.Data.GetConversations()),
-				messages:      len(conv.GetMessages()),
-				endType:       conv.GetEndOfHistoryTransferType(),
 			}
 			select {
 			case ch <- resp:
@@ -182,7 +259,24 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 		}()
 
 		storeChat := a.canonicalStoreJID(ctx, chat).String()
+		if rec.FirstAnchorID == "" {
+			rec.FirstAnchorID = anchor.MsgID
+		}
+		rec.LastAnchorID = anchor.MsgID
+		rec.PreparedRequestChatJID = requestChat.String()
+		rec.Phase = store.HistoryDispatchPossible
+		// Commit uncertainty before invoking the transport. A failed checkpoint
+		// prevents this call, and cannot undo prior dispatch uncertainty.
+		previousPossible := rec.DispatchPossible
+		rec.DispatchPossible = true
+		if err := checkpoint(ctx); err != nil {
+			// This invocation did not occur. Prior calls remain uncertain; a
+			// failed checkpoint never makes earlier dispatch certain again.
+			rec.DispatchPossible = previousPossible
+			return onDemandResponse{}, historyFailure(rec.AttemptID, rec.Phase, "store_state", previousPossible, true, err)
+		}
 		requestsSent++
+		rec.RequestsSent = requestsSent
 		a.emitOrPrint("backfill_requesting", map[string]any{
 			"chat_jid":         storeChat,
 			"request_chat_jid": requestChat.String(),
@@ -205,6 +299,10 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 			return onDemandResponse{}, ctx.Err()
 		case resp := <-ch:
 			responsesSeen++
+			rec.ResponsesSeen = responsesSeen
+			if err := checkpoint(ctx); err != nil {
+				return resp, err
+			}
 			return resp, nil
 		case <-timer.C:
 			return onDemandResponse{}, fmt.Errorf("%w (anchor %s)", errResponseTimeout, anchor.MsgID)
@@ -253,7 +351,6 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 
 	var beforeCount int64
 	var beforeStored int64
-	var windowChat, windowAlias string
 	var stopReason BackfillStopReason
 	countIdentities := func(ctx context.Context) (string, string) {
 		storeChat := a.canonicalStoreJID(ctx, chat)
@@ -267,11 +364,17 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 		}
 		return nil
 	}
-	stop := func(reason BackfillStopReason, legacyReason, message string) {
+	stop := func(reason BackfillStopReason, legacyReason, message string) error {
 		stopReason = reason
+		rec.StopReason = string(reason)
+		rec.Phase = store.HistoryFinalizing
+		if err := checkpoint(ctx); err != nil {
+			return err
+		}
 		a.emitOrPrint("backfill_stopped", map[string]any{
 			"chat_jid": windowChat, "reason": legacyReason, "stop_reason": reason,
 		}, "%s\n", message)
+		return nil
 	}
 
 	runRequests := func(ctx context.Context) error {
@@ -281,7 +384,17 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 		var err error
 		beforeCount, err = a.db.CountConversationMessages(windowChat, windowAlias)
 		if err != nil {
-			return fmt.Errorf("count backfill conversation before requests: %w", err)
+			return historyFailure(rec.AttemptID, rec.Phase, "store_state", rec.DispatchPossible, true, fmt.Errorf("count backfill conversation before requests: %w", err))
+		}
+		rec.AccountJID = publicHistoryAccount(a.wa.LinkedJID())
+		rec.WindowChatJID, rec.WindowAliasJID = windowChat, windowAlias
+		if rec.WindowAliasJID == rec.WindowChatJID {
+			rec.WindowAliasJID = ""
+		}
+		rec.BaselineCount = new(beforeCount)
+		rec.Phase = store.HistoryObserving
+		if err := checkpoint(ctx); err != nil {
+			return err
 		}
 		if runtime != nil {
 			beforeStored = runtime.messagesStored.Load()
@@ -297,9 +410,9 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 			oldest, err := a.db.GetOldestMessageInfo(chatStr)
 			if err != nil {
 				if err == sql.ErrNoRows {
-					return fmt.Errorf("no messages for %s in local DB; run `wacli sync` first", chatStr)
+					return historyFailure(rec.AttemptID, rec.Phase, "no_local_anchor", rec.DispatchPossible, true, fmt.Errorf("no messages for %s in local DB; run `wacli sync` first", chatStr))
 				}
-				return err
+				return historyFailure(rec.AttemptID, rec.Phase, "store_state", rec.DispatchPossible, true, err)
 			}
 
 			resp, err := requestAnchor(ctx, oldest)
@@ -341,21 +454,17 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 			}
 			// Explicit primary evidence wins even for empty or duplicate replies.
 			if resp.endType == waHistorySync.Conversation_COMPLETE_AND_NO_MORE_MESSAGE_REMAIN_ON_PRIMARY {
-				stop(BackfillStopPrimaryNoMore, "start_of_history_reached", "Primary device reports no more messages available (stopping).")
-				return nil
+				return stop(BackfillStopPrimaryNoMore, "start_of_history_reached", "Primary device reports no more messages available (stopping).")
 			}
 			if resp.messages <= 0 {
-				stop(BackfillStopEmptyResponse, "no_messages_returned", "No messages returned (stopping).")
-				return nil
+				return stop(BackfillStopEmptyResponse, "no_messages_returned", "No messages returned (stopping).")
 			}
 			// A retry's newer anchor is not progress past the original oldest row.
 			if newOldest.MsgID == oldest.MsgID {
-				stop(BackfillStopNoProgress, "no_older_messages_added", "No older messages were added (stopping).")
-				return nil
+				return stop(BackfillStopNoProgress, "no_older_messages_added", "No older messages were added (stopping).")
 			}
 		}
-		stop(BackfillStopRequestedBatchLimit, "requested_batch_limit", "Requested batch limit reached (stopping).")
-		return nil
+		return stop(BackfillStopRequestedBatchLimit, "requested_batch_limit", "Requested batch limit reached (stopping).")
 	}
 	var syncRes SyncResult
 	if runtime == nil {
@@ -385,6 +494,14 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 	mu.Lock()
 	windowActive = false
 	finalStoreErr := storeErr
+	if !observedResponse.observedAt.IsZero() {
+		rec.ResponseObservedAt = new(observedResponse.observedAt)
+		rec.ResponseChatJID = observedResponse.chatJID
+	}
+	if primaryObservedAt != nil {
+		rec.PrimaryNoMoreObservedAt = new(*primaryObservedAt)
+		rec.PrimaryResponseChatJID = primaryResponseChat
+	}
 	mu.Unlock()
 	if err != nil {
 		return BackfillResult{}, err
