@@ -15,7 +15,7 @@ func TestAgentEnvelopeExclusivityAndOutputCaps(t *testing.T) {
 	ref := "/fixture/store"
 	account := AgentAccount{StoreRef: &ref, Name: "fixture"}
 	for _, detail := range []string{"compact", "full"} {
-		meta := AgentMeta{Source: "local", Detail: detail, Completeness: "unknown", Freshness: "unknown"}
+		meta := AgentMeta{Source: "local", Detail: detail, Completeness: "unknown", Freshness: "unknown", Page: &AgentPage{Returned: 1, HasMore: false, NextCursor: nil}}
 		var buf bytes.Buffer
 		if err := WriteAgentJSON(&buf, account, meta, publicData{"hello"}); err != nil {
 			t.Fatal(err)

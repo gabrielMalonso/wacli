@@ -34,7 +34,7 @@ All archive queries use the existing read-only opener, validate the archive sche
 Success is a single JSON line on **stdout**. A failure is a single JSON line on **stderr**, with no success payload on stdout. Public fields use snake_case. Success contains `data` and no `error`; failure contains `error` and no `data`.
 
 ```json
-{"schema_version":1,"success":true,"account":{"store_ref":"/path/to/archive"},"meta":{"source":"local","detail":"compact","completeness":"unknown","freshness":"unknown","limit":20,"excluded":["tombstones"],"recovery":"Use --detail full; retrieve one message with messages show --chat CHAT_JID --id ID --detail full."},"data":{"messages":[{"id":"ABC","chat_jid":"123@s.whatsapp.net","sender_jid":"456@lid","from_me":false,"timestamp":"2026-01-01T00:00:00Z","text":"Hello","text_truncated":false,"type":"text"}]}}
+{"schema_version":1,"success":true,"account":{"store_ref":"/path/to/archive"},"meta":{"source":"local","detail":"compact","completeness":"unknown","freshness":"unknown","limit":20,"excluded":["tombstones"],"page":{"returned":1,"has_more":false,"next_cursor":null},"recovery":"Use --detail full; retrieve one message with messages show --chat CHAT_JID --id ID --detail full."},"data":{"messages":[{"id":"ABC","chat_jid":"123@s.whatsapp.net","sender_jid":"456@lid","from_me":false,"timestamp":"2026-01-01T00:00:00Z","text":"Hello","text_truncated":false,"type":"text"}]}}
 ```
 
 `account.store_ref` is the absolute, resolved selected store path, once per envelope. `account.name` is included when a named/default account supplied the selection. A name alone never identifies a manual store. This transparent reference does not create a UUID or write local state. When parsing/config resolution cannot establish the selected store, `store_ref` is null; a syntactically selected manual `--store` can still be identified on preflight failures. The reference is a path, not a promise of canonical inode identity through symlinks.
@@ -43,13 +43,40 @@ Message IDs and stored chat/sender/quote JIDs are preserved. Chat views keep sto
 
 ## Bounds and omissions
 
-Agent lists default to **20** rows; explicit `--limit` must be **1–200** in both details. Context retains defaults of five messages before/after; values must be nonnegative and `before + after + 1` must be at most 200. Its metadata includes the requested `before`, `after`, and total `limit`. Resolve accepts at most 200 inputs and thus at most 200 total results; its metadata reports that cap. There are no cursors or inferred next pages. Reaching or falling below a limit does not prove complete history.
+Agent lists default to **20** rows; explicit `--limit` must be **1–200** in both details. Context retains defaults of five messages before/after; values must be nonnegative and `before + after + 1` must be at most 200. Its metadata includes the requested `before`, `after`, and total `limit`. Resolve accepts at most 200 inputs and thus at most 200 total results; its metadata reports that cap. Only `messages list` supports local keyset pagination (below). Other lists have no cursors or inferred next pages. Reaching or falling below a limit does not prove complete WhatsApp history.
 
 Compact message `text` is display text, capped at **320 Unicode code points**, preserving valid UTF-8. `text_truncated` explicitly records cutting; there is no appended ellipsis that changes the text. Other selected labels (names, aliases, filenames) have the same cap and report affected fields in `fields_truncated`. Identifiers are never truncated. `meta.recovery` documents full retrieval. Full exposes only selected public DTO fields: it does not serialize internal structs, keys, authenticated media URLs, session paths, raw protobufs or blobs. It does not expose local download paths or button URLs; `downloaded`/`downloaded_at` are the selected download observations. The selected `account.store_ref` is the intentional path exception.
 
 The total encoded envelope, including newline, is capped at **1 MiB compact / 8 MiB full**, checked before writing any success bytes. `payload_too_large` is a typed exit-1 error with stdout entirely empty and guidance to narrow the query; full also suggests `--detail compact`. Full removes per-text truncation, not row/envelope bounds. These are encoded **output** bounds, not total memory bounds: database rows/DTOs and the JSON envelope are materialized before the size check.
 
 List/search and context neighbors retain legacy exclusion of tombstones, explicitly reported as `meta.excluded=["tombstones"]`. Direct `show` and a context target can return a tombstone with `revoked`, `deleted_for_me`, `deleted_at`, `deletion_reason`, and `payload_purged_at` when present. `edited` remains visible in both details. Full may show retained tombstone content until an explicit purge has erased it. Compact includes essential media type/filename/MIME, quote identity, reaction target/emoji and forwarded state when present; optional full fields are intentionally selected by the documented detail level.
+
+## Local message pagination
+
+Every successful `--agent messages list` includes typed `meta.page` metadata:
+
+```json
+{"returned":20,"has_more":true,"next_cursor":"OPAQUE_TOKEN"}
+```
+
+`returned` counts this page's messages. `has_more` means an extra matching row was observed in **this local archive query**, using `limit + 1`. At the local end, `has_more=false` and `next_cursor=null`, including empty and exact-limit results. This does not prove WhatsApp history is complete or fresh: `meta.completeness` and `meta.freshness` remain `unknown`. No history download is started.
+
+Pass `next_cursor` unchanged to `--cursor TOKEN`, retaining the store selection, filters and order:
+
+```bash
+wacli --store /path/to/archive --agent messages list --chat 123@s.whatsapp.net --limit 20
+wacli --store /path/to/archive --agent messages list --chat 123@s.whatsapp.net --cursor "$cursor" --limit 50 --detail full
+```
+
+`--cursor` is accepted only with `--agent messages list`; other contexts fail before store/network effects. Flags can precede or follow the command. Tokens are opaque, versioned, at most **512 bytes**, strictly decoded, and contain no credential or authorization. No server, secret, persistent token state or store UUID is needed. Tokens are not tamper-proof and must not be interpreted as access controls. Malformed, oversized, unsupported-version and mismatched tokens return `invalid_cursor` with exit 2; errors never reproduce the token or SQL.
+
+The cursor binds the absolute selected `store_ref`, normalized requested chat, sorted effective chat JIDs (including locally verified PN/LID aliases), sender, exclusive before/after second bounds, from-me/them, forwarded/starred filters, order and cursor version. Absent time bounds differ from valid zero-second bounds. Agent chat/sender inputs normalize phone numbers to JIDs, trim surrounding whitespace and remove PN device components; sender remains a single exact stored-JID filter, without expanding sender aliases. Equivalent date spellings and JID spellings are accepted. Changing `--limit` within 1–200 or switching compact/full is safe and does not change the cursor scope. A different PN/LID alias set invalidates the cursor and requires restarting; changing the requested chat identity also requires restarting, even if its effective aliases overlap. The store reference remains a path, not inode/database identity: do not reuse cursors after replacing/restoring the archive at that path.
+
+Pagination orders by the existing local `(ts, rowid)` key, descending by default or ascending with `--asc`, and resumes **strictly** beyond the last returned tuple. It uses no OFFSET and does not require the anchor row to remain present. Static archives return same-second messages without omissions or repeats, including split PN/LID chats. Existing timestamp indexes are reused; multiple chat JIDs each provide bounded candidates before the final sort.
+
+Each page is a **live read**, not a snapshot spanning calls. Tombstones remain excluded. Deleting or tombstoning the anchor still permits continuation. Inserts/backfill on the unvisited side of the boundary can appear in subsequent pages; inserts on the already visited side are skipped until a restart. A newly inserted same-second row sorts by its new local rowid: it can appear in ascending continuation and is behind a descending boundary. Once a page reports the local end there is no continuation cursor; restart to observe later changes.
+
+The current upsert keeps an existing rowid, and an ordinary content edit preserves its message timestamp, as covered by fixtures. Other ingestion/update paths may change timestamps or filter membership: a row moving across the boundary can be repeated or omitted, and edited content may differ across pages. Normal inserts use AUTOINCREMENT, so ordinary deletion does not reuse rowids; archive replacement/restore, explicit rowid insertion or sequence manipulation can invalidate that assumption. A reused rowid is only ordered by its current tuple and has no remembered identity in the cursor. There is no universal positional stability, exactly-once delivery or snapshot guarantee. Restart for a fresh traversal after such changes; no list of all IDs or hidden snapshot is retained.
 
 ## Evidence and errors
 
@@ -59,6 +86,7 @@ List/search and context neighbors retain legacy exclusion of tombstones, explici
 | --- | --- | --- |
 | 0 | — | Successful query |
 | 2 | `invalid_arguments` | Invalid arguments, unknown commands/flags, invalid detail/limit/filter |
+| 2 | `invalid_cursor` | Malformed/unsupported cursor or different archive, filters, identity scope or order |
 | 2 | `unsupported_command` | Recognized command outside the initial agent surface |
 | 3 | `not_found` | Requested local item is absent |
 | 4 | `store_unavailable` | Selected configuration/store/session state is absent, unreadable or incompatible |

@@ -10,6 +10,7 @@ import (
 
 	"github.com/openclaw/wacli/internal/config"
 	"github.com/openclaw/wacli/internal/out"
+	"github.com/openclaw/wacli/internal/store"
 	"github.com/openclaw/wacli/internal/wa"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -21,8 +22,8 @@ const agentMaxResults = 200
 // flag definitions, consume their values (including literal "--agent"), and
 // honor --. This does not parse commands or execute any hooks.
 func agentFlagIntent(root *cobra.Command, args []string) (intent struct {
-	agent, detailSet, help bool
-	store, account         string
+	agent, detailSet, cursorSet, help bool
+	store, account                    string
 }) {
 	known := make(map[string]*pflag.Flag)
 	short := make(map[byte]*pflag.Flag)
@@ -86,6 +87,8 @@ func agentFlagIntent(root *cobra.Command, args []string) (intent struct {
 		case "agent":
 			enabled, err := strconv.ParseBool(value)
 			intent.agent = enabled || err != nil
+		case "cursor":
+			intent.cursorSet = true
 		case "detail":
 			intent.detailSet = true
 		case "store":
@@ -253,6 +256,11 @@ func validateAgentCommand(cmd *cobra.Command, args []string, flags *rootFlags) e
 		}
 	}
 	if path == "messages list" {
+		if cmd.Flags().Changed("cursor") {
+			if err := store.ValidateMessagesCursor(flags.cursor); err != nil {
+				return classifyAgentError(err)
+			}
+		}
 		me, _ := cmd.Flags().GetBool("from-me")
 		them, _ := cmd.Flags().GetBool("from-them")
 		if me && them {
@@ -315,6 +323,10 @@ func classifyAgentError(err error) *out.AgentError {
 	var typed *out.AgentError
 	if errors.As(err, &typed) {
 		return typed
+	}
+	var cursor *store.MessagesCursorError
+	if errors.As(err, &cursor) {
+		return &out.AgentError{Code: "invalid_cursor", Message: cursor.Error(), Recovery: "Restart messages list without --cursor using the selected archive and filters.", ExitCode: 2, Cause: err}
 	}
 	var identity *localIdentityError
 	if errors.As(err, &identity) {
