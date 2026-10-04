@@ -105,7 +105,7 @@ func TestBackfillHistoryRetryStops(t *testing.T) {
 			}
 			opts := backfillRetryOptions(chat)
 			opts.Requests = 3
-			_, err := a.BackfillHistory(ctx, opts)
+			res, err := a.BackfillHistory(ctx, opts)
 			switch {
 			case tc.cancel:
 				if !errors.Is(err, context.Canceled) {
@@ -119,6 +119,12 @@ func TestBackfillHistoryRetryStops(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), "timed out waiting for on-demand history sync response") {
 					t.Fatalf("error = %v, want timeout", err)
 				}
+			}
+			if err != nil && res != (BackfillResult{}) {
+				t.Fatalf("failed backfill returned success evidence: %+v", res)
+			}
+			if tc.noProgress && res.StopReason != BackfillStopNoProgress {
+				t.Fatalf("stop reason = %q, want no_progress", res.StopReason)
 			}
 			if calls != tc.wantCalls {
 				t.Fatalf("requests = %d, want %d", calls, tc.wantCalls)
@@ -147,7 +153,7 @@ func TestBackfillHistoryContinuesFromRecoveredOldest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(anchors, []string{"stalled", "fallback", "older"}) || res.RequestsSent != 3 || res.ResponsesSeen != 2 || res.MessagesAdded != 2 {
+	if !slices.Equal(anchors, []string{"stalled", "fallback", "older"}) || res.RequestsSent != 3 || res.ResponsesSeen != 2 || res.MessagesAdded != 2 || res.StopReason != BackfillStopRequestedBatchLimit {
 		t.Fatalf("anchors = %v, result = %+v", anchors, res)
 	}
 }

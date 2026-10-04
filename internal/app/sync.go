@@ -79,6 +79,7 @@ type SyncOptions struct {
 	WebhookAllowPrivate bool
 	WebhookEvents       SyncWebhookEventSet // nil = messages only
 	afterHistorySync    func(*events.HistorySync)
+	historyStoreError   func(types.JID, error) // optional observer for backfill persistence failures
 }
 
 type SyncResult struct {

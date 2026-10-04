@@ -166,18 +166,7 @@ func newHistoryBackfillCmd(flags *rootFlags) *cobra.Command {
 				return err
 			}
 
-			if flags.asJSON {
-				return out.WriteJSON(os.Stdout, map[string]any{
-					"chat":            res.ChatJID,
-					"requests_sent":   res.RequestsSent,
-					"responses_seen":  res.ResponsesSeen,
-					"messages_added":  res.MessagesAdded,
-					"messages_synced": res.MessagesSynced,
-				})
-			}
-
-			fmt.Fprintf(os.Stdout, "Backfill complete for %s. Added %d messages (%d requests).\n", res.ChatJID, res.MessagesAdded, res.RequestsSent)
-			return nil
+			return writeBackfillResult(os.Stdout, res, flags.asJSON)
 		},
 	}
 
@@ -187,6 +176,21 @@ func newHistoryBackfillCmd(flags *rootFlags) *cobra.Command {
 	cmd.Flags().DurationVar(&wait, "wait", 60*time.Second, "time to wait for an on-demand response per request")
 	cmd.Flags().DurationVar(&idleExit, "idle-exit", 5*time.Second, "exit after being idle (after backfill requests)")
 	return cmd
+}
+
+func writeBackfillResult(dst io.Writer, res app.BackfillResult, asJSON bool) error {
+	if asJSON {
+		return out.WriteJSON(dst, map[string]any{
+			"chat":            res.ChatJID,
+			"requests_sent":   res.RequestsSent,
+			"responses_seen":  res.ResponsesSeen,
+			"messages_added":  res.MessagesAdded,
+			"messages_synced": res.MessagesSynced,
+			"stop_reason":     res.StopReason,
+		})
+	}
+	_, err := fmt.Fprintf(dst, "Backfill stopped for %s: %s. Local conversation grew by %d messages (%d requests).\n", res.ChatJID, res.StopReason, res.MessagesAdded, res.RequestsSent)
+	return err
 }
 
 func historyFillCandidates(coverage []store.HistoryCoverage) []store.HistoryCoverage {
