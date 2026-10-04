@@ -15,7 +15,7 @@ wacli --store /path/to/archive --agent doctor
 
 | Command | `data` | Full additions |
 | --- | --- | --- |
-| `messages list/search` | `messages` array; search also reports `search_mode` (`fts5` or `like`) | Each message's `full` content, caption, names, forwarding/star/download metadata, selected buttons |
+| `messages list/search` | `messages` array; search also reports `search_mode` (`fts5` or `like`) and effective `order` (`relevance`, `time_desc`, `time_asc`) | Each message's `full` content, caption, names, forwarding/star/download metadata, selected buttons |
 | `messages show` | One message DTO | Same message additions |
 | `messages context` | `messages` array and `selected_id` | Same message additions |
 | `chats list` / `chats show` | `chats` array / one chat DTO | Archived, pinned, stored mute deadline |
@@ -43,7 +43,7 @@ Message IDs and stored chat/sender/quote JIDs are preserved. Chat views keep sto
 
 ## Bounds and omissions
 
-Agent lists default to **20** rows; explicit `--limit` must be **1–200** in both details. Context retains defaults of five messages before/after; values must be nonnegative and `before + after + 1` must be at most 200. Its metadata includes the requested `before`, `after`, and total `limit`. Resolve accepts at most 200 inputs and thus at most 200 total results; its metadata reports that cap. Only `messages list` supports local keyset pagination (below). Other lists have no cursors or inferred next pages. Reaching or falling below a limit does not prove complete WhatsApp history.
+Agent lists default to **20** rows; explicit `--limit` must be **1–200** in both details. Context retains defaults of five messages before/after; values must be nonnegative and `before + after + 1` must be at most 200. Its metadata includes the requested `before`, `after`, and total `limit`. Resolve accepts at most 200 inputs and thus at most 200 total results; its metadata reports that cap. `messages list` and temporal `messages search --sort time` support local keyset pagination (below). Other lists have no cursors or inferred next pages. Reaching or falling below a limit does not prove complete WhatsApp history.
 
 Compact message `text` is display text, capped at **320 Unicode code points**, preserving valid UTF-8. `text_truncated` explicitly records cutting; there is no appended ellipsis that changes the text. Other selected labels (names, aliases, filenames) have the same cap and report affected fields in `fields_truncated`. Identifiers are never truncated. `meta.recovery` documents full retrieval. Full exposes only selected public DTO fields: it does not serialize internal structs, keys, authenticated media URLs, session paths, raw protobufs or blobs. It does not expose local download paths or button URLs; `downloaded`/`downloaded_at` are the selected download observations. The selected `account.store_ref` is the intentional path exception.
 
@@ -68,15 +68,33 @@ wacli --store /path/to/archive --agent messages list --chat 123@s.whatsapp.net -
 wacli --store /path/to/archive --agent messages list --chat 123@s.whatsapp.net --cursor "$cursor" --limit 50 --detail full
 ```
 
-`--cursor` is accepted only with `--agent messages list`; other contexts fail before store/network effects. Flags can precede or follow the command. Tokens are opaque, versioned, at most **512 bytes**, strictly decoded, and contain no credential or authorization. No server, secret, persistent token state or store UUID is needed. Tokens are not tamper-proof and must not be interpreted as access controls. Malformed, oversized, unsupported-version and mismatched tokens return `invalid_cursor` with exit 2; errors never reproduce the token or SQL.
+`--cursor` is accepted only with `--agent messages list` or `--agent messages search QUERY --sort time`; other contexts fail before store/network effects. Flags can precede or follow the command. Tokens are opaque, versioned, at most **512 bytes**, strictly decoded, and contain no credential or authorization. No server, secret, persistent token state or store UUID is needed. Tokens are not tamper-proof and must not be interpreted as access controls. Malformed, oversized, unsupported-version and mismatched tokens return `invalid_cursor` with exit 2; errors never reproduce the token or SQL.
 
 The cursor binds the absolute selected `store_ref`, normalized requested chat, sorted effective chat JIDs (including locally verified PN/LID aliases), sender, exclusive before/after second bounds, from-me/them, forwarded/starred filters, order and cursor version. Absent time bounds differ from valid zero-second bounds. Agent chat/sender inputs normalize phone numbers to JIDs, trim surrounding whitespace and remove PN device components; sender remains a single exact stored-JID filter, without expanding sender aliases. Equivalent date spellings and JID spellings are accepted. Changing `--limit` within 1–200 or switching compact/full is safe and does not change the cursor scope. A different PN/LID alias set invalidates the cursor and requires restarting; changing the requested chat identity also requires restarting, even if its effective aliases overlap. The store reference remains a path, not inode/database identity: do not reuse cursors after replacing/restoring the archive at that path.
 
-Pagination orders by the existing local `(ts, rowid)` key, descending by default or ascending with `--asc`, and resumes **strictly** beyond the last returned tuple. It uses no OFFSET and does not require the anchor row to remain present. Static archives return same-second messages without omissions or repeats, including split PN/LID chats. Existing timestamp indexes are reused; multiple chat JIDs each provide bounded candidates before the final sort.
+Pagination orders by the existing local `(ts, rowid)` key, descending by default or ascending with `--asc`, and resumes **strictly** beyond the last returned tuple. It uses no OFFSET and does not require the anchor row to remain present. Static archives return same-second messages without omissions or repeats, including split PN/LID chats. For list, existing timestamp indexes are reused; multiple chat JIDs each provide bounded candidates before the final sort.
 
 Each page is a **live read**, not a snapshot spanning calls. Tombstones remain excluded. Deleting or tombstoning the anchor still permits continuation. Inserts/backfill on the unvisited side of the boundary can appear in subsequent pages; inserts on the already visited side are skipped until a restart. A newly inserted same-second row sorts by its new local rowid: it can appear in ascending continuation and is behind a descending boundary. Once a page reports the local end there is no continuation cursor; restart to observe later changes.
 
 The current upsert keeps an existing rowid, and an ordinary content edit preserves its message timestamp, as covered by fixtures. Other ingestion/update paths may change timestamps or filter membership: a row moving across the boundary can be repeated or omitted, and edited content may differ across pages. Normal inserts use AUTOINCREMENT, so ordinary deletion does not reuse rowids; archive replacement/restore, explicit rowid insertion or sequence manipulation can invalidate that assumption. A reused rowid is only ordered by its current tuple and has no remembered identity in the cursor. There is no universal positional stability, exactly-once delivery or snapshot guarantee. Restart for a fresh traversal after such changes; no list of all IDs or hidden snapshot is retained.
+
+## Temporal search pagination
+
+```bash
+wacli --store /path/to/archive --agent messages search "invoice" --sort time --limit 20
+wacli --store /path/to/archive --agent messages search "invoice" --sort time --cursor "$cursor" --detail full
+wacli --store /path/to/archive --agent messages search "invoice" --sort time --asc
+```
+
+Search defaults to `--sort relevance`: FTS5 keeps its existing `bm25` ranking with descending rowid ties; fallback LIKE keeps its existing newest-first order. Neither default search has page metadata or accepts a cursor. `data.search_mode` states `fts5` or `like`; `data.order` states the effective order, respectively `relevance` or `time_desc`. Relevance is never silently reordered to permit continuation: a cursor or `--asc` (including `--asc=false`) requires `--sort time`, otherwise exit 2 `invalid_arguments` points to that flag. Search `--sort` and `--asc` are agent-only; specifying either without `--agent` fails before opening an archive. Legacy search output, matching and ordering remain unchanged.
+
+`--sort time` enables the same `meta.page`, limit+1, tuple boundary, error handling and envelope caps as list. `data.order` is `time_desc` by default or `time_asc` with `--asc`. The cursor is bound to the **search operation**, store, engine, effective query, requested chat and effective PN/LID aliases, sender (`--from`), exclusive time bounds, media/type, forwarded/starred filters and direction. List and search cursors cannot be exchanged. Page size and detail may change. Syntax is checked before opening the archive; scope is checked before running the matching query. The list v1 codec and scope remain compatible.
+
+Query normalization follows the matching engine: FTS quotes each whitespace-delimited token, preserving case, token order and punctuation; equivalent whitespace spellings share a scope. LIKE preserves the exact query string, including whitespace, and escapes literal percent, underscore and backslash. No case folding or token rearrangement is imposed on the cursor. Type filters normalize case/whitespace. Temporal agent search normalizes chat and `--from` JIDs like list's sender filter, without expanding sender aliases. FTS/LIKE matching fields, sanitization and FTS snippets are shared with existing search.
+
+SQLite returns at most limit+1 matching rows to Go; no complete match set or offset is materialized in Go. This does not bound SQLite's work: LIKE can scan candidates and FTS temporal ordering can inspect/sort matching rows on each page, depending on query/filter selectivity. No new index or persistent pagination state is introduced.
+
+These are live local search pages with the same limits described above, without snapshot or exactly-once guarantees. Edits can change matching without changing timestamps; ingestion can move timestamps across the boundary. Chat/sender names also participate in matching, and PN/LID mapping changes invalidate the scope. Messages can be omitted or repeated across changing reads. A local end does not imply complete remote history; restart without a cursor after relevant changes.
 
 ## Evidence and errors
 

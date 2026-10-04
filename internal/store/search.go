@@ -20,25 +20,29 @@ type SearchMessagesParams struct {
 	Starred   bool
 }
 
-func (d *DB) SearchMessages(p SearchMessagesParams) ([]Message, error) {
+func validateSearchMessages(p SearchMessagesParams) error {
 	if strings.TrimSpace(p.Query) == "" {
-		return nil, fmt.Errorf("query is required")
+		return fmt.Errorf("query is required")
 	}
 	msgType := normalizedMessageType(p.Type)
 	if msgType != "" && !validSearchMessageType(msgType) {
-		return nil, fmt.Errorf("unsupported message type %q", p.Type)
+		return fmt.Errorf("unsupported message type %q", p.Type)
 	}
 	if p.HasMedia && msgType == "text" {
-		return nil, fmt.Errorf("cannot combine has-media with type=text")
+		return fmt.Errorf("cannot combine has-media with type=text")
+	}
+	return nil
+}
+
+func (d *DB) SearchMessages(p SearchMessagesParams) ([]Message, error) {
+	if err := validateSearchMessages(p); err != nil {
+		return nil, err
 	}
 	if p.Limit <= 0 {
 		p.Limit = 50
 	}
-
-	if d.ftsEnabled {
-		return d.searchFTS(p)
-	}
-	return d.searchLIKE(p)
+	query, args := searchMessagesQuery(p, d.ftsEnabled, false, false, nil)
+	return d.scanMessages(query, args...)
 }
 
 // escapeLIKE escapes SQL LIKE wildcard characters (%, _) and the escape
@@ -54,7 +58,7 @@ func likeContains(s string) string {
 	return "%" + escapeLIKE(s) + "%"
 }
 
-func (d *DB) searchLIKE(p SearchMessagesParams) ([]Message, error) {
+func searchLIKEQuery(p SearchMessagesParams) (string, []any) {
 	query := `
 		SELECT ` + messageSelectColumns("") + `
 		FROM messages m
@@ -65,9 +69,7 @@ func (d *DB) searchLIKE(p SearchMessagesParams) ([]Message, error) {
 	needle := likeContains(p.Query)
 	args := []any{needle, needle, needle, needle, needle, needle, needle}
 	query, args = applyMessageFilters(query, args, p)
-	query += " ORDER BY m.ts DESC, m.rowid DESC LIMIT ?"
-	args = append(args, p.Limit)
-	return d.scanMessages(query, args...)
+	return query, args
 }
 
 // sanitizeFTSQuery converts a raw user query into a safe FTS5 expression by
@@ -88,7 +90,7 @@ func sanitizeFTSQuery(q string) string {
 	return strings.Join(quoted, " ")
 }
 
-func (d *DB) searchFTS(p SearchMessagesParams) ([]Message, error) {
+func searchFTSQuery(p SearchMessagesParams) (string, []any) {
 	query := `
 		SELECT ` + messageSelectColumns("snippet(messages_fts, 0, '[', ']', '…', 12)") + `
 		FROM messages_fts
@@ -101,9 +103,36 @@ func (d *DB) searchFTS(p SearchMessagesParams) ([]Message, error) {
 	// as implicit AND (both words present, any order).
 	args := []any{sanitizeFTSQuery(p.Query)}
 	query, args = applyMessageFilters(query, args, p)
-	query += " ORDER BY bm25(messages_fts), m.rowid DESC LIMIT ?"
-	args = append(args, p.Limit)
-	return d.scanMessages(query, args...)
+	return query, args
+}
+
+// Matching, filters and snippets are shared with legacy search; only temporal
+// pagination changes the order and adds a keyset boundary. SQLite may still
+// scan LIKE candidates or sort FTS matches; Go receives only limit+1 rows.
+func searchMessagesQuery(p SearchMessagesParams, fts, temporal, asc bool, anchor *messageCursor) (string, []any) {
+	var query string
+	var args []any
+	if fts {
+		query, args = searchFTSQuery(p)
+	} else {
+		query, args = searchLIKEQuery(p)
+	}
+	if anchor != nil {
+		op := "<"
+		if asc {
+			op = ">"
+		}
+		query += " AND (m.ts, m.rowid) " + op + " (?, ?)"
+		args = append(args, anchor.TS, anchor.RowID)
+	}
+	order := "m.ts DESC, m.rowid DESC"
+	if fts && !temporal {
+		order = "bm25(messages_fts), m.rowid DESC"
+	} else if asc {
+		order = "m.ts ASC, m.rowid ASC"
+	}
+	query += " ORDER BY " + order + " LIMIT ?"
+	return query, append(args, p.Limit)
 }
 
 func applyMessageFilters(query string, args []any, p SearchMessagesParams) (string, []any) {

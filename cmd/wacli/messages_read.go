@@ -136,12 +136,17 @@ func newMessagesSearchCmd(flags *rootFlags) *cobra.Command {
 	var msgType string
 	var forwarded bool
 	var starred bool
+	var sortBy string
+	var asc bool
 
 	cmd := &cobra.Command{
 		Use:   "search <query>",
 		Short: "Search messages (FTS5 if available; otherwise LIKE)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !flags.agent && (cmd.Flags().Changed("sort") || cmd.Flags().Changed("asc")) {
+				return fmt.Errorf("search --sort and --asc require --agent")
+			}
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
@@ -161,7 +166,7 @@ func newMessagesSearchCmd(flags *rootFlags) *cobra.Command {
 				return err
 			}
 
-			msgs, err := a.DB().SearchMessages(store.SearchMessagesParams{
+			params := store.SearchMessagesParams{
 				Query:     args[0],
 				ChatJIDs:  chatJIDs,
 				From:      from,
@@ -172,21 +177,38 @@ func newMessagesSearchCmd(flags *rootFlags) *cobra.Command {
 				Type:      msgType,
 				Forwarded: forwarded,
 				Starred:   starred,
-			})
+			}
+			if flags.agent && sortBy == "time" {
+				if strings.TrimSpace(from) != "" {
+					jid, err := wa.ParseUserOrJID(strings.TrimSpace(from))
+					if err != nil {
+						return err
+					}
+					params.From = canonicalMessageFilterJID(jid).String()
+				}
+				chatIdentity := ""
+				if strings.TrimSpace(chat) != "" {
+					jid, err := wa.ParseUserOrJID(strings.TrimSpace(chat))
+					if err != nil {
+						return err
+					}
+					chatIdentity = canonicalMessageFilterJID(jid).String()
+				}
+				page, err := a.DB().SearchMessagesPage(store.SearchMessagesPageParams{SearchMessagesParams: params, StoreRef: *flags.agentAccount.StoreRef, ChatIdentity: chatIdentity, Asc: asc, Cursor: flags.cursor})
+				if err != nil {
+					return err
+				}
+				page.Messages = resolveMessageSenderNames(ctx, a, page.Messages)
+				return writeAgentSearch(flags, page.Messages, limit, a.DB().HasFTS(), true, asc, &page)
+			}
+			msgs, err := a.DB().SearchMessages(params)
 			if err != nil {
 				return err
 			}
 			msgs = resolveMessageSenderNames(ctx, a, msgs)
 
 			if flags.agent {
-				mode := ""
-				if cmd.Name() == "search" {
-					mode = "like"
-					if a.DB().HasFTS() {
-						mode = "fts5"
-					}
-				}
-				return writeAgentMessages(flags, msgs, limit, mode, "", nil, nil)
+				return writeAgentSearch(flags, msgs, limit, a.DB().HasFTS(), false, false, nil)
 			}
 			if flags.asJSON {
 				return out.WriteJSON(os.Stdout, map[string]any{
@@ -205,6 +227,8 @@ func newMessagesSearchCmd(flags *rootFlags) *cobra.Command {
 		},
 	}
 
+	cmd.Flags().StringVar(&sortBy, "sort", "relevance", "agent search order (relevance|time); time enables pagination")
+	cmd.Flags().BoolVar(&asc, "asc", false, "agent temporal search: oldest first")
 	cmd.Flags().StringVar(&chat, "chat", "", "chat JID")
 	cmd.Flags().StringVar(&from, "from", "", "sender JID")
 	cmd.Flags().IntVar(&limit, "limit", 50, "limit results")
