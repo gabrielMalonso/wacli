@@ -15,6 +15,7 @@ Read when: you need the user-facing command map, global flags, store model, or l
 - Libsignal diagnostics retain known operation labels or safe error categories, redact dynamic details, and report unknown messages generically. Debug and info logging are disabled to avoid exposing cryptographic material; libsignal v0.2.2 has no production info calls.
 - A successful JSON command exits successfully if its pipe reader closes early. Other output errors and command failures still return a nonzero exit status.
 - Use `--full` to avoid table truncation.
+- Local archive queries are read-only by default, need an existing current-schema store, and work alongside sync without a writer lock; see [store compatibility](store.md#local-reads-by-default).
 - Write commands acquire the store lock; use `--lock-wait DURATION` to wait.
 - Use `--read-only` or `WACLI_READONLY=1` to reject commands that write WhatsApp or local state.
 - Use `WACLI_MEDIA_ROOTS` to confine which local files send commands may upload (see [send](send.md#files)).

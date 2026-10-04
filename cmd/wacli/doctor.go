@@ -158,10 +158,12 @@ func newDoctorCmd(flags *rootFlags) *cobra.Command {
 
 			var lockHeld bool
 			var lockInfo string
-			if flags.isReadOnly() {
-				if connect {
-					return flags.requireWritable()
+			if connect {
+				if err := flags.requireWritable(); err != nil {
+					return err
 				}
+			}
+			if !connect {
 				if held, info, err := lock.Probe(storeDir); err == nil {
 					lockHeld = held
 					lockInfo = info
@@ -182,7 +184,7 @@ func newDoctorCmd(flags *rootFlags) *cobra.Command {
 			var db *store.DB
 			var a *appPkg.App
 			var closeFn func()
-			if flags.isReadOnly() {
+			if !connect {
 				dbPath := filepath.Join(storeDir, "wacli.db")
 				roDB, err := store.OpenReadOnly(dbPath)
 				if err != nil {
@@ -208,7 +210,7 @@ func newDoctorCmd(flags *rootFlags) *cobra.Command {
 			var authed bool
 			var connected bool
 			var linkedJID string
-			if flags.isReadOnly() {
+			if !connect {
 				if roAuthed, roLinkedJID, err := readOnlyAuthStatus(storeDir); err == nil {
 					authed = roAuthed
 					linkedJID = roLinkedJID

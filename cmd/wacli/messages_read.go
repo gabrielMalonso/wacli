@@ -34,7 +34,7 @@ func newMessagesListCmd(flags *rootFlags) *cobra.Command {
 				return fmt.Errorf("--from-me and --from-them are mutually exclusive")
 			}
 
-			a, lk, err := newApp(ctx, flags, false, false)
+			a, lk, err := newReadApp(ctx, flags)
 			if err != nil {
 				return err
 			}
@@ -119,7 +119,7 @@ func newMessagesSearchCmd(flags *rootFlags) *cobra.Command {
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
-			a, lk, err := newApp(ctx, flags, false, false)
+			a, lk, err := newReadApp(ctx, flags)
 			if err != nil {
 				return err
 			}
@@ -195,7 +195,7 @@ func newMessagesStarredCmd(flags *rootFlags) *cobra.Command {
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
-			a, lk, err := newApp(ctx, flags, false, false)
+			a, lk, err := newReadApp(ctx, flags)
 			if err != nil {
 				return err
 			}
@@ -254,7 +254,7 @@ func newMessagesShowCmd(flags *rootFlags) *cobra.Command {
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
-			a, lk, err := newApp(ctx, flags, false, false)
+			a, lk, err := newReadApp(ctx, flags)
 			if err != nil {
 				return err
 			}
@@ -300,7 +300,7 @@ func newMessagesContextCmd(flags *rootFlags) *cobra.Command {
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
-			a, lk, err := newApp(ctx, flags, false, false)
+			a, lk, err := newReadApp(ctx, flags)
 			if err != nil {
 				return err
 			}
@@ -344,7 +344,7 @@ func newMessagesExportCmd(flags *rootFlags) *cobra.Command {
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
-			a, lk, err := newApp(ctx, flags, false, false)
+			a, lk, err := newReadApp(ctx, flags)
 			if err != nil {
 				return err
 			}

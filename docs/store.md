@@ -4,6 +4,52 @@ Read when: inspecting local SQLite size/counts or pruning old local chat/group r
 
 `wacli store` manages the selected account's local `wacli.db` mirror. Cleanup commands only delete local wacli cache/history rows; they do not delete WhatsApp chats, leave groups, or remove messages from WhatsApp servers.
 
+## Local reads by default
+
+Local queries open existing databases read-only, without acquiring the writer
+`LOCK`, creating the store/session, migrating schemas, or intentionally changing
+stored data or file permissions. They work alongside a writer such as
+`sync --follow`. JSON envelopes and payload fields remain unchanged.
+
+| Local query | Source |
+| --- | --- |
+| `messages list/search/starred/show/context/export` | Local message archive |
+| `chats list/show` (including channel chats) | Local chat archive |
+| `contacts search/show/resolve` | Local contacts, aliases, and persisted PN/LID mapping |
+| `groups list`, `groups participants list` | Local group snapshots |
+| `polls list`, `poll show`, `calls list` | Local poll/call archive |
+| `history coverage`, `history fill --dry-run` | Local coverage/plan |
+| `store stats` | Local counts |
+| `contacts import-system --dry-run` | Local contacts plus the requested input/source |
+| `auth status`, `doctor` without `--connect` | Read-only session/status and diagnostics |
+
+Persisted phone/JID/LID mappings resolve identities for display and lookup without
+opening a writable WhatsApp client or rewriting historical rows. Missing mappings
+leave the original identity unresolved. No refresh happens during a local query.
+
+A missing `wacli.db` produces an actionable error without creating its directory
+or database. `auth status` instead reports unauthenticated when its session is
+absent; `doctor` reports missing/incompatible stores in `store_error` and retains
+its diagnostic JSON shape. Read-only archive access requires the current schema
+version: older or unversioned stores need an **explicit writable upgrade** (for
+example, `auth` or `sync`); a newer schema needs a compatible newer wacli binary.
+Local queries never perform that upgrade automatically. These writable commands
+may connect to WhatsApp; there is currently no dedicated offline upgrade command.
+
+SQLite readers still need to see committed WAL data. When SQLite sidecars already
+exist, readers use normal SQLite locking and can incidentally create or update
+`-shm`/WAL bookkeeping as SQLite requires. A clean database without sidecars is
+opened with `immutable=1` to avoid creating sidecars. This is not a promise of
+absolute filesystem immutability while a writer is active.
+
+`--read-only` and `WACLI_READONLY=1` remain barriers to explicit mutations.
+Remote refresh/inspection commands retain their documented writable behavior,
+including `contacts refresh/check`, `groups refresh/info`, `channels list/info`,
+live profile queries, and `doctor --connect`. Media download retains its requested
+file-writing behavior; `messages export --output` also writes the requested file
+while reading the archive read-only. Cleanup/prune/purge previews remain part of
+their existing writable command paths in this release.
+
 ## Commands
 
 ```bash

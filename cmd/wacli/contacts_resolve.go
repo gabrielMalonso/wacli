@@ -40,9 +40,7 @@ func newContactsResolveCmd(flags *rootFlags) *cobra.Command {
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
-			readFlags := *flags
-			readFlags.readOnly = true
-			a, lk, err := newApp(ctx, &readFlags, false, false)
+			a, lk, err := newReadApp(ctx, flags)
 			if err != nil {
 				return err
 			}

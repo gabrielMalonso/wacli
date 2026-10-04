@@ -39,7 +39,7 @@ func newHistoryCoverageCmd(flags *rootFlags) *cobra.Command {
 			ctx, cancel := withTimeout(cmd.Context(), flags)
 			defer cancel()
 
-			a, lk, err := newApp(ctx, flags, false, true)
+			a, lk, err := newReadApp(ctx, flags)
 			if err != nil {
 				return err
 			}
@@ -89,7 +89,7 @@ func newHistoryFillCmd(flags *rootFlags) *cobra.Command {
 			ctx, cancel := withTimeout(cmd.Context(), flags)
 			defer cancel()
 
-			a, lk, err := newApp(ctx, flags, false, true)
+			a, lk, err := newReadApp(ctx, flags)
 			if err != nil {
 				return err
 			}

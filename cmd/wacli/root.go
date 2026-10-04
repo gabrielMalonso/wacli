@@ -117,6 +117,14 @@ func writeRootError(flags rootFlags, err error) {
 	_ = out.WriteError(os.Stderr, flags.asJSON, err)
 }
 
+// newReadApp opens an existing local archive without a writer lock or session upgrades.
+// Keep this explicit: lock-free operations such as media downloads have other semantics.
+func newReadApp(ctx context.Context, flags *rootFlags) (*app.App, *lock.Lock, error) {
+	readFlags := *flags
+	readFlags.readOnly = true
+	return newApp(ctx, &readFlags, false, true)
+}
+
 func newApp(ctx context.Context, flags *rootFlags, needLock bool, allowUnauthed bool) (*app.App, *lock.Lock, error) {
 	storeDir, err := resolveStoreDir(flags)
 	if err != nil {

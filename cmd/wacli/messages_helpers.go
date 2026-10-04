@@ -28,7 +28,7 @@ func messageChatJIDFilter(ctx context.Context, a *app.App, chat string) ([]strin
 	if _, err := os.Stat(filepath.Join(a.StoreDir(), "session.db")); err != nil {
 		return jidStrings(jids), nil
 	}
-	resolver, err := a.LocalResolver()
+	resolver, err := a.ReadOnlyResolver()
 	if err != nil {
 		return jidStrings(jids), nil
 	}
@@ -76,7 +76,7 @@ func resolveMessageSenderNames(ctx context.Context, a *app.App, msgs []store.Mes
 	if _, err := os.Stat(filepath.Join(a.StoreDir(), "session.db")); err != nil {
 		return msgs
 	}
-	resolver, err := a.LocalResolver()
+	resolver, err := a.ReadOnlyResolver()
 	if err != nil {
 		return msgs
 	}

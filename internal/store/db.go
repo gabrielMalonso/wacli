@@ -39,7 +39,7 @@ func open(path string, readOnly bool) (*DB, error) {
 	}
 	if readOnly {
 		if _, err := os.Stat(path); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("read local store (initialize explicitly with wacli auth or sync; these commands may connect to WhatsApp): %w", err)
 		}
 	} else if err := fsutil.EnsurePrivateDir(filepath.Dir(path)); err != nil {
 		return nil, fmt.Errorf("create db directory: %w", err)
@@ -71,8 +71,28 @@ func open(path string, readOnly bool) (*DB, error) {
 }
 
 func (d *DB) validateReadable() error {
-	var n int
-	return d.sql.QueryRow("SELECT count(*) FROM sqlite_master").Scan(&n)
+	hasMigrations, err := d.tableExists("schema_migrations")
+	if err != nil {
+		return err
+	}
+	if !hasMigrations {
+		return fmt.Errorf("local store has no schema version; an explicit writable upgrade with wacli auth or sync is required (these commands may connect to WhatsApp)")
+	}
+	var version, applied int
+	if err := d.sql.QueryRow("SELECT COALESCE(MAX(version), 0), COUNT(*) FROM schema_migrations").Scan(&version, &applied); err != nil {
+		return err
+	}
+	current := schemaMigrations[len(schemaMigrations)-1].version
+	if version < current {
+		return fmt.Errorf("local store schema %d is older than required schema %d; an explicit writable upgrade with wacli auth or sync is required (these commands may connect to WhatsApp)", version, current)
+	}
+	if version > current {
+		return fmt.Errorf("local store schema %d is newer than supported schema %d; upgrade wacli to read it", version, current)
+	}
+	if applied != len(schemaMigrations) {
+		return fmt.Errorf("local store schema has missing migrations; an explicit writable upgrade with wacli auth or sync is required (these commands may connect to WhatsApp)")
+	}
+	return nil
 }
 
 func sqliteURI(path string, readOnly bool) string {

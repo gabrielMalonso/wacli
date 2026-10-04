@@ -73,7 +73,7 @@ func newGroupsListCmd(flags *rootFlags) *cobra.Command {
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
-			a, lk, err := newApp(ctx, flags, false, false)
+			a, lk, err := newReadApp(ctx, flags)
 			if err != nil {
 				return err
 			}
