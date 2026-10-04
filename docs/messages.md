@@ -21,6 +21,10 @@ wacli messages revoke --chat JID --id MSG_ID [--post-send-wait 2s]
 wacli messages forward --chat JID --id MSG_ID --to RECIPIENT [--pick N] [--post-send-wait 2s]
 ```
 
+## Agent pagination
+
+`--agent messages list` adds `meta.page` with `returned`, `has_more`, and `next_cursor` (null at the local end). Resume with `--cursor TOKEN` and the same store, normalized filters and order; `--limit` and `--detail compact|full` may change. Same-second messages use the local `(ts,rowid)` key in either order. This is live pagination of the local archive, not proof of complete WhatsApp history or a snapshot. See the [agent pagination contract](agent.md#local-message-pagination) for cursor validation, PN/LID changes, concurrent ingestion and deletion behavior. Legacy list JSON, tables, defaults and ordering remain unchanged.
+
 ## Search
 
 - Uses SQLite FTS5 when the binary was built with `-tags sqlite_fts5`.

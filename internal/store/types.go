@@ -102,6 +102,7 @@ type Message struct {
 	DeletionReason  string     `json:"deletion_reason,omitempty"`
 	PayloadPurgedAt *time.Time `json:"payload_purged_at,omitempty"`
 	Snippet         string
+	rowTS           int64 // Raw SQLite timestamp for keyset ordering, including zero/negative dates.
 	rowID           int64
 }
 

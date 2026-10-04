@@ -45,6 +45,7 @@ const docsURL = "https://wacli.sh"
 type rootFlags struct {
 	agentRunStarted bool
 	agent           bool
+	cursor          string
 	detail          string
 	agentAccount    out.AgentAccount
 	storeDir        string
@@ -77,6 +78,7 @@ func execute(args []string) error {
 	rootCmd.PersistentFlags().StringVar(&flags.account, "account", "", "named account from config.yaml")
 	rootCmd.PersistentFlags().BoolVar(&flags.asJSON, "json", false, "output JSON instead of human-readable text")
 	rootCmd.PersistentFlags().BoolVar(&flags.agent, "agent", false, "output the versioned agent JSON contract (local queries only)")
+	rootCmd.PersistentFlags().StringVar(&flags.cursor, "cursor", "", "resume local pagination (requires --agent messages list)")
 	rootCmd.PersistentFlags().StringVar(&flags.detail, "detail", "compact", "agent detail: compact|full (requires --agent)")
 	rootCmd.PersistentFlags().BoolVar(&flags.fullOutput, "full", false, "disable truncation in table output")
 	rootCmd.PersistentFlags().BoolVar(&flags.events, "events", false, "emit machine-readable NDJSON lifecycle events on stderr")
@@ -113,6 +115,14 @@ func execute(args []string) error {
 	var agentFindErr error
 	if intent.agent {
 		_, _, agentFindErr = rootCmd.Find(args)
+	}
+	if intent.cursorSet && !intent.help {
+		c, _, findErr := rootCmd.Find(args)
+		if !intent.agent || findErr != nil || c.CommandPath() != "wacli messages list" {
+			err := agentUsageError(fmt.Errorf("--cursor requires --agent messages list"))
+			writeRootError(flags, err)
+			return err
+		}
 	}
 	installAgentGuards(rootCmd, &flags)
 	if intent.detailSet && !intent.agent && !intent.help {

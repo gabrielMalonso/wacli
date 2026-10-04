@@ -125,16 +125,28 @@ type agentMessages struct {
 	SelectedID string         `json:"selected_id,omitempty"`
 }
 
+func writeAgentMessagePage(flags *rootFlags, page store.MessagesPage, limit int) error {
+	meta := agentMeta(flags)
+	meta.Limit = limit
+	meta.Excluded = []string{"tombstones"}
+	meta.Page = &out.AgentPage{Returned: len(page.Messages), HasMore: page.HasMore, NextCursor: page.NextCursor}
+	return writeAgentMessagesWithMeta(flags, page.Messages, meta, "", "")
+}
+
 func writeAgentMessages(flags *rootFlags, msgs []store.Message, limit int, searchMode, selected string, before, after *int) error {
-	data := agentMessages{Messages: make([]agentMessage, 0, len(msgs)), SearchMode: searchMode, SelectedID: selected}
-	for _, m := range msgs {
-		data.Messages = append(data.Messages, agentMessageDTO(m, flags.detail))
-	}
 	meta := agentMeta(flags)
 	meta.Limit = limit
 	meta.Before = before
 	meta.After = after
 	meta.Excluded = []string{"tombstones"}
+	return writeAgentMessagesWithMeta(flags, msgs, meta, searchMode, selected)
+}
+
+func writeAgentMessagesWithMeta(flags *rootFlags, msgs []store.Message, meta out.AgentMeta, searchMode, selected string) error {
+	data := agentMessages{Messages: make([]agentMessage, 0, len(msgs)), SearchMode: searchMode, SelectedID: selected}
+	for _, m := range msgs {
+		data.Messages = append(data.Messages, agentMessageDTO(m, flags.detail))
+	}
 	return out.WriteAgentJSON(os.Stdout, flags.agentAccount, meta, data)
 }
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Agents: add local keyset pagination to `--agent messages list`, with typed page metadata and an opaque versioned `--cursor` bound to the selected archive, normalized filters, PN/LID scope and order. Preserve same-second messages, allow page-size/detail changes, reject invalid or mismatched cursors with exit 2, and document live-read limits without inferring complete WhatsApp history. Legacy list output remains unchanged.
+
 - Agents: add opt-in `--agent` contract v1 and `--detail compact|full` for bounded offline messages, chats, contacts, coverage, auth status, and doctor queries. Preserve legacy JSON/tables, expose archive identity and unknown freshness/completeness, signal Unicode truncation and tombstone exclusions, select public full DTOs, and return typed errors with agent-only exit codes. Block unsupported commands before store/network effects.
 
 - Maintenance: open `chats cleanup`, `groups prune`, `messages purge`, and `store cleanup` dry-runs read-only without a writer lock. Allow previews with `--read-only`/`WACLI_READONLY=1`, including alongside sync, while keeping destructive execution, defaults, and candidate selection unchanged. Missing or older stores are not initialized or migrated by previews.

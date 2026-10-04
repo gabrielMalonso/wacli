@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/openclaw/wacli/internal/out"
 	"github.com/openclaw/wacli/internal/store"
+	"github.com/openclaw/wacli/internal/wa"
 	"github.com/spf13/cobra"
 )
 
@@ -60,7 +62,7 @@ func newMessagesListCmd(flags *rootFlags) *cobra.Command {
 				return err
 			}
 
-			msgs, err := a.DB().ListMessages(store.ListMessagesParams{
+			params := store.ListMessagesParams{
 				ChatJIDs:  chatJIDs,
 				SenderJID: sender,
 				Limit:     limit,
@@ -70,22 +72,36 @@ func newMessagesListCmd(flags *rootFlags) *cobra.Command {
 				Asc:       asc,
 				Forwarded: forwarded,
 				Starred:   starred,
-			})
+			}
+			if flags.agent {
+				chatIdentity := ""
+				if strings.TrimSpace(chat) != "" {
+					jid, err := wa.ParseUserOrJID(strings.TrimSpace(chat))
+					if err != nil {
+						return err
+					}
+					chatIdentity = canonicalMessageFilterJID(jid).String()
+				}
+				if strings.TrimSpace(sender) != "" {
+					jid, err := wa.ParseUserOrJID(strings.TrimSpace(sender))
+					if err != nil {
+						return err
+					}
+					params.SenderJID = canonicalMessageFilterJID(jid).String()
+				}
+				page, err := a.DB().ListMessagesPage(store.ListMessagesPageParams{ListMessagesParams: params, StoreRef: *flags.agentAccount.StoreRef, ChatIdentity: chatIdentity, Cursor: flags.cursor})
+				if err != nil {
+					return err
+				}
+				page.Messages = resolveMessageSenderNames(ctx, a, page.Messages)
+				return writeAgentMessagePage(flags, page, limit)
+			}
+			msgs, err := a.DB().ListMessages(params)
 			if err != nil {
 				return err
 			}
 			msgs = resolveMessageSenderNames(ctx, a, msgs)
 
-			if flags.agent {
-				mode := ""
-				if cmd.Name() == "search" {
-					mode = "like"
-					if a.DB().HasFTS() {
-						mode = "fts5"
-					}
-				}
-				return writeAgentMessages(flags, msgs, limit, mode, "", nil, nil)
-			}
 			if flags.asJSON {
 				return out.WriteJSON(os.Stdout, map[string]any{
 					"messages": msgs,

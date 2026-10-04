@@ -14,16 +14,24 @@ type AgentAccount struct {
 	Name     string  `json:"name,omitempty"`
 }
 
+// AgentPage describes only the selected local archive, never remote completeness.
+type AgentPage struct {
+	Returned   int     `json:"returned"`
+	HasMore    bool    `json:"has_more"`
+	NextCursor *string `json:"next_cursor"`
+}
+
 type AgentMeta struct {
-	Source       string   `json:"source"`
-	Detail       string   `json:"detail"`
-	Completeness string   `json:"completeness"`
-	Freshness    string   `json:"freshness"`
-	Limit        int      `json:"limit,omitempty"`
-	Before       *int     `json:"before,omitempty"`
-	After        *int     `json:"after,omitempty"`
-	Excluded     []string `json:"excluded,omitempty"`
-	Recovery     string   `json:"recovery,omitempty"`
+	Page         *AgentPage `json:"page,omitempty"`
+	Source       string     `json:"source"`
+	Detail       string     `json:"detail"`
+	Completeness string     `json:"completeness"`
+	Freshness    string     `json:"freshness"`
+	Limit        int        `json:"limit,omitempty"`
+	Before       *int       `json:"before,omitempty"`
+	After        *int       `json:"after,omitempty"`
+	Excluded     []string   `json:"excluded,omitempty"`
+	Recovery     string     `json:"recovery,omitempty"`
 }
 
 // AgentError carries a stable public code and a typed cause for exit handling.
