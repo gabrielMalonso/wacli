@@ -294,7 +294,7 @@ func TestBackfillStoreErrorScopedToSelectedOperation(t *testing.T) {
 			handlers := len(f.handlers)
 			calls := append([]bool(nil), f.manualHistorySyncCalls...)
 			f.mu.Unlock()
-			if handlers != baselineHandlers || len(calls) != 4 || calls[2] || calls[3] {
+			if handlers != baselineHandlers || len(calls) != 2 || !calls[0] || calls[1] {
 				t.Fatalf("handlers = %d, manual calls = %v", handlers, calls)
 			}
 			// An unrelated persistence error must not poison the next operation.

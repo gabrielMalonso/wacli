@@ -124,6 +124,9 @@ type App struct {
 	connectGate             chan struct{}
 	sessionResolver         *readOnlySessionResolver
 	db                      *store.DB
+	historyMu               sync.Mutex
+	historyRuntime          *historyRuntime
+	historyObserver         *historyObserver
 	statusMu                sync.Mutex
 	status                  *syncStatus
 	chatStateSync           chan struct{}

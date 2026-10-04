@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/openclaw/wacli/internal/app"
@@ -30,67 +31,69 @@ const (
 var errSendDelegateUnavailable = errors.New("send delegate unavailable")
 
 type sendDelegateRequest struct {
-	Version              int      `json:"version"`
-	Kind                 string   `json:"kind"`
-	To                   string   `json:"to,omitempty"`
-	Pick                 int      `json:"pick,omitempty"`
-	Message              string   `json:"message,omitempty"`
-	Mentions             []string `json:"mentions,omitempty"`
-	ReplyTo              string   `json:"reply_to,omitempty"`
-	ReplyToSender        string   `json:"reply_to_sender,omitempty"`
-	NoPreview            bool     `json:"no_preview,omitempty"`
-	AllowSelf            bool     `json:"allow_self,omitempty"`
-	Ephemeral            bool     `json:"ephemeral,omitempty"`
-	EphemeralDuration    string   `json:"ephemeral_duration,omitempty"`
-	EphemeralDurationSet bool     `json:"ephemeral_duration_set,omitempty"`
-	File                 string   `json:"file,omitempty"`
-	Filename             string   `json:"filename,omitempty"`
-	Caption              string   `json:"caption,omitempty"`
-	MIME                 string   `json:"mime,omitempty"`
-	As                   string   `json:"as,omitempty"`
-	PTT                  bool     `json:"ptt,omitempty"`
-	ID                   string   `json:"id,omitempty"`
-	Reaction             string   `json:"reaction,omitempty"`
-	Sender               string   `json:"sender,omitempty"`
-	Label                string   `json:"label,omitempty"`
-	ButtonID             string   `json:"button_id,omitempty"`
-	SelectIndex          int      `json:"select_index,omitempty"`
-	Type                 string   `json:"type,omitempty"`
-	Latitude             float64  `json:"latitude,omitempty"`
-	Longitude            float64  `json:"longitude,omitempty"`
-	Name                 string   `json:"name,omitempty"`
-	Question             string   `json:"question,omitempty"`
-	Options              []string `json:"options,omitempty"`
-	Selectable           int      `json:"selectable,omitempty"`
-	PresenceState        string   `json:"presence_state,omitempty"`
-	PresenceMedia        string   `json:"presence_media,omitempty"`
-	Read                 *bool    `json:"read,omitempty"`
-	Receipts             bool     `json:"receipts,omitempty"`
-	ChatStateAction      string   `json:"chat_state_action,omitempty"`
-	MuteDurationMS       int64    `json:"mute_duration_ms,omitempty"`
-	PostSendWaitMS       int64    `json:"post_send_wait_ms,omitempty"`
-	TimeoutMS            int64    `json:"timeout_ms,omitempty"`
-	DeadlineUnixMS       int64    `json:"deadline_unix_ms,omitempty"`
+	Backfill             *backfillDelegateOptions `json:"backfill,omitempty"`
+	Version              int                      `json:"version"`
+	Kind                 string                   `json:"kind"`
+	To                   string                   `json:"to,omitempty"`
+	Pick                 int                      `json:"pick,omitempty"`
+	Message              string                   `json:"message,omitempty"`
+	Mentions             []string                 `json:"mentions,omitempty"`
+	ReplyTo              string                   `json:"reply_to,omitempty"`
+	ReplyToSender        string                   `json:"reply_to_sender,omitempty"`
+	NoPreview            bool                     `json:"no_preview,omitempty"`
+	AllowSelf            bool                     `json:"allow_self,omitempty"`
+	Ephemeral            bool                     `json:"ephemeral,omitempty"`
+	EphemeralDuration    string                   `json:"ephemeral_duration,omitempty"`
+	EphemeralDurationSet bool                     `json:"ephemeral_duration_set,omitempty"`
+	File                 string                   `json:"file,omitempty"`
+	Filename             string                   `json:"filename,omitempty"`
+	Caption              string                   `json:"caption,omitempty"`
+	MIME                 string                   `json:"mime,omitempty"`
+	As                   string                   `json:"as,omitempty"`
+	PTT                  bool                     `json:"ptt,omitempty"`
+	ID                   string                   `json:"id,omitempty"`
+	Reaction             string                   `json:"reaction,omitempty"`
+	Sender               string                   `json:"sender,omitempty"`
+	Label                string                   `json:"label,omitempty"`
+	ButtonID             string                   `json:"button_id,omitempty"`
+	SelectIndex          int                      `json:"select_index,omitempty"`
+	Type                 string                   `json:"type,omitempty"`
+	Latitude             float64                  `json:"latitude,omitempty"`
+	Longitude            float64                  `json:"longitude,omitempty"`
+	Name                 string                   `json:"name,omitempty"`
+	Question             string                   `json:"question,omitempty"`
+	Options              []string                 `json:"options,omitempty"`
+	Selectable           int                      `json:"selectable,omitempty"`
+	PresenceState        string                   `json:"presence_state,omitempty"`
+	PresenceMedia        string                   `json:"presence_media,omitempty"`
+	Read                 *bool                    `json:"read,omitempty"`
+	Receipts             bool                     `json:"receipts,omitempty"`
+	ChatStateAction      string                   `json:"chat_state_action,omitempty"`
+	MuteDurationMS       int64                    `json:"mute_duration_ms,omitempty"`
+	PostSendWaitMS       int64                    `json:"post_send_wait_ms,omitempty"`
+	TimeoutMS            int64                    `json:"timeout_ms,omitempty"`
+	DeadlineUnixMS       int64                    `json:"deadline_unix_ms,omitempty"`
 }
 
 type sendDelegateResponse struct {
-	OK             bool              `json:"ok"`
-	Error          string            `json:"error,omitempty"`
-	Sent           bool              `json:"sent,omitempty"`
-	To             string            `json:"to,omitempty"`
-	ID             string            `json:"id,omitempty"`
-	Target         string            `json:"target,omitempty"`
-	Reaction       string            `json:"reaction,omitempty"`
-	Question       string            `json:"question,omitempty"`
-	Options        []string          `json:"options,omitempty"`
-	Selected       []string          `json:"selected,omitempty"`
-	SelectedOption *selectOption     `json:"selected_option,omitempty"`
-	File           map[string]string `json:"file,omitempty"`
-	StoreWarning   string            `json:"store_warning,omitempty"`
-	Chat           string            `json:"chat,omitempty"`
-	Action         string            `json:"action,omitempty"`
-	Receipts       *int              `json:"receipts,omitempty"`
-	ReceiptType    string            `json:"receipt_type,omitempty"`
+	Backfill       *app.BackfillResult `json:"backfill,omitempty"`
+	OK             bool                `json:"ok"`
+	Error          string              `json:"error,omitempty"`
+	Sent           bool                `json:"sent,omitempty"`
+	To             string              `json:"to,omitempty"`
+	ID             string              `json:"id,omitempty"`
+	Target         string              `json:"target,omitempty"`
+	Reaction       string              `json:"reaction,omitempty"`
+	Question       string              `json:"question,omitempty"`
+	Options        []string            `json:"options,omitempty"`
+	Selected       []string            `json:"selected,omitempty"`
+	SelectedOption *selectOption       `json:"selected_option,omitempty"`
+	File           map[string]string   `json:"file,omitempty"`
+	StoreWarning   string              `json:"store_warning,omitempty"`
+	Chat           string              `json:"chat,omitempty"`
+	Action         string              `json:"action,omitempty"`
+	Receipts       *int                `json:"receipts,omitempty"`
+	ReceiptType    string              `json:"receipt_type,omitempty"`
 }
 
 type sendDelegateExecutor func(context.Context, sendDelegateRequest) (sendDelegateResponse, error)
@@ -108,28 +111,42 @@ func delegateSend(ctx context.Context, flags *rootFlags, req sendDelegateRequest
 	}
 	path := sendDelegateSocketPath(storeDir)
 
+	deadline := time.Now().Add(commandTimeout(flags))
+	if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(deadline) {
+		deadline = parentDeadline
+	}
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", path)
 	if err != nil {
 		return sendDelegateResponse{}, fmt.Errorf("%w: %v", errSendDelegateUnavailable, err)
 	}
 	defer conn.Close()
+	if req.Kind == historyBackfillKind {
+		// Closing the client transport interrupts its wait, not the owner's
+		// operation: this protocol has no cancellation acknowledgement.
+		stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })
+		defer stopClose()
+	}
 
-	deadline := time.Now().Add(commandTimeout(flags))
 	req.DeadlineUnixMS = deadline.UnixMilli()
 	_ = conn.SetDeadline(deadline)
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
-		return sendDelegateResponse{}, err
+		return sendDelegateResponse{}, delegateTransportError(req.Kind, err)
 	}
 	var resp sendDelegateResponse
 	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		if req.Kind == historyBackfillKind {
+			return sendDelegateResponse{}, delegateTransportError(req.Kind, err)
+		}
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
 			// The request reached the daemon, which may have started it just
 			// before the deadline. Say so, because a blind retry can send twice.
 			return sendDelegateResponse{}, fmt.Errorf("no reply from the running sync process before the timeout; the %s may still have gone through, so check before retrying: %w", req.Kind, err)
 		}
-		return sendDelegateResponse{}, err
+		return sendDelegateResponse{}, delegateTransportError(req.Kind, err)
 	}
 	if !resp.OK {
 		return sendDelegateResponse{}, errors.New(resp.Error)
@@ -172,6 +189,8 @@ func startSendDelegateServerForStore(ctx context.Context, storeDir string, spaci
 		return nil, err
 	}
 
+	serverCtx, cancelServer := context.WithCancel(ctx)
+	var connections sync.WaitGroup
 	done := make(chan struct{})
 	// One slot serializes delegated operations. Waiting for it is bounded by
 	// each caller's deadline, paced or not, so an operation still queued when
@@ -189,13 +208,21 @@ func startSendDelegateServerForStore(ctx context.Context, storeDir string, spaci
 			if err != nil {
 				return
 			}
-			go handleSendDelegateConn(ctx, conn, execute, sendSlot, pacer)
+			connections.Add(1)
+			go func() {
+				defer connections.Done()
+				stopClose := context.AfterFunc(serverCtx, func() { _ = conn.Close() })
+				defer stopClose()
+				handleSendDelegateConn(serverCtx, conn, execute, sendSlot, pacer)
+			}()
 		}
 	}()
 
 	stop := func() {
+		cancelServer()
 		_ = ln.Close()
 		<-done
+		connections.Wait()
 		_ = os.Remove(path)
 	}
 	return stop, nil
@@ -248,6 +275,17 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 	// transport alive through its budget and the final response write.
 	_ = conn.SetDeadline(deadline.Add(sendDelegateResponseGrace))
 
+	if req.Kind == historyBackfillKind {
+		if req.Version != sendDelegateVersion || req.Backfill == nil {
+			_ = json.NewEncoder(conn).Encode(sendDelegateResponse{Error: "invalid history backfill request before dispatch; no history was requested"})
+			return
+		}
+		if _, err := req.Backfill.options(); err != nil {
+			_ = json.NewEncoder(conn).Encode(sendDelegateResponse{Error: fmt.Sprintf("invalid history backfill request before dispatch; no history was requested: %v", err)})
+			return
+		}
+	}
+
 	if req.Kind == chatStateKind {
 		// App-state writes are serialized by the app and can wait minutes on
 		// recovery, so they must not hold the send queue.
@@ -262,7 +300,9 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 
 	refuse := func() {
 		msg := "request timed out in the send queue before dispatch; it was not sent"
-		if pacer.enabled() {
+		if req.Kind == historyBackfillKind {
+			msg = "history backfill expired in the operation queue before dispatch; no history was requested"
+		} else if pacer.enabled() {
 			msg = "send spacing exceeded request timeout before dispatch; it was not sent"
 		}
 		_ = json.NewEncoder(conn).Encode(sendDelegateResponse{OK: false, Error: msg})
@@ -284,7 +324,7 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 
 	// Space this send from the previous one while serialized. Bound the wait by
 	// the same deadline. Disabled spacing leaves the path untouched.
-	if pacer.enabled() {
+	if req.Kind != historyBackfillKind && pacer.enabled() {
 		if !pacer.wait(requestCtx) {
 			refuse()
 			return
@@ -298,7 +338,7 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 	}
 
 	resp, err := execute(requestCtx, req)
-	if pacer.enabled() {
+	if req.Kind != historyBackfillKind && pacer.enabled() {
 		// Record completion, not handler entry: recipient resolution, media
 		// preparation, and the actual wire send all happen inside execute.
 		// Starting the gap here prevents a slow operation from consuming it.
@@ -309,7 +349,9 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 
 func writeDelegateResult(conn net.Conn, requestCtx context.Context, req sendDelegateRequest, resp sendDelegateResponse, err error) {
 	if err != nil {
-		if requestCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		if req.Kind == historyBackfillKind {
+			err = fmt.Errorf("delegated history backfill failed after dispatch; already persisted history may remain; check before retrying: %w", err)
+		} else if requestCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			err = fmt.Errorf("delegated %s failed after dispatch and may still have gone through; check before retrying: %w", req.Kind, err)
 		}
 		resp = sendDelegateResponse{OK: false, Error: err.Error()}
@@ -325,6 +367,8 @@ func executeDelegatedSend(parent context.Context, a *app.App, req sendDelegateRe
 	defer cancel()
 
 	switch req.Kind {
+	case historyBackfillKind:
+		return executeDelegatedBackfill(ctx, a, req)
 	case "text":
 		return executeDelegatedText(ctx, a, req)
 	case "file", "voice":
