@@ -20,6 +20,7 @@ stored data or file permissions. They work alongside a writer such as
 | `polls list`, `poll show`, `calls list` | Local poll/call archive |
 | `history coverage`, `history fill --dry-run` | Local coverage/plan |
 | `store stats` | Local counts |
+| `chats cleanup`, `groups prune`, `store cleanup`, `messages purge` with `--dry-run` | Local maintenance candidates/retained payload |
 | `contacts import-system --dry-run` | Local contacts plus the requested input/source |
 | `auth status`, `doctor` without `--connect` | Read-only session/status and diagnostics |
 
@@ -47,8 +48,9 @@ Remote refresh/inspection commands retain their documented writable behavior,
 including `contacts refresh/check`, `groups refresh/info`, `channels list/info`,
 live profile queries, and `doctor --connect`. Media download retains its requested
 file-writing behavior; `messages export --output` also writes the requested file
-while reading the archive read-only. Cleanup/prune/purge previews remain part of
-their existing writable command paths in this release.
+while reading the archive read-only. Maintenance commands with `--dry-run` use
+this same read-only archive boundary; their execution paths still require the
+writer lock and a writable store.
 
 ## Commands
 
@@ -76,8 +78,8 @@ wacli groups prune [--days N] [--left-only=false|--include-active] [--dry-run] [
 - `groups prune --include-active --days N` also prunes active groups whose last known local message is older than `N` days. Groups with no known local activity timestamp are skipped.
 - Destructive cleanup commands require confirmation unless `--confirm` is passed.
 - If a row cannot be deleted, bulk cleanup continues with the other targets, then exits nonzero with the underlying errors and the number successfully deleted. In `--json` mode, failures use the error envelope on stderr and do not emit a success result on stdout. Successfully deleted rows stay deleted; failed deletions are rolled back individually.
-- Use `--dry-run` first; it lists what would be deleted without changing the local store.
-- Use `--read-only` or `WACLI_READONLY=1` to make cleanup commands fail before opening the store for writes.
+- Use `--dry-run` first; it reads the existing current-schema store without taking the writer lock, deleting media, migrating schemas, or changing data/permissions. It works alongside sync, subject to the SQLite WAL bookkeeping caveat above.
+- `--read-only` and `WACLI_READONLY=1` allow `--dry-run` previews and reject cleanup/purge execution before opening the store for writes. Defaults, target selection, and confirmation requirements are unchanged.
 - Use `--account NAME` to target a named account store. Use `--store DIR` for manual stores or migration debugging; it cannot be combined with `--account`.
 
 ## Examples

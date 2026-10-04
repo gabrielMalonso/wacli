@@ -20,7 +20,7 @@ func TestGroupsPruneExposesSafetyFlags(t *testing.T) {
 
 func TestGroupsPruneRejectsReadOnlyBeforeOpeningStore(t *testing.T) {
 	cmd := newGroupsPruneCmd(&rootFlags{readOnly: true})
-	cmd.SetArgs([]string{"--dry-run"})
+	cmd.SetArgs([]string{"--confirm"})
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "read-only mode") {
 		t.Fatalf("error = %v, want read-only", err)
