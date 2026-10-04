@@ -32,12 +32,26 @@ const (
 	MaxBackfillRequests     = 100
 )
 
+// BackfillStopReason describes why the requested batches stopped. None of these
+// reasons proves that all historical messages exist in the local archive.
+type BackfillStopReason string
+
+const (
+	BackfillStopRequestedBatchLimit BackfillStopReason = "requested_batch_limit"
+	BackfillStopNoProgress          BackfillStopReason = "no_progress"
+	BackfillStopEmptyResponse       BackfillStopReason = "empty_response"
+	BackfillStopPrimaryNoMore       BackfillStopReason = "primary_no_more_messages"
+)
+
 type BackfillResult struct {
-	ChatJID        string
-	RequestsSent   int
-	ResponsesSeen  int
+	ChatJID       string
+	RequestsSent  int
+	ResponsesSeen int
+	// MessagesAdded is net distinct local growth for the selected conversation
+	// during the post-connect counting window, including concurrent activity.
 	MessagesAdded  int64
-	MessagesSynced int64
+	MessagesSynced int64 // global Sync counter, including updates/replays
+	StopReason     BackfillStopReason
 }
 
 type onDemandResponse struct {
@@ -71,10 +85,25 @@ func (a *App) BackfillHistory(ctx context.Context, opts BackfillOptions) (Backfi
 	a.wa.SetManualHistorySyncDownload(true)
 	defer a.wa.SetManualHistorySyncDownload(false)
 
-	beforeCount, _ := a.db.CountMessages()
-
 	var mu sync.Mutex
 	var waitCh chan onDemandResponse
+	var windowActive bool
+	var storeErr error
+	observeStoreError := func(jid types.JID, err error) {
+		if a.canonicalStoreJID(ctx, jid) != a.canonicalStoreJID(ctx, chat) {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if windowActive && storeErr == nil {
+			storeErr = fmt.Errorf("persist on-demand history for %s: %w", jid, err)
+		}
+	}
+	persistenceError := func() error {
+		mu.Lock()
+		defer mu.Unlock()
+		return storeErr
+	}
 	var manualMessagesStored atomic.Int64
 	var manualLastEvent atomic.Int64
 	manualLastEvent.Store(nowUTC().UnixNano())
@@ -124,7 +153,7 @@ func (a *App) BackfillHistory(ctx context.Context, opts BackfillOptions) (Backfi
 				return
 			}
 			hs := &events.HistorySync{Data: data}
-			a.handleHistorySync(ctx, SyncOptions{}, hs, &manualMessagesStored, &manualLastEvent, func(string, string) {})
+			a.handleHistorySync(ctx, SyncOptions{historyStoreError: observeStoreError}, hs, &manualMessagesStored, &manualLastEvent, func(string, string) {})
 			handleOnDemand(hs)
 		}
 	})
@@ -217,16 +246,51 @@ func (a *App) BackfillHistory(ctx context.Context, opts BackfillOptions) (Backfi
 		return resp, err
 	}
 
+	var beforeCount int64
+	var windowChat, windowAlias string
+	var stopReason BackfillStopReason
+	countIdentities := func(ctx context.Context) (string, string) {
+		storeChat := a.canonicalStoreJID(ctx, chat)
+		alias := a.wa.ResolvePNToLID(ctx, storeChat)
+		return storeChat.String(), canonicalJIDString(alias)
+	}
+	checkIdentities := func(ctx context.Context) error {
+		currentChat, currentAlias := countIdentities(ctx)
+		if currentChat != windowChat || currentAlias != windowAlias {
+			return fmt.Errorf("backfill conversation identities changed during the counting window; result could not be measured reliably; already persisted messages may remain")
+		}
+		return nil
+	}
+	stop := func(reason BackfillStopReason, legacyReason, message string) {
+		stopReason = reason
+		a.emitOrPrint("backfill_stopped", map[string]any{
+			"chat_jid": windowChat, "reason": legacyReason, "stop_reason": reason,
+		}, "%s\n", message)
+	}
+
 	syncRes, err := a.Sync(ctx, SyncOptions{
-		Mode:             SyncModeOnce,
-		AllowQR:          false,
-		IdleExit:         opts.IdleExit,
-		afterHistorySync: handleOnDemand,
+		Mode:              SyncModeOnce,
+		AllowQR:           false,
+		IdleExit:          opts.IdleExit,
+		afterHistorySync:  handleOnDemand,
+		historyStoreError: observeStoreError,
 		AfterConnect: func(ctx context.Context) error {
 			// Sync can learn mappings and migrate old LID rows while connecting.
 			// Resolve the local identity only after that migration has completed.
-			chatStr := a.canonicalStoreJID(ctx, chat).String()
+			windowChat, windowAlias = countIdentities(ctx)
+			var err error
+			beforeCount, err = a.db.CountConversationMessages(windowChat, windowAlias)
+			if err != nil {
+				return fmt.Errorf("count backfill conversation before requests: %w", err)
+			}
+			mu.Lock()
+			windowActive = true
+			mu.Unlock()
+			chatStr := windowChat
 			for i := 0; i < opts.Requests; i++ {
+				if err := checkIdentities(ctx); err != nil {
+					return err
+				}
 				oldest, err := a.db.GetOldestMessageInfo(chatStr)
 				if err != nil {
 					if err == sql.ErrNoRows {
@@ -252,6 +316,15 @@ func (a *App) BackfillHistory(ctx context.Context, opts BackfillOptions) (Backfi
 					return err
 				}
 
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if err := persistenceError(); err != nil {
+					return err
+				}
+				if err := checkIdentities(ctx); err != nil {
+					return err
+				}
 				a.emitOrPrint("backfill_response", map[string]any{
 					"chat_jid":       chatStr,
 					"conversations":  resp.conversations,
@@ -260,44 +333,67 @@ func (a *App) BackfillHistory(ctx context.Context, opts BackfillOptions) (Backfi
 				}, "On-demand history sync: %d conversations, %d messages.\n", resp.conversations, resp.messages)
 
 				newOldest, err := a.db.GetOldestMessageInfo(chatStr)
-				// A retry's newer anchor is not progress past the original oldest row.
-				if err == nil && newOldest.MsgID == oldest.MsgID {
-					a.emitOrPrint("backfill_stopped", map[string]any{
-						"chat_jid": chatStr,
-						"reason":   "no_older_messages_added",
-					}, "No older messages were added (stopping).\n")
+				if err != nil {
+					return fmt.Errorf("read oldest backfill message after response: %w", err)
+				}
+				// Explicit primary evidence wins even for empty or duplicate replies.
+				if resp.endType == waHistorySync.Conversation_COMPLETE_AND_NO_MORE_MESSAGE_REMAIN_ON_PRIMARY {
+					stop(BackfillStopPrimaryNoMore, "start_of_history_reached", "Primary device reports no more messages available (stopping).")
 					return nil
 				}
 				if resp.messages <= 0 {
-					a.emitOrPrint("backfill_stopped", map[string]any{
-						"chat_jid": chatStr,
-						"reason":   "no_messages_returned",
-					}, "No messages returned (stopping).\n")
+					stop(BackfillStopEmptyResponse, "no_messages_returned", "No messages returned (stopping).")
 					return nil
 				}
-				if resp.endType == waHistorySync.Conversation_COMPLETE_AND_NO_MORE_MESSAGE_REMAIN_ON_PRIMARY {
-					a.emitOrPrint("backfill_stopped", map[string]any{
-						"chat_jid": chatStr,
-						"reason":   "start_of_history_reached",
-					}, "Reached start of chat history (stopping).\n")
+				// A retry's newer anchor is not progress past the original oldest row.
+				if newOldest.MsgID == oldest.MsgID {
+					stop(BackfillStopNoProgress, "no_older_messages_added", "No older messages were added (stopping).")
 					return nil
 				}
 			}
+			stop(BackfillStopRequestedBatchLimit, "requested_batch_limit", "Requested batch limit reached (stopping).")
 			return nil
 		},
 	})
+	// Close the observer's operation-local window before reading its final error.
+	// Late callbacks cannot mutate the result or affect a later Sync operation.
+	mu.Lock()
+	windowActive = false
+	finalStoreErr := storeErr
+	mu.Unlock()
 	if err != nil {
 		return BackfillResult{}, err
 	}
-
-	afterCount, _ := a.db.CountMessages()
+	if err := ctx.Err(); err != nil {
+		return BackfillResult{}, err
+	}
+	if finalStoreErr != nil {
+		return BackfillResult{}, finalStoreErr
+	}
+	if err := checkIdentities(ctx); err != nil {
+		return BackfillResult{}, err
+	}
+	afterCount, err := a.db.CountConversationMessages(windowChat, windowAlias)
+	if err != nil {
+		return BackfillResult{}, fmt.Errorf("count backfill conversation after sync: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return BackfillResult{}, err
+	}
+	if err := checkIdentities(ctx); err != nil {
+		return BackfillResult{}, err
+	}
+	if afterCount < beforeCount {
+		return BackfillResult{}, fmt.Errorf("backfill conversation count decreased during the counting window; result could not be measured reliably; already persisted messages may remain")
+	}
 
 	return BackfillResult{
-		ChatJID:        a.canonicalStoreJID(ctx, chat).String(),
+		ChatJID:        windowChat,
 		RequestsSent:   requestsSent,
 		ResponsesSeen:  responsesSeen,
 		MessagesAdded:  afterCount - beforeCount,
 		MessagesSynced: syncRes.MessagesStored,
+		StopReason:     stopReason,
 	}, nil
 }
 
