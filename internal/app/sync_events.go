@@ -54,6 +54,9 @@ type syncPresence struct {
 
 func (a *App) addSyncEventHandler(ctx context.Context, opts SyncOptions, messagesStored, lastEvent *atomic.Int64, disconnected chan<- struct{}, loggedOut chan<- struct{}, staleReconnect chan<- staleReconnectRequest, enqueueMedia func(string, string), enqueueWebhook func(syncWebhookEvent), limits *syncStorageLimits, ps *syncPresence, mediaQ *mediaQueue) (uint32, *sync.Map) {
 	var panicCount atomic.Int64
+	// Preserve the legacy global counter: manually downloaded on-demand blobs
+	// have always used a separate counter in standalone backfill.
+	var manualMessagesStored atomic.Int64
 	var appStateRecoveries sync.Map
 	if enqueueWebhook == nil {
 		enqueueWebhook = func(syncWebhookEvent) {}
@@ -63,6 +66,8 @@ func (a *App) addSyncEventHandler(ctx context.Context, opts SyncOptions, message
 		enqueueWebhookMessage = func(wa.ParsedMessage) {}
 	}
 	handlerID := a.wa.AddEventHandler(func(evt any) {
+		eventOpts, finishHistoryEvent := a.historyEventOptions(opts, evt)
+		defer finishHistoryEvent()
 		if mediaQ != nil {
 			if !mediaQ.beginProducer() {
 				return
@@ -96,6 +101,7 @@ func (a *App) addSyncEventHandler(ctx context.Context, opts SyncOptions, message
 			lastEvent.Store(nowUTC().UnixNano())
 			if notif := historySyncNotificationFromMessage(v); notif != nil {
 				if notif.GetSyncType() == waE2E.HistorySyncType_ON_DEMAND {
+					a.downloadAndHandleHistorySync(ctx, eventOpts, notif, &manualMessagesStored, lastEvent, enqueueMedia, limits)
 					return
 				}
 				a.downloadAndHandleHistorySync(ctx, opts, notif, messagesStored, lastEvent, enqueueMedia, limits)
@@ -112,10 +118,13 @@ func (a *App) addSyncEventHandler(ctx context.Context, opts SyncOptions, message
 			a.handleAppStatePersistenceEvent(ctx, v, nil)
 		case *events.HistorySync:
 			lastEvent.Store(nowUTC().UnixNano())
-			a.handleHistorySync(ctx, opts, v, messagesStored, lastEvent, enqueueMedia, limits)
+			if v == nil || v.Data == nil {
+				return
+			}
+			a.handleHistorySync(ctx, eventOpts, v, messagesStored, lastEvent, enqueueMedia, limits)
 			// Backfill checks local anchors as soon as it receives this response.
-			if opts.afterHistorySync != nil {
-				opts.afterHistorySync(v)
+			if eventOpts.afterHistorySync != nil {
+				eventOpts.afterHistorySync(v)
 			}
 		case *events.Receipt:
 			lastEvent.Store(nowUTC().UnixNano())
@@ -599,7 +608,14 @@ func (a *App) downloadAndHandleHistorySync(ctx context.Context, opts SyncOptions
 		)
 		return
 	}
-	a.handleHistorySync(ctx, opts, &events.HistorySync{Data: data}, messagesStored, lastEvent, enqueueMedia, limits...)
+	if data == nil {
+		return
+	}
+	hs := &events.HistorySync{Data: data}
+	a.handleHistorySync(ctx, opts, hs, messagesStored, lastEvent, enqueueMedia, limits...)
+	if opts.afterHistorySync != nil {
+		opts.afterHistorySync(hs)
+	}
 	if err := a.wa.DeleteHistorySyncMedia(ctx, notif); err != nil {
 		a.emitWarning(
 			"history_delete_failed",

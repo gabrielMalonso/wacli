@@ -139,29 +139,39 @@ func newHistoryBackfillCmd(flags *rootFlags) *cobra.Command {
 		Use:   "backfill",
 		Short: "Request older messages for a chat from your primary device (on-demand history sync)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if chat == "" {
-				return fmt.Errorf("--chat is required")
-			}
 			if err := flags.requireWritable(); err != nil {
 				return err
 			}
 
-			ctx, stop := signalContextWithEvents(out.NewEventWriter(os.Stderr, flags.events))
-			defer stop()
-
-			a, lk, err := newApp(ctx, flags, true, false)
+			opts, err := app.PrepareBackfillOptions(app.BackfillOptions{
+				ChatJID: chat, Count: count, Requests: requests,
+				WaitPerRequest: wait, IdleExit: idleExit,
+			})
 			if err != nil {
 				return err
 			}
+			// Resolve once so lock acquisition and delegation select the same
+			// archive even if the default account changes while waiting.
+			storeDir, err := resolveStoreDir(flags)
+			if err != nil {
+				return err
+			}
+			storeFlags := *flags
+			storeFlags.storeDir, storeFlags.account = storeDir, ""
+
+			ctx, stop := signalContextWithEvents(out.NewEventWriter(os.Stderr, flags.events))
+			defer stop()
+
+			ctx, cancel := withTimeout(ctx, flags)
+			defer cancel()
+
+			a, lk, err := newApp(ctx, &storeFlags, true, false)
+			if err != nil {
+				return delegateHistoryBackfill(ctx, &storeFlags, err, opts)
+			}
 			defer closeApp(a, lk)
 
-			res, err := a.BackfillHistory(ctx, app.BackfillOptions{
-				ChatJID:        chat,
-				Count:          count,
-				Requests:       requests,
-				WaitPerRequest: wait,
-				IdleExit:       idleExit,
-			})
+			res, err := a.BackfillHistory(ctx, opts)
 			if err != nil {
 				return err
 			}

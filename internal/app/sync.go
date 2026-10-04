@@ -228,6 +228,10 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 			)
 		}
 	}
+	if opts.Mode == SyncModeFollow {
+		runtime := a.startHistoryRuntime(syncCtx, &messagesStored)
+		defer a.stopHistoryRuntime(runtime)
+	}
 	if opts.AfterConnect != nil {
 		if err := opts.AfterConnect(syncCtx); err != nil {
 			return SyncResult{MessagesStored: messagesStored.Load()}, err
