@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Tests/docs: cover independent outbound requests sharing one account through existing LOCK/owner IPC, including response correlation, queue expiry, parallel local reads, uncertainty and no application replay. Document concurrent use and legacy limits without changing production behavior.
+
 - Outbound: retain scoped SDK delivery/read/server-error receipts and received own/live/history echoes through the existing App/Sync writer, using indexed frozen account/message correlation and migration 31 Observe. Keep group outcomes per observed participant, own echoes separate, and uncertain/rejected attempt results immutable. Bound evidence to 200 candidates and one two-second context per event/history pass, report local losses without raw secrets, and drain callbacks before DB release. Preserve readonly compact/full queries, read-self/unread, legacy history and normal SDK retries after uncertainty; validation remains offline fixtures only.
 
 - Outbound: add explicit `outbound send D --revision R --expect-hash H --key K` with local duplicate resolution, frozen public identities, exact managed document bytes, one application SDK invocation and checked FULL milestones/ACK finalization. Preserve normal SDK protocol retries after return/uncertainty, existing owner slot/pacing and all legacy sends. Add typed live agent/IPC outcomes and output-failure query correlation; no replay/resume or exactly-once guarantee.
