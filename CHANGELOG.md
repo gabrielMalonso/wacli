@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Agents: add opt-in `--agent` contract v1 and `--detail compact|full` for bounded offline messages, chats, contacts, coverage, auth status, and doctor queries. Preserve legacy JSON/tables, expose archive identity and unknown freshness/completeness, signal Unicode truncation and tombstone exclusions, select public full DTOs, and return typed errors with agent-only exit codes. Block unsupported commands before store/network effects.
+
 - Maintenance: open `chats cleanup`, `groups prune`, `messages purge`, and `store cleanup` dry-runs read-only without a writer lock. Allow previews with `--read-only`/`WACLI_READONLY=1`, including alongside sync, while keeping destructive execution, defaults, and candidate selection unchanged. Missing or older stores are not initialized or migrated by previews.
 - Local queries: open message/chat/contact/group/poll/call archives, history coverage/fill previews, store stats, auth status, and offline diagnostics read-only by default, without a writer lock or writable session initialization. Preserve persisted PN/LID lookup, aliases, and JSON output alongside sync.
 - Store compatibility: reject missing, unversioned, older, or newer archive schemas without initializing or migrating during reads; upgrades require an explicit writable command. SQLite may still need WAL/shared-memory bookkeeping when a writer is active.

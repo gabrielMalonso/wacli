@@ -47,6 +47,9 @@ func newContactsSearchCmd(flags *rootFlags) *cobra.Command {
 				return err
 			}
 
+			if flags.agent {
+				return writeAgentContacts(flags, cs, limit)
+			}
 			if flags.asJSON {
 				return out.WriteJSON(os.Stdout, cs)
 			}
@@ -93,6 +96,9 @@ func newContactsShowCmd(flags *rootFlags) *cobra.Command {
 				return err
 			}
 
+			if flags.agent {
+				return out.WriteAgentJSON(os.Stdout, flags.agentAccount, agentMeta(flags), agentContactDTO(c, flags.detail))
+			}
 			if flags.asJSON {
 				return out.WriteJSON(os.Stdout, c)
 			}

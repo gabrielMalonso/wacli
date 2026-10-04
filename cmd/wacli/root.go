@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -42,14 +43,18 @@ func effectiveVersion() string {
 const docsURL = "https://wacli.sh"
 
 type rootFlags struct {
-	storeDir   string
-	account    string
-	asJSON     bool
-	fullOutput bool
-	events     bool
-	timeout    time.Duration
-	readOnly   bool
-	lockWait   time.Duration
+	agentRunStarted bool
+	agent           bool
+	detail          string
+	agentAccount    out.AgentAccount
+	storeDir        string
+	account         string
+	asJSON          bool
+	fullOutput      bool
+	events          bool
+	timeout         time.Duration
+	readOnly        bool
+	lockWait        time.Duration
 }
 
 func execute(args []string) error {
@@ -71,6 +76,8 @@ func execute(args []string) error {
 	rootCmd.PersistentFlags().StringVar(&flags.storeDir, "store", "", "store directory (default: $WACLI_STORE_DIR, XDG state dir on Linux, or ~/.wacli)")
 	rootCmd.PersistentFlags().StringVar(&flags.account, "account", "", "named account from config.yaml")
 	rootCmd.PersistentFlags().BoolVar(&flags.asJSON, "json", false, "output JSON instead of human-readable text")
+	rootCmd.PersistentFlags().BoolVar(&flags.agent, "agent", false, "output the versioned agent JSON contract (local queries only)")
+	rootCmd.PersistentFlags().StringVar(&flags.detail, "detail", "compact", "agent detail: compact|full (requires --agent)")
 	rootCmd.PersistentFlags().BoolVar(&flags.fullOutput, "full", false, "disable truncation in table output")
 	rootCmd.PersistentFlags().BoolVar(&flags.events, "events", false, "emit machine-readable NDJSON lifecycle events on stderr")
 	rootCmd.PersistentFlags().DurationVar(&flags.timeout, "timeout", 5*time.Minute, "command timeout (non-sync commands)")
@@ -97,9 +104,44 @@ func execute(args []string) error {
 	rootCmd.AddCommand(newProfileCmd(&flags))
 	rootCmd.AddCommand(newDocsCmd(&flags))
 	rootCmd.AddCommand(newStoreCmd(&flags))
+	rootCmd.InitDefaultHelpCmd()
+	rootCmd.InitDefaultCompletionCmd()
+	intent := agentFlagIntent(rootCmd, args)
+	flags.agent = intent.agent
+	// Resolve the command before installing Args wrappers or letting Cobra add
+	// hidden shell-completion commands. Find performs no parsing or hooks.
+	var agentFindErr error
+	if intent.agent {
+		_, _, agentFindErr = rootCmd.Find(args)
+	}
+	installAgentGuards(rootCmd, &flags)
+	if intent.detailSet && !intent.agent && !intent.help {
+		err := fmt.Errorf("--detail requires --agent")
+		writeRootError(flags, err)
+		return err
+	}
 
 	rootCmd.SetArgs(args)
-	if err := rootCmd.Execute(); err != nil {
+	if err := func() error {
+		if agentFindErr != nil {
+			return agentUsageError(agentFindErr)
+		}
+		return rootCmd.Execute()
+	}(); err != nil {
+		if intent.agent {
+			flags.agent = true
+			if flags.agentAccount.StoreRef == nil && intent.store != "" && intent.account == "" {
+				ref, absErr := filepath.Abs(intent.store)
+				if absErr == nil {
+					flags.agentAccount.StoreRef = &ref
+				}
+			}
+			var typed *out.AgentError
+			if !flags.agentRunStarted && !errors.As(err, &typed) {
+				err = agentUsageError(err)
+			}
+			err = classifyAgentError(err)
+		}
 		writeRootError(flags, err)
 		return err
 	}
@@ -108,6 +150,12 @@ func execute(args []string) error {
 
 func writeRootError(flags rootFlags, err error) {
 	if err == nil {
+		return
+	}
+	if flags.agent {
+		meta := agentMeta(&flags)
+		meta.Recovery = ""
+		_ = out.WriteAgentError(os.Stderr, flags.agentAccount, meta, classifyAgentError(err))
 		return
 	}
 	if flags.events {
@@ -122,7 +170,11 @@ func writeRootError(flags rootFlags, err error) {
 func newReadApp(ctx context.Context, flags *rootFlags) (*app.App, *lock.Lock, error) {
 	readFlags := *flags
 	readFlags.readOnly = true
-	return newApp(ctx, &readFlags, false, true)
+	a, lk, err := newApp(ctx, &readFlags, false, true)
+	if flags.agent && err != nil {
+		err = agentStoreError(err)
+	}
+	return a, lk, err
 }
 
 func newApp(ctx context.Context, flags *rootFlags, needLock bool, allowUnauthed bool) (*app.App, *lock.Lock, error) {
@@ -158,6 +210,15 @@ func newApp(ctx context.Context, flags *rootFlags, needLock bool, allowUnauthed 
 }
 
 func resolveStoreDir(flags *rootFlags) (string, error) {
+	return resolveStoreDirWithConfig(flags, config.DefaultConfigPath())
+}
+
+func resolveStoreDirWithConfig(flags *rootFlags, configPath string) (string, error) {
+	// Resolve an agent selection once so its envelope and opener cannot disagree
+	// if the default account configuration changes during the invocation.
+	if flags != nil && flags.agent && flags.agentAccount.StoreRef != nil {
+		return *flags.agentAccount.StoreRef, nil
+	}
 	storeDir := ""
 	account := ""
 	if flags != nil {
@@ -170,7 +231,7 @@ func resolveStoreDir(flags *rootFlags) (string, error) {
 	switch {
 	case storeDir != "":
 	case account != "":
-		resolved, _, err := config.ResolveAccountStore(config.DefaultConfigPath(), account)
+		resolved, _, err := config.ResolveAccountStore(configPath, account)
 		if err != nil {
 			return "", err
 		}
@@ -178,12 +239,13 @@ func resolveStoreDir(flags *rootFlags) (string, error) {
 	case os.Getenv(config.EnvStoreDir) != "":
 		storeDir = config.DefaultStoreDir()
 	default:
-		cfg, found, err := config.LoadAccountsConfigIfExists(config.DefaultConfigPath())
+		cfg, found, err := config.LoadAccountsConfigIfExists(configPath)
 		if err != nil {
 			return "", err
 		}
 		if found && strings.TrimSpace(cfg.DefaultAccount) != "" {
-			resolved, _, err := config.ResolveAccountStore(config.DefaultConfigPath(), cfg.DefaultAccount)
+			account = strings.TrimSpace(cfg.DefaultAccount)
+			resolved, _, err := config.ResolveAccountStore(configPath, cfg.DefaultAccount)
 			if err != nil {
 				return "", err
 			}
@@ -192,7 +254,13 @@ func resolveStoreDir(flags *rootFlags) (string, error) {
 			storeDir = config.DefaultStoreDir()
 		}
 	}
-	storeDir, _ = filepath.Abs(storeDir)
+	storeDir, err := filepath.Abs(storeDir)
+	if err != nil {
+		return "", err
+	}
+	if flags != nil && flags.agent {
+		flags.agentAccount = out.AgentAccount{StoreRef: &storeDir, Name: account}
+	}
 	return storeDir, nil
 }
 

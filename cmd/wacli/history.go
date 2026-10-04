@@ -56,6 +56,9 @@ func newHistoryCoverageCmd(flags *rootFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if flags.agent {
+				return writeAgentCoverage(flags, coverage, limit)
+			}
 			if flags.asJSON {
 				return out.WriteJSON(os.Stdout, map[string]any{"coverage": coverage})
 			}

@@ -14,7 +14,7 @@ func main() {
 	configureOutputSignals()
 	applyDeviceLabel()
 	if err := execute(os.Args[1:]); err != nil {
-		os.Exit(1)
+		os.Exit(commandExitCode(err))
 	}
 }
 

@@ -104,14 +104,25 @@ func getContactForDisplay(ctx context.Context, a *app.App, rawJID string) (store
 	return store.Contact{}, sql.ErrNoRows
 }
 
+// Local identity failures keep their original legacy error text. The agent
+// boundary can distinguish unreadable state from a missing search result.
+type localIdentityError struct{ cause error }
+
+func (e *localIdentityError) Error() string { return e.cause.Error() }
+func (e *localIdentityError) Unwrap() error { return e.cause }
+
 func contactReadResolver(a *app.App) (app.LocalResolver, error) {
 	if _, err := os.Stat(filepath.Join(a.StoreDir(), "session.db")); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, err
+		return nil, &localIdentityError{err}
 	}
-	return a.ReadOnlyResolver()
+	resolver, err := a.ReadOnlyResolver()
+	if err != nil {
+		return nil, &localIdentityError{err}
+	}
+	return resolver, nil
 }
 
 func resolveContactReadJID(ctx context.Context, resolver app.LocalResolver, rawJID string) string {

@@ -148,6 +148,9 @@ func newDoctorCmd(flags *rootFlags) *cobra.Command {
 		Use:   "doctor",
 		Short: "Diagnostics for store/auth/search",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if flags.agent {
+				return runAgentDoctor(cmd.Context(), flags)
+			}
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
