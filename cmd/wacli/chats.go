@@ -64,7 +64,7 @@ func newChatsListCmd(flags *rootFlags) *cobra.Command {
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
-			a, lk, err := newApp(ctx, flags, false, false)
+			a, lk, err := newReadApp(ctx, flags)
 			if err != nil {
 				return err
 			}
@@ -126,7 +126,7 @@ func newChatsShowCmd(flags *rootFlags) *cobra.Command {
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
-			a, lk, err := newApp(ctx, flags, false, false)
+			a, lk, err := newReadApp(ctx, flags)
 			if err != nil {
 				return err
 			}
@@ -161,7 +161,7 @@ func resolveStoredChats(ctx context.Context, a *app.App, chats []store.Chat) []s
 	if _, err := os.Stat(filepath.Join(a.StoreDir(), "session.db")); err != nil {
 		return chats
 	}
-	resolver, err := a.LocalResolver()
+	resolver, err := a.ReadOnlyResolver()
 	if err != nil {
 		return chats
 	}
@@ -287,7 +287,7 @@ func mappedChatJIDs(ctx context.Context, a *app.App, rawJID string) []string {
 	if _, err := os.Stat(filepath.Join(a.StoreDir(), "session.db")); err != nil {
 		return jidStrings(jids)
 	}
-	resolver, err := a.LocalResolver()
+	resolver, err := a.ReadOnlyResolver()
 	if err != nil {
 		return jidStrings(jids)
 	}

@@ -15,6 +15,7 @@ wacli channels leave --jid CHANNEL_JID
 
 ## Notes
 
+- Local channel history is available read-only through `chats list/show` and `messages list/search/show --chat CHANNEL_JID`. `channels list/info` retain their live refresh behavior.
 - Channel JIDs use the `...@newsletter` server.
 - `channels list` fetches subscribed channels live and updates local chat rows with kind `newsletter`.
 - `channels info` fetches one joined channel live and updates the local chat row.

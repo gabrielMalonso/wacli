@@ -200,43 +200,13 @@ func newAuthStatusCmd(flags *rootFlags) *cobra.Command {
 		Use:   "status",
 		Short: "Show authentication status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := withTimeout(context.Background(), flags)
-			defer cancel()
-
-			if flags.isReadOnly() {
-				storeDir, err := resolveStoreDir(flags)
-				if err != nil {
-					return err
-				}
-				authed, linkedJID, err := readOnlyAuthStatus(storeDir)
-				if err != nil {
-					return err
-				}
-				if flags.asJSON {
-					return out.WriteJSON(os.Stdout, authStatusPayload(authed, linkedJID))
-				}
-				writeAuthStatus(os.Stdout, authed, linkedJID)
-				return nil
-			}
-
-			a, lk, err := newApp(ctx, flags, false, true)
+			storeDir, err := resolveStoreDir(flags)
 			if err != nil {
 				return err
 			}
-			defer closeApp(a, lk)
-
-			if err := a.OpenWA(); err != nil {
-				return err
-			}
-			authed := a.WA().IsAuthed()
-			revoked, err := appPkg.SessionRevoked(a.StoreDir())
+			authed, linkedJID, err := readOnlyAuthStatus(storeDir)
 			if err != nil {
 				return err
-			}
-			authed = authed && !revoked
-			var linkedJID string
-			if authed {
-				linkedJID = a.WA().LinkedJID()
 			}
 
 			if flags.asJSON {

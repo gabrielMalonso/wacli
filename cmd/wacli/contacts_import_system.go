@@ -45,7 +45,11 @@ and phones.`,
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
-			a, lk, err := newApp(ctx, flags, !dryRun, false)
+			openFlags := *flags
+			if dryRun {
+				openFlags.readOnly = true
+			}
+			a, lk, err := newApp(ctx, &openFlags, !dryRun, false)
 			if err != nil {
 				return err
 			}

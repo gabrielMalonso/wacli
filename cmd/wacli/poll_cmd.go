@@ -437,7 +437,7 @@ func newPollShowCmd(flags *rootFlags) *cobra.Command {
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
-			a, lk, err := newApp(ctx, flags, false, true)
+			a, lk, err := newReadApp(ctx, flags)
 			if err != nil {
 				return err
 			}
@@ -571,7 +571,7 @@ func resolveVoterName(a *app.App, ctx context.Context, jid string) string {
 	if _, err := os.Stat(filepath.Join(a.StoreDir(), "session.db")); err != nil {
 		return ""
 	}
-	resolver, err := a.LocalResolver()
+	resolver, err := a.ReadOnlyResolver()
 	if err != nil {
 		return ""
 	}
@@ -618,7 +618,7 @@ func newPollsListCmd(flags *rootFlags) *cobra.Command {
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
-			a, lk, err := newApp(ctx, flags, false, true)
+			a, lk, err := newReadApp(ctx, flags)
 			if err != nil {
 				return err
 			}

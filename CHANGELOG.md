@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Local queries: open message/chat/contact/group/poll/call archives, history coverage/fill previews, store stats, auth status, and offline diagnostics read-only by default, without a writer lock or writable session initialization. Preserve persisted PN/LID lookup, aliases, and JSON output alongside sync.
+- Store compatibility: reject missing, unversioned, older, or newer archive schemas without initializing or migrating during reads; upgrades require an explicit writable command. SQLite may still need WAL/shared-memory bookkeeping when a writer is active.
+- Contacts: open `import-system --dry-run` read-only without a writer lock.
+
 ## 0.20.0 - 2026-09-30
 
 **Highlights:** offline phone/LID resolution, confined uploads, authenticated media retries, and chat-state commands alongside sync.
