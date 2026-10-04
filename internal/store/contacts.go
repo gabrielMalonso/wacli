@@ -1,11 +1,52 @@
 package store
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 
 	"github.com/openclaw/wacli/internal/store/storedb"
 )
+
+// OpenContactReadConn leases a dedicated, validated read-only connection. Its
+// parser functions and attached public identity source cannot affect other reads.
+// The caller must close both the connection and the returned owner.
+func (d *DB) OpenContactReadConn(ctx context.Context) (*sql.Conn, *DB, error) {
+	reader, err := OpenReadOnly(d.path)
+	if err != nil {
+		return nil, nil, err
+	}
+	conn, err := reader.sql.Conn(ctx)
+	if err != nil {
+		_ = reader.Close()
+		return nil, nil, err
+	}
+	return conn, reader, nil
+}
+
+// MergeDisplayContacts prefers the primary representation while retaining local
+// metadata from either row. This is a view; it never changes stored identities.
+func MergeDisplayContacts(primary, secondary Contact) Contact {
+	if primary.Alias == "" {
+		primary.Alias = secondary.Alias
+	}
+	if primary.SystemName == "" {
+		primary.SystemName = secondary.SystemName
+	}
+	switch {
+	case primary.Alias != "":
+		primary.Name = primary.Alias
+	case primary.SystemName != "":
+		primary.Name = primary.SystemName
+	case primary.Name == "":
+		primary.Name = secondary.Name
+	}
+	if secondary.UpdatedAt.After(primary.UpdatedAt) {
+		primary.UpdatedAt = secondary.UpdatedAt
+	}
+	return primary
+}
 
 func (d *DB) SearchContacts(query string, limit int) ([]Contact, error) {
 	if strings.TrimSpace(query) == "" {

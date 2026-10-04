@@ -23,47 +23,14 @@ type contactDisplay struct {
 }
 
 func searchContactsForDisplay(ctx context.Context, a *app.App, query string, limit int) ([]store.Contact, error) {
-	resolver, err := contactReadResolver(a)
-	if err != nil {
-		return nil, err
-	}
-	// Match the original rows as well as the canonical identity. The store search
-	// includes names hidden by an alias and metadata on either half of a PN/LID pair.
-	matches, err := a.DB().SearchContacts(query, math.MaxInt)
-	if err != nil {
-		return nil, err
-	}
-	matched := make(map[string]bool, len(matches))
-	for _, contact := range matches {
-		matched[contact.JID] = true
-	}
-	contacts, err := contactsForDisplay(ctx, a, resolver)
-	if err != nil {
-		return nil, err
-	}
 	if limit <= 0 {
 		limit = 50
 	}
-	needle := strings.ToLower(query)
-	queryJID := resolveContactReadJID(ctx, resolver, query)
-	var result []store.Contact
-	for _, display := range contacts {
-		contact := display.contact
-		match := contact.JID == queryJID || strings.Contains(strings.ToLower(contact.JID), needle) || strings.Contains(strings.ToLower(contact.Phone), needle)
-		for _, source := range display.sources {
-			match = match || matched[source]
-		}
-		for _, alias := range display.aliases {
-			match = match || strings.Contains(strings.ToLower(alias), needle)
-		}
-		if match {
-			result = append(result, contact)
-			if len(result) == limit {
-				break
-			}
-		}
+	page, err := a.ReadContacts(ctx, app.ContactReadOptions{Operation: app.ContactSearch, Query: query, Limit: limit})
+	if len(page.Contacts) == 0 {
+		return nil, err
 	}
-	return result, nil
+	return page.Contacts, err
 }
 
 func getContactForDisplay(ctx context.Context, a *app.App, rawJID string) (store.Contact, error) {
@@ -200,9 +167,9 @@ func contactsForDisplay(ctx context.Context, a *app.App, resolver app.LocalResol
 		if idx, ok := seen[contact.JID]; ok {
 			display := &result[idx]
 			if primary && !display.primary {
-				display.contact = mergeDisplayContacts(contact, display.contact)
+				display.contact = store.MergeDisplayContacts(contact, display.contact)
 			} else {
-				display.contact = mergeDisplayContacts(display.contact, contact)
+				display.contact = store.MergeDisplayContacts(display.contact, contact)
 			}
 			display.primary = display.primary || primary
 			display.sources = append(display.sources, source)
@@ -249,27 +216,4 @@ func contactsForDisplay(ctx context.Context, a *app.App, resolver app.LocalResol
 		return a.JID < b.JID
 	})
 	return result, nil
-}
-
-// Prefer the PN row on conflicts, while retaining local metadata from either
-// representation. This is a view only: aliases, tags and rows stay untouched.
-func mergeDisplayContacts(primary, secondary store.Contact) store.Contact {
-	if primary.Alias == "" {
-		primary.Alias = secondary.Alias
-	}
-	if primary.SystemName == "" {
-		primary.SystemName = secondary.SystemName
-	}
-	switch {
-	case primary.Alias != "":
-		primary.Name = primary.Alias
-	case primary.SystemName != "":
-		primary.Name = primary.SystemName
-	case primary.Name == "":
-		primary.Name = secondary.Name
-	}
-	if secondary.UpdatedAt.After(primary.UpdatedAt) {
-		primary.UpdatedAt = secondary.UpdatedAt
-	}
-	return primary
 }

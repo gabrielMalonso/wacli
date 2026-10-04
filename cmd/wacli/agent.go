@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/openclaw/wacli/internal/app"
 	"github.com/openclaw/wacli/internal/config"
 	"github.com/openclaw/wacli/internal/out"
 	"github.com/openclaw/wacli/internal/store"
@@ -160,7 +161,7 @@ func installAgentGuards(root *cobra.Command, flags *rootFlags) {
 
 func agentSupported(cmd *cobra.Command) bool {
 	switch strings.TrimPrefix(cmd.CommandPath(), "wacli ") {
-	case "messages list", "messages search", "messages show", "messages context", "chats list", "chats show", "contacts search", "contacts show", "contacts resolve", "history coverage", "auth status":
+	case "messages list", "messages search", "messages show", "messages context", "chats list", "chats show", "contacts list", "contacts search", "contacts show", "contacts resolve", "history coverage", "auth status":
 		return true
 	case "doctor":
 		connect, _ := cmd.Flags().GetBool("connect")
@@ -309,6 +310,12 @@ func validateAgentCommand(cmd *cobra.Command, args []string, flags *rootFlags) e
 			}
 		}
 	}
+	if (path == "contacts list" || path == "contacts search") && cmd.Flags().Changed("cursor") {
+		if err := app.ValidateContactsCursor(flags.cursor); err != nil {
+			return classifyAgentError(err)
+		}
+	}
+
 	if path == "history coverage" {
 		kind, _ := cmd.Flags().GetString("kind")
 		switch kind {
@@ -352,6 +359,15 @@ func classifyAgentError(err error) *out.AgentError {
 	if errors.As(err, &chatsCursor) {
 		return &out.AgentError{Code: "invalid_cursor", Message: chatsCursor.Error(), Recovery: "Restart chats list without --cursor using the selected archive and filters.", ExitCode: 2, Cause: err}
 	}
+	var contactsCursor *app.ContactsCursorError
+	if errors.As(err, &contactsCursor) {
+		return &out.AgentError{Code: "invalid_cursor", Message: contactsCursor.Error(), Recovery: "Restart contacts list/search without --cursor using the selected archive and query.", ExitCode: 2, Cause: err}
+	}
+	var contactIdentity *app.ContactIdentityError
+	if errors.As(err, &contactIdentity) {
+		return &out.AgentError{Code: "store_unavailable", Message: "Selected local identity state cannot be read.", ExitCode: 4, Cause: err}
+	}
+
 	var identity *localIdentityError
 	if errors.As(err, &identity) {
 		return &out.AgentError{Code: "store_unavailable", Message: "Selected local identity state cannot be read.", ExitCode: 4, Cause: err}

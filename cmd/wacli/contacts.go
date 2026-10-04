@@ -6,7 +6,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/openclaw/wacli/internal/app"
 	"github.com/openclaw/wacli/internal/out"
+	"github.com/openclaw/wacli/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -15,6 +17,7 @@ func newContactsCmd(flags *rootFlags) *cobra.Command {
 		Use:   "contacts",
 		Short: "Search and manage local contact metadata",
 	}
+	cmd.AddCommand(newContactsListCmd(flags))
 	cmd.AddCommand(newContactsSearchCmd(flags))
 	cmd.AddCommand(newContactsShowCmd(flags))
 	cmd.AddCommand(newContactsResolveCmd(flags))
@@ -42,35 +45,77 @@ func newContactsSearchCmd(flags *rootFlags) *cobra.Command {
 			}
 			defer closeApp(a, lk)
 
+			if flags.agent {
+				page, err := a.ReadContacts(ctx, app.ContactReadOptions{Operation: app.ContactSearch, Query: args[0], Limit: limit, Cursor: flags.cursor, Paginate: true})
+				if err != nil {
+					return err
+				}
+				return writeAgentContacts(flags, page, limit)
+			}
 			cs, err := searchContactsForDisplay(ctx, a, args[0], limit)
 			if err != nil {
 				return err
 			}
 
-			if flags.agent {
-				return writeAgentContacts(flags, cs, limit)
-			}
 			if flags.asJSON {
 				return out.WriteJSON(os.Stdout, cs)
 			}
 
-			fullOutput := fullTableOutput(flags.fullOutput)
-			w := newTableWriter(os.Stdout)
-			fmt.Fprintln(w, "ALIAS\tNAME\tPHONE\tJID")
-			for _, c := range cs {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-					tableCell(c.Alias, 18, fullOutput),
-					tableCell(c.Name, 24, fullOutput),
-					tableCell(c.Phone, 14, fullOutput),
-					c.JID,
-				)
-			}
-			_ = w.Flush()
-			return nil
+			return writeContactsTable(flags, cs)
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 50, "limit results")
 	return cmd
+}
+
+func newContactsListCmd(flags *rootFlags) *cobra.Command {
+	var limit int
+	cmd := &cobra.Command{
+		Use: "list", Short: "List local contacts",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := withTimeout(context.Background(), flags)
+			defer cancel()
+			a, lk, err := newReadApp(ctx, flags)
+			if err != nil {
+				return err
+			}
+			defer closeApp(a, lk)
+			effectiveLimit := limit
+			if effectiveLimit <= 0 {
+				effectiveLimit = 50
+			}
+			page, err := a.ReadContacts(ctx, app.ContactReadOptions{Operation: app.ContactList, Limit: effectiveLimit, Cursor: flags.cursor, Paginate: flags.agent})
+			if err != nil {
+				return err
+			}
+			if flags.agent {
+				return writeAgentContacts(flags, page, limit)
+			}
+			if flags.asJSON {
+				return out.WriteJSON(os.Stdout, page.Contacts)
+			}
+			return writeContactsTable(flags, page.Contacts)
+		},
+	}
+	cmd.Flags().IntVar(&limit, "limit", 50, "limit results")
+	return cmd
+}
+
+func writeContactsTable(flags *rootFlags, cs []store.Contact) error {
+	fullOutput := fullTableOutput(flags.fullOutput)
+	w := newTableWriter(os.Stdout)
+	fmt.Fprintln(w, "ALIAS\tNAME\tPHONE\tJID")
+	for _, c := range cs {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+			tableCell(c.Alias, 18, fullOutput),
+			tableCell(c.Name, 24, fullOutput),
+			tableCell(c.Phone, 14, fullOutput),
+			c.JID,
+		)
+	}
+	_ = w.Flush()
+	return nil
 }
 
 func newContactsShowCmd(flags *rootFlags) *cobra.Command {

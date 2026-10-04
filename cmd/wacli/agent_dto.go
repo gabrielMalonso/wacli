@@ -4,6 +4,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/openclaw/wacli/internal/app"
 	"github.com/openclaw/wacli/internal/out"
 	"github.com/openclaw/wacli/internal/store"
 )
@@ -250,13 +251,15 @@ type agentContacts struct {
 	Contacts []agentContact `json:"contacts"`
 }
 
-func writeAgentContacts(flags *rootFlags, cs []store.Contact, limit int) error {
+func writeAgentContacts(flags *rootFlags, page app.ContactsPage, limit int) error {
+	cs := page.Contacts
 	data := agentContacts{Contacts: make([]agentContact, 0, len(cs))}
 	for _, c := range cs {
 		data.Contacts = append(data.Contacts, agentContactDTO(c, flags.detail))
 	}
 	meta := agentMeta(flags)
 	meta.Limit = limit
+	meta.Page = &out.AgentPage{Returned: len(cs), HasMore: page.HasMore, NextCursor: page.NextCursor}
 	return out.WriteAgentJSON(os.Stdout, flags.agentAccount, meta, data)
 }
 

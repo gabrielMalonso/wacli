@@ -19,7 +19,7 @@ wacli --store /path/to/archive --agent doctor
 | `messages show` | One message DTO | Same message additions |
 | `messages context` | `messages` array and `selected_id` | Same message additions |
 | `chats list` / `chats show` | `chats` array / one chat DTO | Archived, pinned, stored mute deadline |
-| `contacts search` / `contacts show` | `contacts` array / one contact DTO | System name, tags, metadata update timestamp |
+| `contacts list/search` / `contacts show` | `contacts` array / one contact DTO | System name, tags, metadata update timestamp |
 | `contacts resolve` | `resolutions` array, one per input | Untruncated names |
 | `history coverage` | `coverage` array with local message counts, oldest/newest message dates and anchor status | Untruncated names |
 | `auth status` | Local authentication observation, public linked JID/phone when known, `session_revoked`, `connected` | Same observation |
@@ -43,13 +43,33 @@ Message IDs and stored chat/sender/quote JIDs are preserved. Chat views keep sto
 
 ## Bounds and omissions
 
-Agent lists default to **20** rows; explicit `--limit` must be **1–200** in both details. Context retains defaults of five messages before/after; values must be nonnegative and `before + after + 1` must be at most 200. Its metadata includes the requested `before`, `after`, and total `limit`. Resolve accepts at most 200 inputs and thus at most 200 total results; its metadata reports that cap. `chats list`, `messages list` and temporal `messages search --sort time` support local keyset pagination (below). Other lists have no cursors or inferred next pages. Reaching or falling below a limit does not prove complete WhatsApp history.
+Agent lists default to **20** rows; explicit `--limit` must be **1–200** in both details. Context retains defaults of five messages before/after; values must be nonnegative and `before + after + 1` must be at most 200. Its metadata includes the requested `before`, `after`, and total `limit`. Resolve accepts at most 200 inputs and thus at most 200 total results; its metadata reports that cap. `contacts list/search`, `chats list`, `messages list` and temporal `messages search --sort time` support local keyset pagination (below). Other lists have no cursors or inferred next pages. Reaching or falling below a limit does not prove complete WhatsApp history.
 
 Compact message `text` is display text, capped at **320 Unicode code points**, preserving valid UTF-8. `text_truncated` explicitly records cutting; there is no appended ellipsis that changes the text. Other selected labels (names, aliases, filenames) have the same cap and report affected fields in `fields_truncated`. Identifiers are never truncated. `meta.recovery` documents full retrieval. Full exposes only selected public DTO fields: it does not serialize internal structs, keys, authenticated media URLs, session paths, raw protobufs or blobs. It does not expose local download paths or button URLs; `downloaded`/`downloaded_at` are the selected download observations. The selected `account.store_ref` is the intentional path exception.
 
 The total encoded envelope, including newline, is capped at **1 MiB compact / 8 MiB full**, checked before writing any success bytes. `payload_too_large` is a typed exit-1 error with stdout entirely empty and guidance to narrow the query; full also suggests `--detail compact`. Full removes per-text truncation, not row/envelope bounds. These are encoded **output** bounds, not total memory bounds: database rows/DTOs and the JSON envelope are materialized before the size check.
 
 List/search and context neighbors retain legacy exclusion of tombstones, explicitly reported as `meta.excluded=["tombstones"]`. Direct `show` and a context target can return a tombstone with `revoked`, `deleted_for_me`, `deleted_at`, `deletion_reason`, and `payload_purged_at` when present. `edited` remains visible in both details. Full may show retained tombstone content until an explicit purge has erased it. Compact includes essential media type/filename/MIME, quote identity, reaction target/emoji and forwarded state when present; optional full fields are intentionally selected by the documented detail level.
+
+## Contact pagination
+
+`--agent contacts list` and `--agent contacts search QUERY` return the canonical contact view with `meta.page = {returned, has_more, next_cursor}`. Defaults are 20, limits 1–200 in either detail. Identity grouping and matching happen before limiting. An extra matching identity sets `has_more=true`; empty/exact-limit local ends return false/null. Arrays retain their existing compact/full public fields; `show` retains its tag union and `resolve` its explicit unknown results. Legacy search keeps its matching, default 50, explicit limits, tables and JSON fields.
+
+```bash
+wacli --store /path/to/archive --agent contacts list
+wacli --store /path/to/archive --agent contacts search Alice --limit 2
+wacli --store /path/to/archive --agent contacts search Alice --cursor TOKEN --limit 10 --detail full
+```
+
+Results use `(Name fallback JID, JID)` in complete, case-sensitive Go string order (UTF-8 byte order), independent of DTO truncation. Identity sources fold in their original display-name/JID-fallback order, with complete stored JID as the deterministic tie-breaker for previously undefined equal source keys. Verified PN rows retain display priority, aliases and system names retain their current precedence, and metadata from either half remains searchable even without a counterpart contact row. Unknown LIDs never become phone numbers; generic textual identities stay generic. Search preserves the original SQLite LOWER/escaped-LIKE matching of stored fields plus the existing Go Unicode case-insensitive matching on canonical IDs/phones and aliases.
+
+Contacts have a separate strict canonical codec, version 1 and **16 KiB** ceiling for the two complete textual keys. Contact list/search operations, message tokens and chat tokens cannot be interchanged. Syntax/version is checked before opening the archive; semantic scope is checked before the matching stream. A stored key too large (or invalid UTF-8) to encode a supported continuation fails with `internal_error` (exit 1), without key echo or success bytes. Invalid caller tokens use `invalid_cursor` (exit 2), without token/JID/SQL echo. Cursors are opaque continuation data, not credentials or tamper-proof authorization.
+
+Scope binds operation, selected resolved store, literal search query, view version, availability of public mapping sources, and the public pair applicable to a JID query. Limit and detail may change. Available local identity data consists only of the session's public `lid/pn` map and own-device `jid/lid` columns. A nullable own-device `lid` means no own pair, allowing fallback to the public map. Missing public tables and old device schemas without a LID mean unknown pairs; incompatible map columns, unreadable/corrupt databases and query failures are errors, never an invented empty mapping. No client, migration, login or key material is loaded. Reads use the normal validated readonly archive opener, no writer lock, and support active WAL writers.
+
+One leased SQLite connection/read transaction covers source inspection, query pair/scope and the stream for a call; it is closed on success, error or cancellation. There is no cross-page snapshot and no promise of universally atomic snapshots across the two files. Normal unrelated session writes do not invalidate scope. A name or another contact's mapping can move/merge identities across the boundary and omit/repeat them. Only applicable query-pair or source-availability changes mismatch scope; **there is no universal mapping-change detection**, filesystem stamp, full mapping/catalog digest or persisted pagination state. Restart to re-observe live changes. Local exhaustion leaves completeness/freshness `unknown`.
+
+Go retains at most `limit+1` candidate contacts and one fixed-field group accumulator, without catalogue/source/alias maps. Retained memory is O(page size × field width + largest current row), while cumulative allocations grow with scanned rows. SQLite scans raw contacts each page, uses existing map/alias indexes, and materializes/sorts a temporary canonical projection which can spill to temporary files. Work includes O(N log N) sorting and mapping/metadata lookups, with own-device projection costs dependent on its cardinality/query plan; roundtrips are constant per call, not per contact. Page metadata does not claim bounded database work or constant native RSS.
 
 ## Local chat pagination
 
