@@ -126,9 +126,13 @@ func (d *DB) ListMessagesPage(p ListMessagesPageParams) (MessagesPage, error) {
 	if err != nil {
 		return MessagesPage{}, err
 	}
-	page := MessagesPage{Messages: msgs, HasMore: len(msgs) > p.Limit}
+	return messagesPage(msgs, p.Limit, scope)
+}
+
+func messagesPage(msgs []Message, limit int, scope string) (MessagesPage, error) {
+	page := MessagesPage{Messages: msgs, HasMore: len(msgs) > limit}
 	if page.HasMore {
-		page.Messages = msgs[:p.Limit]
+		page.Messages = msgs[:limit]
 		last := page.Messages[len(page.Messages)-1]
 		raw, err := json.Marshal(messageCursor{Version: 1, Scope: scope, TS: last.rowTS, RowID: last.rowID})
 		if err != nil {

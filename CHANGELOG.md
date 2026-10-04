@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Agents: add opt-in temporal pagination to `--agent messages search QUERY --sort time`, with same-second keyset continuation, search/query/engine/filter-bound cursors and existing page/envelope limits. Preserve default FTS relevance and LIKE ordering without pagination; report effective search mode/order, reject agent-only flags before archive effects, and document live matching and SQLite search costs. List cursors remain compatible.
+
 - Agents: add local keyset pagination to `--agent messages list`, with typed page metadata and an opaque versioned `--cursor` bound to the selected archive, normalized filters, PN/LID scope and order. Preserve same-second messages, allow page-size/detail changes, reject invalid or mismatched cursors with exit 2, and document live-read limits without inferring complete WhatsApp history. Legacy list output remains unchanged.
 
 - Agents: add opt-in `--agent` contract v1 and `--detail compact|full` for bounded offline messages, chats, contacts, coverage, auth status, and doctor queries. Preserve legacy JSON/tables, expose archive identity and unknown freshness/completeness, signal Unicode truncation and tombstone exclusions, select public full DTOs, and return typed errors with agent-only exit codes. Block unsupported commands before store/network effects.

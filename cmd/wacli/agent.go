@@ -268,6 +268,21 @@ func validateAgentCommand(cmd *cobra.Command, args []string, flags *rootFlags) e
 		}
 	}
 	if path == "messages search" {
+		sortBy, _ := cmd.Flags().GetString("sort")
+		if sortBy != "relevance" && sortBy != "time" {
+			return usage(fmt.Errorf("--sort must be relevance or time"))
+		}
+		if sortBy != "time" && cmd.Flags().Changed("cursor") {
+			return usage(fmt.Errorf("search --cursor requires --sort time; relevance search cannot be paginated"))
+		}
+		if sortBy != "time" && cmd.Flags().Changed("asc") {
+			return usage(fmt.Errorf("search --asc requires --sort time"))
+		}
+		if cmd.Flags().Changed("cursor") {
+			if err := store.ValidateMessagesCursor(flags.cursor); err != nil {
+				return classifyAgentError(err)
+			}
+		}
 		typ, _ := cmd.Flags().GetString("type")
 		typ = strings.ToLower(strings.TrimSpace(typ))
 		media, _ := cmd.Flags().GetBool("has-media")
@@ -326,7 +341,7 @@ func classifyAgentError(err error) *out.AgentError {
 	}
 	var cursor *store.MessagesCursorError
 	if errors.As(err, &cursor) {
-		return &out.AgentError{Code: "invalid_cursor", Message: cursor.Error(), Recovery: "Restart messages list without --cursor using the selected archive and filters.", ExitCode: 2, Cause: err}
+		return &out.AgentError{Code: "invalid_cursor", Message: cursor.Error(), Recovery: "Restart messages list/search without --cursor using the selected archive and filters.", ExitCode: 2, Cause: err}
 	}
 	var identity *localIdentityError
 	if errors.As(err, &identity) {
