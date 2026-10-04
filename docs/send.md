@@ -1,5 +1,7 @@
 # send
 
+The legacy commands below retain their existing behavior. The separate [outbound nucleus](outbound.md) currently exposes offline show/list only; no durable outbound send command or network capability is available in this delivery.
+
 Read when: sending text, files, stickers, locations, polls, status broadcasts, quoted replies, or reactions.
 
 `wacli send` requires authentication, a live connection, and writable mode. Send attempts are bounded and retry once after reconnect for known stale-session/usync timeout failures. `Sent to ...` and JSON `sent: true` mean WhatsApp accepted the send request and returned a message ID; they do not confirm recipient delivery. After a successful send, wacli keeps the connection alive briefly so whatsmeow can handle retry receipts from devices that could not decrypt the first copy. Repeated send commands within 5 seconds print a stderr warning so tight loops make WhatsApp rate-limit/account-risk visible.

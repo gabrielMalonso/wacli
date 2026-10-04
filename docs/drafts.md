@@ -2,7 +2,7 @@
 
 Read when: preparing durable offline previews without sending, or inspecting retained revisions and document snapshots.
 
-`draft create/show/list/update/discard` prepares only local records in the selected account's existing `wacli.db` (schema 30). There is no `draft send`, outbound journal, automatic replay, download, transcription, export command or garbage collection. No command opens/connects a WhatsApp client. A preview does not verify that a recipient exists remotely.
+`draft create/show/list/update/discard` prepares only local records in the selected account's existing `wacli.db` (introduced in schema 30; current schema 31). There is no `draft send`, automatic replay, download, transcription, export command or garbage collection. No draft command opens/connects a WhatsApp client. A preview does not verify that a recipient exists remotely. The [outbound nucleus](outbound.md) adds retained operation/evidence queries only; outbound sending is not available.
 
 ## Commands
 
@@ -67,4 +67,4 @@ Pre-generated IDs and a versioned complete-request hash correlate IPC results; r
 
 Errors are sanitized and remain operation-specific: usage/read-only/invalid cursor exit 2; not found exit 3; archive/identity/document availability exit 4; CAS conflict/known pre-dispatch deadline/uncertain exit 1. Malformed, noncanonical, unsupported-version, hash/identity-mismatched or incompatible persisted payload/review data use a sanitized store error with exit 4 for show/discard, preserving the internal cause; caller ID/input/cursor validation remains exit 2. Optional `error.draft` contains only draft/revision/hash correlation and is absent from unrelated commands. The legacy overall IPC decoder is not claimed to have a new total-memory bound: typed draft input is strictly validated and the draft response read is capped, while the existing outer decoder is unchanged.
 
-Stage06 alone will handle network sending, durable outbound states and idempotency.
+Stage06a adds the local outbound nucleus and readonly show/list; a later separately reviewed integration will handle network sending. Retained operations reference exact immutable revisions, including explicitly selected older revisions of an active draft, and never follow a mutable head.

@@ -26,6 +26,7 @@ A script-friendly WhatsApp CLI built on [`whatsmeow`](https://github.com/tulir/w
 - **Managing chat state.** Read [Chats](chats.md) for archive, pin, mute, and read/unread commands.
 - **Managing local storage.** Read [Store](store.md) for stats, dry-run cleanup, and local-only pruning.
 - **Preparing offline previews.** Read [Local drafts](drafts.md) for durable revisions and document snapshots without sending.
+- **Inspecting retained attempts.** Read [Outbound operations](outbound.md) for offline operation/evidence queries; outbound sending is not enabled.
 - **Sending from scripts.** Read [Send](send.md) for recipient resolution, channels, status broadcasts, replies, mentions, files, and reactions.
 - **Mirroring address-book names.** Read [Contacts import-system](contacts-import-system.md) to import macOS Contacts display names into local wacli metadata.
 - **Wiring up an agent.** Use the [Agent output contract](agent.md) for bounded offline queries, explicit archive identity, and stable errors; read [Doctor](doctor.md) for self-checks.

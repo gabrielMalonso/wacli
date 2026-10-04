@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Outbound: add schema 31 typed local operations bound to exact draft revisions/hashes and account-scoped idempotency keys, CAS checkpoints and immutable scoped observations. Use checked, leased FULL commits without changing legacy pool settings; retain uncertainty and derive monotonic evidence. Add offline agent/JSON `outbound show/list` with bounded operation/observation pages, strict cursors and sanitized archive errors. Sending, replay, IPC/network capability and WA handlers remain unavailable; validation uses fixtures only.
+
 - Drafts: require incoming DM quote senders to match observed peer identity and keep `from_me` coherent with own identity, without restricting group membership or inferring missing mappings. Classify invalid persisted payloads/reviews as sanitized archive failures (exit 4) rather than caller input errors; preserve usage exit 2.
 - Drafts: prepare durable local text/document/contact previews in schema 30 with explicit account/recipient observations, immutable versioned payload hashes, append-only revisions and CAS update/discard. Retain exclusive streaming document snapshots; expose their derived expected path only in full detail. Add narrow agent local-draft-write capability and existing-owner IPC without WA access, pacing, replay or sends; preserve uncertain outcomes and document growing retention with no GC.
 

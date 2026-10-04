@@ -139,6 +139,15 @@ func (d *DB) ReadDraftRecord(ctx context.Context, id string) (DraftRecord, error
 }
 
 func (d *DB) ReadDraft(ctx context.Context, id, revisionID string) (DraftEntry, error) {
+	return readDraft(ctx, d.sql, id, revisionID)
+}
+
+type draftReader interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+// The outbound reservation uses the same validator inside its leased transaction.
+func readDraft(ctx context.Context, reader draftReader, id, revisionID string) (DraftEntry, error) {
 	// Caller syntax stays a usage error; failures after reading persisted data
 	// belong to the archive boundary, even when a model validator is the cause.
 	if err := ValidateDraftID(id); err != nil {
@@ -149,7 +158,10 @@ func (d *DB) ReadDraft(ctx context.Context, id, revisionID string) (DraftEntry, 
 			return DraftEntry{}, err
 		}
 	}
-	r, err := d.ReadDraftRecord(ctx, id)
+	r, err := scanDraftRecord(reader.QueryRowContext(ctx, "SELECT "+draftRecordColumns+" FROM drafts WHERE id=?", id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return DraftEntry{}, DraftFailure("not_found", id, revisionID, "", err)
+	}
 	if err != nil {
 		return DraftEntry{}, err
 	}
@@ -165,7 +177,7 @@ func (d *DB) ReadDraft(ctx context.Context, id, revisionID string) (DraftEntry, 
 	var number, version int
 	var created int64
 	var raw, reviewRaw, hash string
-	err = d.sql.QueryRowContext(ctx, `SELECT revision_no,payload_version,created_at,payload_json,review_json,payload_hash FROM draft_revisions WHERE draft_id=? AND id=?`, id, revisionID).Scan(&number, &version, &created, &raw, &reviewRaw, &hash)
+	err = reader.QueryRowContext(ctx, `SELECT revision_no,payload_version,created_at,payload_json,review_json,payload_hash FROM draft_revisions WHERE draft_id=? AND id=?`, id, revisionID).Scan(&number, &version, &created, &raw, &reviewRaw, &hash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DraftEntry{}, DraftFailure("not_found", id, revisionID, "", err)
 	}
