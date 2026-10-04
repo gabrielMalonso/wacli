@@ -377,10 +377,29 @@ func normalizeDraftReply(reply *DraftReply, target DraftRecipient, account Draft
 	if err != nil {
 		return invalidDraft("reply.sender", "a known user sender is required")
 	}
-	if reply.FromMe && !draftRecipientIsSelf(reply.Sender, account) {
-		return invalidDraft("reply.sender", "outgoing quote does not match the local account")
+	own := DraftRecipient{JID: account.PN, PN: account.PN, LID: account.LID}
+	if reply.FromMe {
+		if !draftRecipientsMatch(reply.Sender, own) {
+			return invalidDraft("reply.sender", "outgoing quote does not match the local account")
+		}
+	} else {
+		if draftRecipientIsSelf(reply.Sender, account) {
+			return invalidDraft("reply.sender", "incoming quote contradicts the observed local account")
+		}
+		if !strings.HasSuffix(target.JID, "@"+types.GroupServer) && !draftRecipientsMatch(reply.Sender, target) {
+			return invalidDraft("reply.sender", "incoming DM quote does not match the observed peer")
+		}
 	}
 	return nil
+}
+
+// Match only shared observed identities, rejecting contradictory pairs. An
+// unmapped LID cannot establish equality with a PN by guessing a phone.
+func draftRecipientsMatch(a, b DraftRecipient) bool {
+	if a.PN != "" && b.PN != "" && a.PN != b.PN || a.LID != "" && b.LID != "" && a.LID != b.LID {
+		return false
+	}
+	return a.JID == b.JID || a.PN != "" && a.PN == b.PN || a.LID != "" && a.LID == b.LID
 }
 
 // NewDraftDocument validates and canonicalizes metadata without reading files.

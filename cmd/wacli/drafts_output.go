@@ -100,16 +100,16 @@ func classifyDraftError(err error) *out.AgentError {
 	if errors.As(err, &existing) {
 		return existing
 	}
-	var validation *store.DraftValidationError
-	if errors.As(err, &validation) {
-		code := "invalid_arguments"
-		if validation.Field == "cursor" {
-			code = "invalid_cursor"
-		}
-		return &out.AgentError{Code: code, Message: validation.Error(), Recovery: "Use explicit JIDs/phones and complete bounded input; discover recipients with contacts search/resolve or chats list.", ExitCode: 2, Cause: err}
-	}
 	var failure *store.DraftError
 	if !errors.As(err, &failure) {
+		var validation *store.DraftValidationError
+		if errors.As(err, &validation) {
+			code := "invalid_arguments"
+			if validation.Field == "cursor" {
+				code = "invalid_cursor"
+			}
+			return &out.AgentError{Code: code, Message: validation.Error(), Recovery: "Use explicit JIDs/phones and complete bounded input; discover recipients with contacts search/resolve or chats list.", ExitCode: 2, Cause: err}
+		}
 		code := "store_unavailable"
 		if lock.IsLocked(err) {
 			code = "store_locked"
@@ -129,7 +129,7 @@ func classifyDraftError(err error) *out.AgentError {
 		message = "Requested draft, revision or quoted text was not found locally."
 	case "store_unavailable":
 		exit = 4
-		message = "Selected local draft archive is unavailable; retained snapshots may remain."
+		message = "Selected local draft archive is unreadable or contains incompatible/corrupt records; retained snapshots may remain."
 		recovery = "Inspect doctor --agent against the selected local store without --connect."
 	case "identity_unavailable":
 		exit = 4

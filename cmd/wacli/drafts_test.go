@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -251,5 +252,73 @@ func TestDraftEnvironmentStoreSelectionAndLiveWALReads(t *testing.T) {
 	}
 	if !reflect.DeepEqual(before, after) {
 		t.Fatal("reads changed archive/session/LOCK/WAL/perms")
+	}
+}
+
+func draftCorruptionCases() []struct{ name, statement string } {
+	return []struct{ name, statement string }{
+		{"malformed payload", `UPDATE draft_revisions SET payload_json='{' WHERE id=?`},
+		{"payload version", `UPDATE draft_revisions SET payload_json=replace(payload_json,'"version":1','"version":2') WHERE id=?`},
+		{"row version", `UPDATE draft_revisions SET payload_version=2 WHERE id=?`},
+		{"noncanonical payload", `UPDATE draft_revisions SET payload_json=' '||payload_json WHERE id=?`},
+		{"hash mismatch", `UPDATE draft_revisions SET payload_hash='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' WHERE id=?`},
+		{"malformed review", `UPDATE draft_revisions SET review_json='{"SECRET_INTERNAL_PATH":' WHERE id=?`},
+		{"incompatible review", `UPDATE draft_revisions SET review_json=replace(review_json,'"requested_jid":','"requested_jid":"SECRET_INTERNAL_PATH","ignored":') WHERE id=?`},
+		{"noncanonical review", `UPDATE draft_revisions SET review_json=' '||review_json WHERE id=?`},
+		{"unknown review field", `UPDATE draft_revisions SET review_json=replace(review_json,'{','{"SECRET_INTERNAL_PATH":0,') WHERE id=?`},
+	}
+}
+func corruptDraftFixture(t *testing.T, dir, rid, statement string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", filepath.Join(dir, "wacli.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec("DROP TRIGGER draft_revision_no_update;PRAGMA ignore_check_constraints=ON"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(statement, rid); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestDraftPersistedCorruptionUsesStoreBoundaryForShowAndDiscard(t *testing.T) {
+	t.Setenv("WACLI_READONLY", "0")
+	for _, tc := range draftCorruptionCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := seedLocalReadStore(t)
+			dto, stderr, err := draftCLI(t, dir, "create", "--to", localReadPN, "--message", "saved")
+			if err != nil {
+				t.Fatal(err, stderr)
+			}
+			corruptDraftFixture(t, dir, dto.RevisionID, tc.statement)
+			for _, args := range [][]string{{"show", dto.ID}, {"discard", dto.ID, "--if-revision", dto.RevisionID}} {
+				_, stderr, err := draftCLI(t, dir, args...)
+				if err == nil || commandExitCode(err) != 4 {
+					t.Fatal("persisted corruption classified as caller input", err, stderr)
+				}
+				e := decodeAgentTest(t, stderr)
+				if e.Error.Code != "store_unavailable" || strings.Contains(stderr, "SECRET") || strings.Contains(e.Error.Message+e.Error.Recovery, dir) || strings.Contains(e.Error.Recovery, "complete bounded input") {
+					t.Fatal("unsafe store boundary", stderr)
+				}
+			}
+			db, err := sql.Open("sqlite3", filepath.Join(dir, "wacli.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			var state string
+			if err := db.QueryRow("SELECT state FROM drafts WHERE id=?", dto.ID).Scan(&state); err != nil || state != "active" {
+				t.Fatal("corrupt discard mutated record", state, err)
+			}
+		})
+	}
+	// A typed store boundary takes priority while retaining the validator cause.
+	cause := &store.DraftValidationError{Field: "payload", Reason: "SECRET"}
+	err := store.DraftFailure("store_unavailable", strings.Repeat("a", 32), strings.Repeat("b", 32), "", cause)
+	var preserved *store.DraftValidationError
+	if !errors.As(err, &preserved) || classifyDraftError(err).ExitCode != 4 {
+		t.Fatal("lost store provenance", err)
 	}
 }

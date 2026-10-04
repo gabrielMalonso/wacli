@@ -315,3 +315,46 @@ func TestDraftRevisionMetadataDoesNotChangePayloadHash(t *testing.T) {
 		t.Fatal("accepted unrelated review target")
 	}
 }
+
+func TestDraftReplySenderCoherenceFromObservedIdentities(t *testing.T) {
+	pn1, pn2, pn3 := "15550000001@s.whatsapp.net", "15550000002@s.whatsapp.net", "15550000003@s.whatsapp.net"
+	peer := DraftRecipient{JID: pn2, PN: pn2, LID: "90002@lid"}
+	own := DraftRecipient{JID: pn1, PN: pn1, LID: "90001@lid"}
+	for _, tc := range []struct {
+		name           string
+		target, sender DraftRecipient
+		fromMe, valid  bool
+	}{
+		{"third party DM", peer, DraftRecipient{JID: pn3}, false, false},
+		{"own incoming DM", peer, own, false, false},
+		{"own LID incoming DM", peer, DraftRecipient{JID: "90001@lid"}, false, false},
+		{"PN peer", peer, DraftRecipient{JID: pn2}, false, true},
+		{"LID peer via observed target pair", peer, DraftRecipient{JID: "90002@lid"}, false, true},
+		{"mapped sender PN to requested LID", DraftRecipient{JID: "90002@lid", PN: pn2}, peer, false, true},
+		{"contradictory PN", peer, DraftRecipient{JID: "90002@lid", PN: pn3}, false, false},
+		{"contradictory LID", peer, DraftRecipient{JID: pn2, LID: "90003@lid"}, false, false},
+		{"same unresolved LID", DraftRecipient{JID: "90099@lid"}, DraftRecipient{JID: "90099@lid"}, false, true},
+		{"different unresolved LID", DraftRecipient{JID: "90099@lid"}, DraftRecipient{JID: "90098@lid"}, false, false},
+		{"unresolved LID cannot infer PN", DraftRecipient{JID: pn2}, DraftRecipient{JID: "90099@lid"}, false, false},
+		{"unresolved target cannot infer PN", DraftRecipient{JID: "90099@lid"}, DraftRecipient{JID: pn2}, false, false},
+		{"group third party", DraftRecipient{JID: "123@g.us"}, DraftRecipient{JID: pn3}, false, true},
+		{"group unresolved user", DraftRecipient{JID: "123@g.us"}, DraftRecipient{JID: "90099@lid"}, false, true},
+		{"group own incoming", DraftRecipient{JID: "123@g.us"}, own, false, false},
+		{"outgoing DM", peer, own, true, true},
+		{"outgoing group", DraftRecipient{JID: "123@g.us"}, own, true, true},
+		{"outgoing own LID", peer, DraftRecipient{JID: "90001@lid"}, true, true},
+		{"outgoing wrong user", peer, DraftRecipient{JID: pn3}, true, false},
+		{"outgoing contradictory pair", peer, DraftRecipient{JID: pn1, LID: "90003@lid"}, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := draftTextFixture("reply")
+			data.Account = DraftIdentity{PN: pn1, LID: "90001@lid"}
+			data.Recipient = tc.target
+			data.Reply = &DraftReply{ChatJID: tc.target.JID, ID: "real", Sender: tc.sender, FromMe: tc.fromMe, Text: "real text"}
+			_, err := NewDraftPayload(data)
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v error=%v", tc.valid, err)
+			}
+		})
+	}
+}

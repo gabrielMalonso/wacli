@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -138,6 +139,16 @@ func (d *DB) ReadDraftRecord(ctx context.Context, id string) (DraftRecord, error
 }
 
 func (d *DB) ReadDraft(ctx context.Context, id, revisionID string) (DraftEntry, error) {
+	// Caller syntax stays a usage error; failures after reading persisted data
+	// belong to the archive boundary, even when a model validator is the cause.
+	if err := ValidateDraftID(id); err != nil {
+		return DraftEntry{}, err
+	}
+	if revisionID != "" {
+		if err := ValidateDraftID(revisionID); err != nil {
+			return DraftEntry{}, err
+		}
+	}
 	r, err := d.ReadDraftRecord(ctx, id)
 	if err != nil {
 		return DraftEntry{}, err
@@ -146,31 +157,50 @@ func (d *DB) ReadDraft(ctx context.Context, id, revisionID string) (DraftEntry, 
 		revisionID = r.HeadRevisionID
 	}
 	if err := ValidateDraftID(revisionID); err != nil {
-		return DraftEntry{}, err
+		return DraftEntry{}, DraftFailure("store_unavailable", id, "", "", err)
 	}
-	var number int
+	fail := func(err error) (DraftEntry, error) {
+		return DraftEntry{}, DraftFailure("store_unavailable", id, revisionID, "", err)
+	}
+	var number, version int
 	var created int64
 	var raw, reviewRaw, hash string
-	err = d.sql.QueryRowContext(ctx, `SELECT revision_no,created_at,payload_json,review_json,payload_hash FROM draft_revisions WHERE draft_id=? AND id=?`, id, revisionID).Scan(&number, &created, &raw, &reviewRaw, &hash)
+	err = d.sql.QueryRowContext(ctx, `SELECT revision_no,payload_version,created_at,payload_json,review_json,payload_hash FROM draft_revisions WHERE draft_id=? AND id=?`, id, revisionID).Scan(&number, &version, &created, &raw, &reviewRaw, &hash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DraftEntry{}, DraftFailure("not_found", id, revisionID, "", err)
 	}
 	if err != nil {
-		return DraftEntry{}, err
+		return fail(err)
+	}
+	if version != DraftPayloadVersion || number < 1 {
+		return fail(fmt.Errorf("invalid stored draft revision version or number"))
 	}
 	payload, err := DecodeDraftPayload([]byte(raw))
 	if err != nil {
-		return DraftEntry{}, err
+		return fail(err)
 	}
 	if payload.Hash() != hash || payload.Data().Account.PN != r.AccountID {
-		return DraftEntry{}, fmt.Errorf("invalid stored draft identity or hash")
+		return fail(fmt.Errorf("invalid stored draft identity or hash"))
 	}
 	var review DraftReviewSnapshot
+	if len(reviewRaw) > MaxDraftPayloadBytes {
+		return fail(fmt.Errorf("invalid stored draft review size"))
+	}
 	if err := json.Unmarshal([]byte(reviewRaw), &review); err != nil {
-		return DraftEntry{}, err
+		return fail(err)
 	}
 	revision, err := NewDraftRevision(id, revisionID, time.Unix(0, created), payload, review)
-	return DraftEntry{r, revision, number}, err
+	if err != nil {
+		return fail(err)
+	}
+	canonical, err := json.Marshal(revision.Review())
+	if err != nil {
+		return fail(err)
+	}
+	if !bytes.Equal(canonical, []byte(reviewRaw)) {
+		return fail(fmt.Errorf("noncanonical stored draft review"))
+	}
+	return DraftEntry{r, revision, number}, nil
 }
 
 // WriteDraft rechecks CAS/account in the transaction even after preparation.

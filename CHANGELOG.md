@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Drafts: require incoming DM quote senders to match observed peer identity and keep `from_me` coherent with own identity, without restricting group membership or inferring missing mappings. Classify invalid persisted payloads/reviews as sanitized archive failures (exit 4) rather than caller input errors; preserve usage exit 2.
 - Drafts: prepare durable local text/document/contact previews in schema 30 with explicit account/recipient observations, immutable versioned payload hashes, append-only revisions and CAS update/discard. Retain exclusive streaming document snapshots; expose their derived expected path only in full detail. Add narrow agent local-draft-write capability and existing-owner IPC without WA access, pacing, replay or sends; preserve uncertain outcomes and document growing retention with no GC.
 
 - History: retain latest recovery attempt and last successful observation per requested identity in schema 29, with bounded checkpoints, conditional finalization, typed IPC correlation and explicit uncertain outcomes. Add opt-in `history coverage --evidence` independent of chat rows/anchors and explicit `--agent history backfill` with live source and operation-specific typed failures; preserve raw local coverage and unknown remote completeness, and refuse unknown/newer archives before writer-side journal or permission changes.

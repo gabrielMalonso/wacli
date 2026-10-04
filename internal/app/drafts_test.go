@@ -214,3 +214,32 @@ func TestDraftQuoteUnavailableAndUnknownSender(t *testing.T) {
 		})
 	}
 }
+
+func TestDraftRejectsIncompatibleDMQuoteBeforeSnapshotOrCommit(t *testing.T) {
+	for _, sender := range []string{"15550000003@s.whatsapp.net", "15550000001@s.whatsapp.net", "90001@lid"} {
+		t.Run(sender, func(t *testing.T) {
+			a := draftAppFixture(t)
+			chat := "15550000002@s.whatsapp.net"
+			if err := a.DB().UpsertChat(chat, "dm", "fixture", time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.DB().UpsertMessage(store.UpsertMessageParams{ChatJID: chat, MsgID: "real", SenderJID: sender, Text: "real text", Timestamp: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			req := draftAppRequest(t, a, DraftInput{To: chat, File: "unopened-fixture-document", ReplyTo: "real"})
+			opens := 0
+			_, err := a.WriteLocalDraft(context.Background(), req, func(string) (*os.File, error) { opens++; return nil, errors.New("must not open") })
+			var validation *store.DraftValidationError
+			if !errors.As(err, &validation) || validation.Field != "reply.sender" || opens != 0 {
+				t.Fatal("quote not rejected before snapshot", err, opens)
+			}
+			if _, err := os.Stat(filepath.Join(a.StoreDir(), store.DraftMediaDirectory)); !os.IsNotExist(err) {
+				t.Fatal("snapshot effects", err)
+			}
+			page, err := a.DB().ListDrafts(context.Background(), a.StoreDir(), true, 20, "")
+			if err != nil || len(page.Items) != 0 {
+				t.Fatal("draft committed", err)
+			}
+		})
+	}
+}

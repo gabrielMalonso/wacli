@@ -15,6 +15,7 @@ import (
 
 	"github.com/openclaw/wacli/internal/app"
 	"github.com/openclaw/wacli/internal/lock"
+	"github.com/openclaw/wacli/internal/store"
 )
 
 func draftOwnerFixture(t *testing.T, readOnly bool) (string, *app.App) {
@@ -309,5 +310,66 @@ func TestDraftIPCExpiresQueuedWriteWithoutDispatch(t *testing.T) {
 	}
 	if _, err := a.DB().ReadDraftRecord(context.Background(), second.Draft.DraftID); err == nil {
 		t.Fatal("queued draft exists")
+	}
+}
+
+func TestDraftProductionBinaryReviewRegressions(t *testing.T) {
+	binary := os.Getenv("WACLI_DRAFT_E2E_BINARY")
+	if binary == "" {
+		t.Skip("set WACLI_DRAFT_E2E_BINARY to a freshly built local binary")
+	}
+	t.Setenv("WACLI_READONLY", "0")
+	t.Run("DM sender before snapshot", func(t *testing.T) {
+		dir := seedLocalReadStore(t)
+		sourceDir := t.TempDir()
+		source := filepath.Join(sourceDir, "fixture.txt")
+		t.Setenv("WACLI_MEDIA_ROOTS", sourceDir)
+		if err := os.WriteFile(source, []byte("local fixture"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		db, err := store.Open(filepath.Join(dir, "wacli.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.UpsertMessage(store.UpsertMessageParams{ChatJID: localReadLID, MsgID: "third", SenderJID: "15550000003@s.whatsapp.net", Text: "real fixture quote", Timestamp: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		stdout, stderr, err := runDraftBinary(t, binary, []string{"--agent", "--store", dir, "draft", "create", "--to", localReadPN, "--file", source, "--reply-to", "third"}, false)
+		var process *exec.ExitError
+		if !errors.As(err, &process) || process.ExitCode() != 2 || stdout != "" || decodeAgentTest(t, stderr).Error.Code != "invalid_arguments" {
+			t.Fatal("DM quote accepted", err, stdout, stderr)
+		}
+		if _, err := os.Stat(filepath.Join(dir, store.DraftMediaDirectory)); !os.IsNotExist(err) {
+			t.Fatal("snapshot before sender validation", err)
+		}
+		stdout, stderr, err = runDraftBinary(t, binary, []string{"--agent", "--store", dir, "draft", "create", "--to", localReadPN, "--message", "valid mapped reply", "--reply-to", "m1"}, false)
+		if err != nil || !decodeAgentTest(t, stdout).Success {
+			t.Fatal("verified PN/LID reply rejected", err, stderr)
+		}
+	})
+	for _, tc := range draftCorruptionCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := seedLocalReadStore(t)
+			stdout, stderr, err := runDraftBinary(t, binary, []string{"--agent", "--store", dir, "draft", "create", "--to", localReadPN, "--message", "saved"}, false)
+			if err != nil {
+				t.Fatal(err, stderr)
+			}
+			e := decodeAgentTest(t, stdout)
+			var dto draftDTO
+			if err := json.Unmarshal(e.Data, &dto); err != nil {
+				t.Fatal(err)
+			}
+			corruptDraftFixture(t, dir, dto.RevisionID, tc.statement)
+			for _, args := range [][]string{{"show", dto.ID}, {"discard", dto.ID, "--if-revision", dto.RevisionID}} {
+				stdout, stderr, err := runDraftBinary(t, binary, append([]string{"--agent", "--store", dir, "draft"}, args...), false)
+				var process *exec.ExitError
+				if !errors.As(err, &process) || process.ExitCode() != 4 || stdout != "" || decodeAgentTest(t, stderr).Error.Code != "store_unavailable" || strings.Contains(stderr, "SECRET") {
+					t.Fatal("corrupt archive exit/envelope", err, stdout, stderr)
+				}
+			}
+		})
 	}
 }
