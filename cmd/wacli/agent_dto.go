@@ -204,13 +204,15 @@ type agentChats struct {
 	Chats []agentChat `json:"chats"`
 }
 
-func writeAgentChats(flags *rootFlags, chats []store.Chat, limit int) error {
+func writeAgentChats(flags *rootFlags, page store.ChatsPage, limit int) error {
+	chats := page.Chats
 	data := agentChats{Chats: make([]agentChat, 0, len(chats))}
 	for _, c := range chats {
 		data.Chats = append(data.Chats, agentChatDTO(c, flags.detail))
 	}
 	meta := agentMeta(flags)
 	meta.Limit = limit
+	meta.Page = &out.AgentPage{Returned: len(chats), HasMore: page.HasMore, NextCursor: page.NextCursor}
 	return out.WriteAgentJSON(os.Stdout, flags.agentAccount, meta, data)
 }
 

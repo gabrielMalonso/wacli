@@ -177,7 +177,6 @@ func TestCursorPreflightAndFlagIntent(t *testing.T) {
 	for _, args := range [][]string{
 		{"--cursor", "secret-token-fragment", "send", "text"},
 		{"--agent", "--cursor", "secret-token-fragment", "send", "text"},
-		{"--agent", "--cursor", "secret-token-fragment", "chats", "list"},
 		{"--agent=false", "--cursor", "secret-token-fragment", "messages", "list"},
 	} {
 		stdout, stderr, err := runAgentTest(t, args...)

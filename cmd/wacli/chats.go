@@ -78,12 +78,16 @@ func newChatsListCmd(flags *rootFlags) *cobra.Command {
 				Muted:    boolFilter(muted, noMuted),
 				Unread:   boolFilter(unread, noUnread),
 			}
+			if flags.agent {
+				page, err := a.DB().ListChatsPage(store.ListChatsPageParams{ChatListFilter: filter, StoreRef: a.StoreDir(), Cursor: flags.cursor})
+				if err != nil {
+					return err
+				}
+				return writeAgentChats(flags, page, limit)
+			}
 			chats, err := a.DB().ListChatsFiltered(filter)
 			if err != nil {
 				return err
-			}
-			if flags.agent {
-				return writeAgentChats(flags, chats, limit)
 			}
 			chats = resolveStoredChats(ctx, a, chats)
 			if flags.asJSON {
