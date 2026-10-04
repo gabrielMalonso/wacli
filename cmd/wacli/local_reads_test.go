@@ -31,6 +31,7 @@ func localReadCommands(dir string) [][]string {
 		{"messages", "export", "--chat", localReadPN},
 		{"chats", "list"},
 		{"chats", "show", "--jid", localReadPN},
+		{"contacts", "list"},
 		{"contacts", "search", "Fixture Alias"},
 		{"contacts", "show", "--jid", localReadLID},
 		{"contacts", "resolve", localReadLID},

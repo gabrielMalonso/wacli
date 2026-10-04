@@ -61,7 +61,7 @@ func agentTestCommands() [][]string {
 		{"messages", "show", "--chat", localReadPN, "--id", "m1"},
 		{"messages", "context", "--chat", localReadPN, "--id", "m1"},
 		{"chats", "list"}, {"chats", "show", "--jid", localReadPN},
-		{"contacts", "search", "Fixture"}, {"contacts", "show", "--jid", localReadLID},
+		{"contacts", "list"}, {"contacts", "search", "Fixture"}, {"contacts", "show", "--jid", localReadLID},
 		{"contacts", "resolve", localReadLID, "999999@lid", localReadPN},
 		{"history", "coverage", "--include-blocked"}, {"auth", "status"}, {"doctor"},
 	}
