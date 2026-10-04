@@ -1,6 +1,6 @@
 # Agent output contract
 
-Read when: integrating a coding agent with bounded offline archive queries and stable errors.
+Read when: integrating a coding agent with bounded archive queries, explicit history recovery, and stable errors.
 
 `--agent` enables JSON contract **v1**. `--detail compact|full` chooses its public detail level; compact is the default. Flags work before or after the subcommand. `--agent --json` still returns v1. Existing `--json` envelopes, field names, list defaults, tables, and `--full` table behavior remain unchanged. `--detail` without `--agent` is an error; `--full` does not select full agent detail.
 
@@ -21,13 +21,33 @@ wacli --store /path/to/archive --agent doctor
 | `chats list` / `chats show` | `chats` array / one chat DTO | Archived, pinned, stored mute deadline |
 | `contacts list/search` / `contacts show` | `contacts` array / one contact DTO | System name, tags, metadata update timestamp |
 | `contacts resolve` | `resolutions` array, one per input | Untruncated names |
-| `history coverage` | `coverage` array with local message counts, oldest/newest message dates and anchor status | Untruncated names |
+| `history coverage` | `coverage` array with local counts/dates/anchor status; opt-in `--evidence` adds independent `recovery_evidence` | Untruncated names; evidence options, anchors and checkpoint measurements |
+| `history backfill --chat JID` | Explicit live action: chat, attempt ID, requests/responses, net growth, stop reason and persisted `evidence` | Evidence options, anchors and scoped global sync counter |
 | `auth status` | Local authentication observation, public linked JID/phone when known, `session_revoked`, `connected` | Same observation |
 | `doctor` (offline) | Auth observation, lock state, FTS availability and heartbeat activity date | Store counts and `last_message_at` |
 
-Other commands, including mutations, downloads, `history fill/backfill`, and `doctor --connect`, fail before their argument validators or store/network operations with `unsupported_command`. Help, root help without a command, and version retain their normal text semantics. Unknown commands/flags are usage errors. Shell completion is outside the agent contract. `--events` is rejected with `--agent` to keep one error envelope on stderr.
+Other commands, including mutations, downloads, `history fill`, and `doctor --connect`, fail before their argument validators or store/network operations with `unsupported_command`. Help, root help without a command, and version retain their normal text semantics. Unknown commands/flags are usage errors. Shell completion is outside the agent contract. `--events` is rejected with `--agent` to keep one error envelope on stderr.
 
 All archive queries use the existing read-only opener, validate the archive schema without migration, and work while the writer lock is held. They never initialize a missing archive. Authentication status reads the public session JID and local revocation observation, without loading credentials or opening a WhatsApp client; an existing directory without a session reports unauthenticated. Offline doctor requires a readable current-schema archive; store failures are error envelopes with exit 4. Inspect session state separately with `auth status --agent` even if `wacli.db` is unreadable, or run legacy `doctor --json` (without `--agent` or `--connect`) to retain its diagnostic report, including archive errors. Neither command connects.
+
+## History recovery
+
+`--agent history backfill --chat JID` explicitly requests recovery using the existing standalone runner or connected sync owner. It does not authorize any other mutation, connection command, or download. The central command capability remains an explicit allowlist: unsupported, local read, or history recovery. `--read-only` and `WACLI_READONLY=1` reject this action with `read_only` (exit 2); malformed options and `--events` fail with exit 2 before opening/delegating. Bounds remain count 1–500, up to 100 batches, wait/idle up to five minutes (legacy nonpositive defaults preserved). There is no new executor, replay, journal or automatic retry policy.
+
+`meta.source="live"` describes the action's capability, including parsing, policy and pre-dispatch failures; it does not assert a request reached the primary. Coverage remains `source="local"`. Both freshness and completeness stay `unknown`. Success exposes only the final successful operation observation; partial results on errors are available through retained evidence when persistence succeeded.
+
+Recovery failures may include optional typed `error.history = {attempt_id, phase, outcome, correlation_confirmed}`. Other commands omit it. Phases are `preparing`, `observing`, `dispatch_possible`, `finalizing`; outcomes are `not_dispatched` or `uncertain`. A generated 32-hex attempt ID is carried unchanged through IPC, persistence and replies. It is internal correlation, not an idempotency/replay key or public flag. A missing/mismatched reply or old owner cannot confirm retention: correlation is false, and the outcome is uncertain after possible dispatch. An ID can already have been replaced in the latest slot. Do not parse `recovery` prose to recover correlation.
+
+`no_local_anchor` (exit 3) and `store_state` (exit 4) describe proven pre-dispatch conditions only. Operational refusal is exit 1. Once dispatch is possible, errors/cancellation/lost output prioritize `backfill_outcome_uncertain` (exit 1), with safe phase/correlation and no SQL/path/anchor causes. `not_dispatched` does not mean the archive was untouched: standalone connection or ordinary owner sync may have persisted messages. A delivered success followed by output failure also never proves rollback. Inspect evidence and local coverage before deciding whether another explicit attempt is appropriate.
+
+`history coverage --evidence` retains legacy `data.coverage` and adds top-level `data.recovery_evidence`, independent of chat rows. Explicit `--chat` inputs and their currently verified aliases are consulted even without a chat/anchor or when coverage excludes blocked chats; without `--chat`, only returned coverage scopes are consulted. At most 200 inputs / 400 deduplicated keys are fetched by primary key; no entire evidence catalogue scan. Each requested key has nullable `latest` and `last_success`: null means **no retained record**, not never executed. Two slots per input bound retained attempts for that input; new inputs grow the table. Reads never migrate, repair or write evidence.
+
+Compact evidence contains state, ID, operation times, immutable scope, useful counters/growth/stop reason and callback observation times. Full adds options/anchors/checkpoint counts and the explicitly scoped legacy global counter. `unfinalized` is neither a running nor a crashed assertion. Local raw counts/dates are separate observations, including removals/edits/revocations; absent chat rows do not prove no orphan messages. `primary_no_more_messages` is a response observed during that window, not a completeness certificate for global/future history. There is no network correlation ID: late replies within an open window can be observed, while callbacks after closure are ignored. Identity relation compares account and verified pair facts only; account changes invalidate matching, absent facts remain unknown, and `matching_snapshot` promises no continuity after restoration or mapping changes. No age-based freshness or file/catalog generation is inferred.
+
+```bash
+wacli --account personal --agent history coverage --chat 123@s.whatsapp.net --evidence
+wacli --account personal --agent history backfill --chat 123@s.whatsapp.net --requests 1
+```
 
 ## Envelope and identity
 

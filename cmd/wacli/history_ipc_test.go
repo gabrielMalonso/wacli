@@ -17,11 +17,12 @@ import (
 	"github.com/openclaw/wacli/internal/app"
 	"github.com/openclaw/wacli/internal/config"
 	"github.com/openclaw/wacli/internal/lock"
+	"github.com/openclaw/wacli/internal/store"
 )
 
 func fixtureBackfillRequest(chat string) sendDelegateRequest {
 	return sendDelegateRequest{Version: sendDelegateVersion, Kind: historyBackfillKind,
-		Backfill: &backfillDelegateOptions{ChatJID: chat, Count: 50, Requests: 1, WaitMS: 20, IdleMS: 1}}
+		Backfill: &backfillDelegateOptions{AttemptID: "0123456789abcdef0123456789abcdef", ChatJID: chat, Count: 50, Requests: 1, WaitMS: 20, IdleMS: 1}}
 }
 
 func TestHistoryBackfillDelegatesThroughLockedFixtureStore(t *testing.T) {
@@ -36,7 +37,7 @@ func TestHistoryBackfillDelegatesThroughLockedFixtureStore(t *testing.T) {
 	stop, err := startSendDelegateServerForStore(context.Background(), dir, sendSpacing{}, func(_ context.Context, req sendDelegateRequest) (sendDelegateResponse, error) {
 		requests <- req
 		return sendDelegateResponse{OK: true, Backfill: &app.BackfillResult{
-			ChatJID: req.Backfill.ChatJID, RequestsSent: 2, ResponsesSeen: 1,
+			AttemptID: req.Backfill.AttemptID, ChatJID: req.Backfill.ChatJID, RequestsSent: 2, ResponsesSeen: 1,
 			MessagesAdded: 3, MessagesSynced: 5, StopReason: app.BackfillStopPrimaryNoMore,
 		}}, nil
 	})
@@ -69,7 +70,7 @@ func TestHistoryBackfillGuardsBeforeDelegation(t *testing.T) {
 	skipPresenceDelegateSocketTestOnUnsupportedOS(t)
 	for _, args := range [][]string{
 		{"--read-only", "history", "backfill", "--chat", "123@g.us"},
-		{"--agent", "history", "backfill", "--chat", "123@g.us"},
+		{"--agent", "--read-only", "history", "backfill", "--chat", "123@g.us"},
 		{"history", "backfill", "--chat", "123@g.us", "--count", "501"},
 		{"history", "backfill", "--chat", "123@g.us", "--wait", "6m"},
 		{"history", "backfill", "--chat", "123@g.us", "--requests", "101"},
@@ -115,7 +116,7 @@ func TestHistoryBackfillSerializesAndExpiresQueuedRequests(t *testing.T) {
 				return sendDelegateResponse{}, ctx.Err()
 			}
 		}
-		return sendDelegateResponse{OK: true, Backfill: &app.BackfillResult{ChatJID: req.Backfill.ChatJID}}, nil
+		return sendDelegateResponse{OK: true, Backfill: &app.BackfillResult{AttemptID: req.Backfill.AttemptID, ChatJID: req.Backfill.ChatJID}}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -191,6 +192,9 @@ func TestHistoryBackfillServerValidatesBeforeDispatch(t *testing.T) {
 		func(r *sendDelegateRequest) { r.Backfill.WaitMS = 1 << 62 },
 		func(r *sendDelegateRequest) { r.Backfill.Count = 501 },
 		func(r *sendDelegateRequest) { r.Version++ },
+		func(r *sendDelegateRequest) { r.Backfill.AttemptID = "" },
+		func(r *sendDelegateRequest) { r.Backfill.AttemptID = strings.Repeat("x", 1000) },
+		func(r *sendDelegateRequest) { r.Backfill.AttemptID = "ABCDEF0123456789abcdef01234567890" },
 	} {
 		server, client := net.Pipe()
 		_ = client.SetDeadline(time.Now().Add(time.Second))
@@ -283,7 +287,7 @@ func TestHistoryBackfillUsesOnlySelectedAccountSocket(t *testing.T) {
 		defer lk.Release()
 		stop, err := startSendDelegateServerForStore(context.Background(), dir, sendSpacing{}, func(_ context.Context, req sendDelegateRequest) (sendDelegateResponse, error) {
 			selected.Store(int64(i + 1))
-			return sendDelegateResponse{OK: true, Backfill: &app.BackfillResult{ChatJID: req.Backfill.ChatJID}}, nil
+			return sendDelegateResponse{OK: true, Backfill: &app.BackfillResult{AttemptID: req.Backfill.AttemptID, ChatJID: req.Backfill.ChatJID}}, nil
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -326,7 +330,7 @@ func TestHistoryBackfillTimeoutAfterDispatchIsUncertainAndOwnerContinues(t *test
 			<-ctx.Done()
 			return sendDelegateResponse{}, ctx.Err()
 		}
-		return sendDelegateResponse{OK: true, Backfill: &app.BackfillResult{ChatJID: req.Backfill.ChatJID}}, nil
+		return sendDelegateResponse{OK: true, Backfill: &app.BackfillResult{AttemptID: req.Backfill.AttemptID, ChatJID: req.Backfill.ChatJID}}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -376,5 +380,43 @@ func TestHistoryBackfillServerStopCancelsOperationAndIdleConnections(t *testing.
 	}
 	if err := <-request; err == nil {
 		t.Fatal("stopped owner reported success")
+	}
+}
+
+func TestHistoryBackfillAttemptCorrelationAndTypedFailure(t *testing.T) {
+	skipPresenceDelegateSocketTestOnUnsupportedOS(t)
+	for _, kind := range []string{"success_mismatch", "error_mismatch", "missing_typed", "matching_error"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := shortPresenceDelegateStoreDir(t)
+			stop, err := startSendDelegateServerForStore(context.Background(), dir, sendSpacing{}, func(_ context.Context, req sendDelegateRequest) (sendDelegateResponse, error) {
+				id := req.Backfill.AttemptID
+				switch kind {
+				case "success_mismatch":
+					return sendDelegateResponse{OK: true, Backfill: &app.BackfillResult{AttemptID: "1123456789abcdef0123456789abcdef"}}, nil
+				case "error_mismatch":
+					return sendDelegateResponse{Error: "fixture error", HistoryFailure: &app.HistoryFailure{AttemptID: "1123456789abcdef0123456789abcdef", Code: "no_local_anchor", Outcome: "not_dispatched", Phase: store.HistoryObserving}}, nil
+				case "missing_typed":
+					return sendDelegateResponse{Error: "unsupported send kind"}, nil
+				default:
+					return sendDelegateResponse{}, &app.BackfillError{History: app.HistoryFailure{AttemptID: id, Code: "no_local_anchor", Outcome: "not_dispatched", Phase: store.HistoryObserving, CorrelationConfirmed: true}, Cause: errors.New("fixture anchor absent")}
+				}
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stop()
+			_, err = delegateSend(context.Background(), &rootFlags{storeDir: dir, timeout: time.Second}, fixtureBackfillRequest("123@g.us"))
+			var typed *app.BackfillError
+			if !errors.As(err, &typed) || typed.History.AttemptID != fixtureBackfillRequest("123@g.us").Backfill.AttemptID {
+				t.Fatalf("untyped/correlation: %v", err)
+			}
+			if kind == "matching_error" {
+				if typed.History.Code != "no_local_anchor" || typed.History.Outcome != "not_dispatched" || !typed.History.CorrelationConfirmed {
+					t.Fatalf("failure changed: %+v", typed.History)
+				}
+			} else if typed.History.Code != "backfill_outcome_uncertain" || typed.History.Outcome != "uncertain" || typed.History.CorrelationConfirmed {
+				t.Fatalf("false certainty: %+v", typed.History)
+			}
+		})
 	}
 }

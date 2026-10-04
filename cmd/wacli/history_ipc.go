@@ -2,31 +2,36 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/openclaw/wacli/internal/app"
+	"github.com/openclaw/wacli/internal/store"
 )
 
 // A distinct kind makes older owners reject this request explicitly.
 const historyBackfillKind = "history_backfill"
 
 type backfillDelegateOptions struct {
-	ChatJID  string `json:"chat_jid"`
-	Count    int    `json:"count"`
-	Requests int    `json:"requests"`
-	WaitMS   int64  `json:"wait_ms"`
-	IdleMS   int64  `json:"idle_ms"`
+	AttemptID string `json:"attempt_id"`
+	ChatJID   string `json:"chat_jid"`
+	Count     int    `json:"count"`
+	Requests  int    `json:"requests"`
+	WaitMS    int64  `json:"wait_ms"`
+	IdleMS    int64  `json:"idle_ms"`
 }
 
 func (o backfillDelegateOptions) options() (app.BackfillOptions, error) {
+	if err := app.ValidateHistoryAttemptID(o.AttemptID); err != nil {
+		return app.BackfillOptions{}, err
+	}
 	// Validate before multiplying durations to prevent overflow in untrusted IPC.
 	if o.WaitMS < 0 || o.IdleMS < 0 || o.WaitMS > int64(5*time.Minute/time.Millisecond) || o.IdleMS > int64(5*time.Minute/time.Millisecond) {
 		return app.BackfillOptions{}, fmt.Errorf("backfill wait and idle must be between 0 and 5m")
 	}
 	return app.PrepareBackfillOptions(app.BackfillOptions{
-		ChatJID: o.ChatJID, Count: o.Count, Requests: o.Requests,
+		AttemptID: o.AttemptID, ChatJID: o.ChatJID, Count: o.Count, Requests: o.Requests,
 		WaitPerRequest: time.Duration(o.WaitMS) * time.Millisecond,
 		IdleExit:       time.Duration(o.IdleMS) * time.Millisecond,
 	})
@@ -36,7 +41,7 @@ func delegateHistoryBackfill(ctx context.Context, flags *rootFlags, lockErr erro
 	resp, _, err := tryDelegateSend(ctx, flags, lockErr, sendDelegateRequest{
 		Kind: historyBackfillKind,
 		Backfill: &backfillDelegateOptions{
-			ChatJID: opts.ChatJID, Count: opts.Count, Requests: opts.Requests,
+			AttemptID: opts.AttemptID, ChatJID: opts.ChatJID, Count: opts.Count, Requests: opts.Requests,
 			WaitMS: max(1, durationMillis(opts.WaitPerRequest)), IdleMS: max(1, durationMillis(opts.IdleExit)),
 		},
 	})
@@ -44,9 +49,9 @@ func delegateHistoryBackfill(ctx context.Context, flags *rootFlags, lockErr erro
 		return err
 	}
 	if resp.Backfill == nil {
-		return fmt.Errorf("running sync returned no backfill result; history may already have been persisted; check before retrying")
+		return historyIPCUncertain(sendDelegateRequest{Backfill: &backfillDelegateOptions{AttemptID: opts.AttemptID}}, fmt.Errorf("running sync returned no backfill result"))
 	}
-	return writeBackfillResult(os.Stdout, *resp.Backfill, flags.asJSON)
+	return writeHistoryBackfillResult(flags, *resp.Backfill)
 }
 
 func executeDelegatedBackfill(ctx context.Context, a *app.App, req sendDelegateRequest) (sendDelegateResponse, error) {
@@ -69,4 +74,35 @@ func delegateTransportError(kind string, err error) error {
 		return fmt.Errorf("no reliable reply from running sync after attempting history backfill dispatch; history may already have been persisted; check before retrying: %w", err)
 	}
 	return err
+}
+
+// A response without typed correlation (including an older owner) cannot attest
+// that this ID was persisted. Matching the ID is necessary even for success.
+func historyIPCUncertain(req sendDelegateRequest, err error) error {
+	id := ""
+	if req.Backfill != nil {
+		id = req.Backfill.AttemptID
+	}
+	return &app.BackfillError{History: app.HistoryFailure{AttemptID: id, Phase: store.HistoryDispatchPossible,
+		Outcome: "uncertain", Code: "backfill_outcome_uncertain", CorrelationConfirmed: false}, Cause: err}
+}
+func historyIPCError(req sendDelegateRequest, failure *app.HistoryFailure, text string) error {
+	valid := failure != nil
+	if valid {
+		switch failure.Phase {
+		case store.HistoryPreparing, store.HistoryObserving, store.HistoryDispatchPossible, store.HistoryFinalizing:
+		default:
+			valid = false
+		}
+		switch failure.Code {
+		case "invalid_arguments", "no_local_anchor", "store_state", "cancelled", "operational_error", "backfill_not_dispatched", "backfill_outcome_uncertain":
+		default:
+			valid = false
+		}
+		valid = valid && (failure.Outcome == "uncertain" || failure.Outcome == "not_dispatched")
+	}
+	if !valid || req.Backfill == nil || failure.AttemptID != req.Backfill.AttemptID {
+		return historyIPCUncertain(req, fmt.Errorf("history recovery correlation not confirmed; history may already have been persisted; check before retrying: %s", text))
+	}
+	return &app.BackfillError{History: *failure, Cause: errors.New(text)}
 }

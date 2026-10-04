@@ -14,6 +14,7 @@ import (
 	"github.com/openclaw/wacli/internal/app"
 	"github.com/openclaw/wacli/internal/lock"
 	"github.com/openclaw/wacli/internal/out"
+	"github.com/openclaw/wacli/internal/store"
 	"github.com/openclaw/wacli/internal/wa"
 	"go.mau.fi/whatsmeow/types"
 )
@@ -76,6 +77,7 @@ type sendDelegateRequest struct {
 }
 
 type sendDelegateResponse struct {
+	HistoryFailure *app.HistoryFailure `json:"history_failure,omitempty"`
 	Backfill       *app.BackfillResult `json:"backfill,omitempty"`
 	OK             bool                `json:"ok"`
 	Error          string              `json:"error,omitempty"`
@@ -133,12 +135,12 @@ func delegateSend(ctx context.Context, flags *rootFlags, req sendDelegateRequest
 	req.DeadlineUnixMS = deadline.UnixMilli()
 	_ = conn.SetDeadline(deadline)
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
-		return sendDelegateResponse{}, delegateTransportError(req.Kind, err)
+		return sendDelegateResponse{}, historyTransportError(req, err)
 	}
 	var resp sendDelegateResponse
 	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
 		if req.Kind == historyBackfillKind {
-			return sendDelegateResponse{}, delegateTransportError(req.Kind, err)
+			return sendDelegateResponse{}, historyTransportError(req, err)
 		}
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
@@ -146,10 +148,16 @@ func delegateSend(ctx context.Context, flags *rootFlags, req sendDelegateRequest
 			// before the deadline. Say so, because a blind retry can send twice.
 			return sendDelegateResponse{}, fmt.Errorf("no reply from the running sync process before the timeout; the %s may still have gone through, so check before retrying: %w", req.Kind, err)
 		}
-		return sendDelegateResponse{}, delegateTransportError(req.Kind, err)
+		return sendDelegateResponse{}, historyTransportError(req, err)
 	}
 	if !resp.OK {
+		if req.Kind == historyBackfillKind {
+			return sendDelegateResponse{}, historyIPCError(req, resp.HistoryFailure, resp.Error)
+		}
 		return sendDelegateResponse{}, errors.New(resp.Error)
+	}
+	if req.Kind == historyBackfillKind && (req.Backfill == nil || resp.Backfill == nil || resp.Backfill.AttemptID != req.Backfill.AttemptID) {
+		return sendDelegateResponse{}, historyIPCUncertain(req, fmt.Errorf("history recovery result correlation not confirmed; history may already have been persisted; check before retrying"))
 	}
 	return resp, nil
 }
@@ -277,11 +285,11 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 
 	if req.Kind == historyBackfillKind {
 		if req.Version != sendDelegateVersion || req.Backfill == nil {
-			_ = json.NewEncoder(conn).Encode(sendDelegateResponse{Error: "invalid history backfill request before dispatch; no history was requested"})
+			_ = json.NewEncoder(conn).Encode(historyRefusal(req, "invalid_arguments", "invalid history backfill request before dispatch; no history was requested"))
 			return
 		}
 		if _, err := req.Backfill.options(); err != nil {
-			_ = json.NewEncoder(conn).Encode(sendDelegateResponse{Error: fmt.Sprintf("invalid history backfill request before dispatch; no history was requested: %v", err)})
+			_ = json.NewEncoder(conn).Encode(historyRefusal(req, "invalid_arguments", fmt.Sprintf("invalid history backfill request before dispatch; no history was requested: %v", err)))
 			return
 		}
 	}
@@ -305,7 +313,11 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 		} else if pacer.enabled() {
 			msg = "send spacing exceeded request timeout before dispatch; it was not sent"
 		}
-		_ = json.NewEncoder(conn).Encode(sendDelegateResponse{OK: false, Error: msg})
+		resp := sendDelegateResponse{OK: false, Error: msg}
+		if req.Kind == historyBackfillKind {
+			resp = historyRefusal(req, "backfill_not_dispatched", msg)
+		}
+		_ = json.NewEncoder(conn).Encode(resp)
 	}
 
 	select {
@@ -355,6 +367,16 @@ func writeDelegateResult(conn net.Conn, requestCtx context.Context, req sendDele
 			err = fmt.Errorf("delegated %s failed after dispatch and may still have gone through; check before retrying: %w", req.Kind, err)
 		}
 		resp = sendDelegateResponse{OK: false, Error: err.Error()}
+		if req.Kind == historyBackfillKind {
+			var typed *app.BackfillError
+			if errors.As(err, &typed) {
+				copy := typed.History
+				resp.HistoryFailure = &copy
+			} else {
+				uncertain := historyIPCUncertain(req, err).(*app.BackfillError)
+				resp.HistoryFailure = &uncertain.History
+			}
+		}
 	}
 	_ = json.NewEncoder(conn).Encode(resp)
 }
@@ -738,4 +760,18 @@ func commandTimeout(flags *rootFlags) time.Duration {
 		return 5 * time.Minute
 	}
 	return flags.timeout
+}
+
+func historyTransportError(req sendDelegateRequest, err error) error {
+	if req.Kind == historyBackfillKind {
+		return historyIPCUncertain(req, delegateTransportError(req.Kind, err))
+	}
+	return delegateTransportError(req.Kind, err)
+}
+func historyRefusal(req sendDelegateRequest, code, message string) sendDelegateResponse {
+	id := ""
+	if req.Backfill != nil && app.ValidateHistoryAttemptID(req.Backfill.AttemptID) == nil {
+		id = req.Backfill.AttemptID
+	}
+	return sendDelegateResponse{Error: message, HistoryFailure: &app.HistoryFailure{AttemptID: id, Phase: store.HistoryPreparing, Outcome: "not_dispatched", Code: code}}
 }

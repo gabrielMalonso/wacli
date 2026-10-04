@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/openclaw/wacli/internal/sqliteutil"
@@ -18,7 +17,7 @@ func (c *Client) init() (err error) {
 	defer c.mu.Unlock()
 
 	ctx := context.Background()
-	dbLog := newWhatsmeowLogger("Database", "ERROR", os.Stderr)
+	dbLog := newWhatsmeowLogger("Database", "ERROR", c.diagnosticWriter())
 	if err := sqliteutil.ChmodFiles(c.opts.StorePath, 0o600); err != nil {
 		return err
 	}
@@ -44,7 +43,7 @@ func (c *Client) init() (err error) {
 		}
 	}
 
-	logger := newWhatsmeowLogger("Client", "ERROR", os.Stderr)
+	logger := newWhatsmeowLogger("Client", "ERROR", c.diagnosticWriter())
 	c.client = whatsmeow.NewClient(deviceStore, logger)
 	// FetchAppStateEvents fails closed without this: recovery snapshots must
 	// return every mutation so wacli can rebuild its own database.
