@@ -13,12 +13,21 @@ type envelope struct {
 }
 
 func WriteJSON(w io.Writer, data any) error {
+	return writeJSON(w, data, true)
+}
+
+// WriteActionJSON preserves output failure after an action has taken effect.
+func WriteActionJSON(w io.Writer, data any) error {
+	return writeJSON(w, data, false)
+}
+
+func writeJSON(w io.Writer, data any, ignoreBrokenPipe bool) error {
 	b, err := json.Marshal(envelope{Success: true, Data: data})
 	if err != nil {
 		return err
 	}
 	_, err = fmt.Fprintln(w, string(b))
-	if isPlatformBrokenPipe(err) {
+	if ignoreBrokenPipe && isPlatformBrokenPipe(err) {
 		return nil
 	}
 	return err

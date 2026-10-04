@@ -138,6 +138,39 @@ func TestOutboundFULLCommitFailureRetainsUncertaintyAndStopsProgress(t *testing.
 	}
 }
 
+func TestOutboundFULLContentionBudgetAndBusyRestoration(t *testing.T) {
+	db := openTestDB(t)
+	holder, err := db.sql.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	if _, err := holder.ExecContext(t.Context(), "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	defer holder.ExecContext(context.Background(), "ROLLBACK")
+	baseline := 0
+	if err := db.sql.QueryRow("PRAGMA busy_timeout").Scan(&baseline); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	called := false
+	_, err = outboundFullWrite(ctx, db.sql, outboundSQLiteIO(), func(*sql.Conn) (int, error) { called = true; return 1, nil })
+	if err == nil || called {
+		t.Fatal("contended transaction authorized work", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("native busy handler ignored lease budget: %s", elapsed)
+	}
+	restored := 0
+	if err := db.sql.QueryRow("PRAGMA busy_timeout").Scan(&restored); err != nil || restored != baseline {
+		t.Fatal("busy setting leaked", baseline, restored, err)
+	}
+	t.Log("local contention returned within tolerance; no strict OS/driver wall-clock guarantee")
+}
+
 func BenchmarkOutboundFULLCheckpoint(b *testing.B) {
 	// Synthetic local SQLite transaction cost, not network/storage guarantees.
 	db, err := Open(b.TempDir() + "/wacli.db")

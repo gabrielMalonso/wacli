@@ -11,9 +11,8 @@ import (
 )
 
 // OutboundArchive is the concrete local repository boundary. Constructing it
-// exposes the typed store actions without invoking them. This delivery's CLI
-// consumes only Read/List; future sending must explicitly use the writer under
-// the existing LOCK/owner slot and check every commit before progressing.
+// exposes the typed store actions without invoking them. Sending uses the writer
+// under the existing LOCK/owner slot and checks every commit before progressing.
 type OutboundArchive struct {
 	Reserve    func(context.Context, OutboundReservation) (OutboundOperation, error)
 	Checkpoint func(context.Context, OutboundCheckpoint) (OutboundOperation, error)

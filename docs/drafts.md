@@ -2,7 +2,7 @@
 
 Read when: preparing durable offline previews without sending, or inspecting retained revisions and document snapshots.
 
-`draft create/show/list/update/discard` prepares only local records in the selected account's existing `wacli.db` (introduced in schema 30; current schema 31). There is no `draft send`, automatic replay, download, transcription, export command or garbage collection. No draft command opens/connects a WhatsApp client. A preview does not verify that a recipient exists remotely. The [outbound nucleus](outbound.md) adds retained operation/evidence queries only; outbound sending is not available.
+`draft create/show/list/update/discard` prepares only local records in the selected account's existing `wacli.db` (introduced in schema 30; current schema 31). There is no `draft send`, automatic replay, download, transcription, export command or garbage collection. No draft command opens/connects a WhatsApp client. A preview does not verify that a recipient exists remotely. The separate [outbound action](outbound.md) dispatches an explicitly selected immutable revision/hash with a retained idempotency key.
 
 ## Commands
 
@@ -49,7 +49,7 @@ wacli --account personal draft show DRAFT_ID --revision REVISION_ID --agent --de
 # Use the returned document.snapshot_path for separate local byte inspection.
 ```
 
-This deliberate path exception is restricted to document draft detail. The path is an expected location, can be absent/altered and follows store relocation. Neither full nor compact certifies current integrity or approval. **Show/list never open or stat media**, including old revisions after update/discard. Future outbound handling must revalidate size/digest on the same bytes actually used for sending; it must not reload current quote text.
+This deliberate path exception is restricted to document draft detail. The path is an expected location, can be absent/altered and follows store relocation. Neither full nor compact certifies current integrity or approval. **Show/list never open or stat media**, including old revisions after update/discard. Outbound dispatch revalidates size/digest on the same bytes actually used for sending; it does not reload current quote text.
 
 Snapshot creation rechecks `WACLI_MEDIA_ROOTS` in the process opening the source. It validates the opened FD as regular, then copies in cancellable 32 KiB chunks with a 100 MiB+1 limit, computing digest, size and MIME sniff on the copied bytes. Opening-time stat is not a path-immutability guarantee: concurrent writes can affect the captured sequence; the retained bytes/digest describe that sequence. Cancellation is checked between reads/writes, not an interrupt guarantee for blocked filesystem syscalls.
 
@@ -67,4 +67,4 @@ Pre-generated IDs and a versioned complete-request hash correlate IPC results; r
 
 Errors are sanitized and remain operation-specific: usage/read-only/invalid cursor exit 2; not found exit 3; archive/identity/document availability exit 4; CAS conflict/known pre-dispatch deadline/uncertain exit 1. Malformed, noncanonical, unsupported-version, hash/identity-mismatched or incompatible persisted payload/review data use a sanitized store error with exit 4 for show/discard, preserving the internal cause; caller ID/input/cursor validation remains exit 2. Optional `error.draft` contains only draft/revision/hash correlation and is absent from unrelated commands. The legacy overall IPC decoder is not claimed to have a new total-memory bound: typed draft input is strictly validated and the draft response read is capped, while the existing outer decoder is unchanged.
 
-Stage06a adds the local outbound nucleus and readonly show/list; a later separately reviewed integration will handle network sending. Retained operations reference exact immutable revisions, including explicitly selected older revisions of an active draft, and never follow a mutable head.
+The outbound integration adds explicit `outbound send` and retains readonly show/list. Retained operations reference exact immutable revisions, including explicitly selected older revisions of an active draft, and never follow a mutable head.

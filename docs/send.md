@@ -1,6 +1,6 @@
 # send
 
-The legacy commands below retain their existing behavior. The separate [outbound nucleus](outbound.md) currently exposes offline show/list only; no durable outbound send command or network capability is available in this delivery.
+The legacy commands below retain their existing behavior. The separate [outbound action](outbound.md) sends an explicit frozen draft revision/hash/key once through the application. It preserves SDK protocol retries, even after an uncertain result, and offers local show/list queries; it does not use the legacy application retry runner.
 
 Read when: sending text, files, stickers, locations, polls, status broadcasts, quoted replies, or reactions.
 
