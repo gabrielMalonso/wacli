@@ -200,6 +200,9 @@ func newAuthStatusCmd(flags *rootFlags) *cobra.Command {
 		Use:   "status",
 		Short: "Show authentication status",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if flags.agent {
+				return runAgentAuthStatus(flags)
+			}
 			storeDir, err := resolveStoreDir(flags)
 			if err != nil {
 				return err

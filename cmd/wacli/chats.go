@@ -82,6 +82,9 @@ func newChatsListCmd(flags *rootFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if flags.agent {
+				return writeAgentChats(flags, chats, limit)
+			}
 			chats = resolveStoredChats(ctx, a, chats)
 			if flags.asJSON {
 				return out.WriteJSON(os.Stdout, chats)
@@ -132,6 +135,13 @@ func newChatsShowCmd(flags *rootFlags) *cobra.Command {
 			}
 			defer closeApp(a, lk)
 
+			if flags.agent {
+				c, err := getAgentChat(ctx, a, jid)
+				if err != nil {
+					return err
+				}
+				return out.WriteAgentJSON(os.Stdout, flags.agentAccount, agentMeta(flags), agentChatDTO(c, flags.detail))
+			}
 			c, err := getChatForDisplay(ctx, a, jid)
 			if err != nil {
 				return err
@@ -298,4 +308,18 @@ func mappedChatJIDs(ctx context.Context, a *app.App, rawJID string) []string {
 		jids = append(jids, resolver.ResolveLIDToPN(ctx, jid))
 	}
 	return jidStrings(jids)
+}
+
+// Match verified alternate identities while preserving the stored chat ID.
+func getAgentChat(ctx context.Context, a *app.App, jid string) (store.Chat, error) {
+	for _, candidate := range mappedChatJIDs(ctx, a, jid) {
+		chat, err := a.DB().GetChat(candidate)
+		if err == nil {
+			return chat, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return store.Chat{}, err
+		}
+	}
+	return store.Chat{}, sql.ErrNoRows
 }

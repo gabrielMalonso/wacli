@@ -1,0 +1,74 @@
+# Agent output contract
+
+Read when: integrating a coding agent with bounded offline archive queries and stable errors.
+
+`--agent` enables JSON contract **v1**. `--detail compact|full` chooses its public detail level; compact is the default. Flags work before or after the subcommand. `--agent --json` still returns v1. Existing `--json` envelopes, field names, list defaults, tables, and `--full` table behavior remain unchanged. `--detail` without `--agent` is an error; `--full` does not select full agent detail.
+
+```bash
+wacli --store /path/to/archive --agent messages list
+wacli messages search "invoice" --account personal --agent --limit 10
+wacli --account personal messages show --chat 123@s.whatsapp.net --id ABC --agent --detail full
+wacli --store /path/to/archive --agent doctor
+```
+
+## Supported queries and data
+
+| Command | `data` | Full additions |
+| --- | --- | --- |
+| `messages list/search` | `messages` array; search also reports `search_mode` (`fts5` or `like`) | Each message's `full` content, caption, names, forwarding/star/download metadata, selected buttons |
+| `messages show` | One message DTO | Same message additions |
+| `messages context` | `messages` array and `selected_id` | Same message additions |
+| `chats list` / `chats show` | `chats` array / one chat DTO | Archived, pinned, stored mute deadline |
+| `contacts search` / `contacts show` | `contacts` array / one contact DTO | System name, tags, metadata update timestamp |
+| `contacts resolve` | `resolutions` array, one per input | Untruncated names |
+| `history coverage` | `coverage` array with local message counts, oldest/newest message dates and anchor status | Untruncated names |
+| `auth status` | Local authentication observation, public linked JID/phone when known, `session_revoked`, `connected` | Same observation |
+| `doctor` (offline) | Auth observation, lock state, FTS availability and heartbeat activity date | Store counts and `last_message_at` |
+
+Other commands, including mutations, downloads, `history fill/backfill`, and `doctor --connect`, fail before their argument validators or store/network operations with `unsupported_command`. Help, root help without a command, and version retain their normal text semantics. Unknown commands/flags are usage errors. Shell completion is outside the agent contract. `--events` is rejected with `--agent` to keep one error envelope on stderr.
+
+All archive queries use the existing read-only opener, validate the archive schema without migration, and work while the writer lock is held. They never initialize a missing archive. Authentication status reads the public session JID and local revocation observation, without loading credentials or opening a WhatsApp client; an existing directory without a session reports unauthenticated. Offline doctor requires a readable current-schema archive; store failures are error envelopes. Neither command connects.
+
+## Envelope and identity
+
+Success is a single JSON line on **stdout**. A failure is a single JSON line on **stderr**, with no success payload on stdout. Public fields use snake_case. Success contains `data` and no `error`; failure contains `error` and no `data`.
+
+```json
+{"schema_version":1,"success":true,"account":{"store_ref":"/path/to/archive"},"meta":{"source":"local","detail":"compact","completeness":"unknown","freshness":"unknown","limit":20,"excluded":["tombstones"],"recovery":"Use --detail full; retrieve one message with messages show --chat CHAT_JID --id ID --detail full."},"data":{"messages":[{"id":"ABC","chat_jid":"123@s.whatsapp.net","sender_jid":"456@lid","from_me":false,"timestamp":"2026-01-01T00:00:00Z","text":"Hello","text_truncated":false,"type":"text"}]}}
+```
+
+`account.store_ref` is the absolute, resolved selected store path, once per envelope. `account.name` is included when a named/default account supplied the selection. A name alone never identifies a manual store. This transparent reference does not create a UUID or write local state. When parsing/config resolution cannot establish the selected store, `store_ref` is null; a syntactically selected manual `--store` can still be identified on preflight failures. The reference is a path, not a promise of canonical inode identity through symlinks.
+
+Message IDs and stored chat/sender/quote JIDs are preserved. Chat views keep stored JIDs even when lookup used a verified alternate PN/LID. Contacts retain the existing verified PN/LID view; an unmapped LID has no invented phone number. `contacts resolve` accepts identities, not names: it uses only the persisted local pair map, produces exactly one result per input, and has no limited candidate search or interactive disambiguation. `resolved=true` means a local PN/LID pair is known; it is not proof of remote existence, current freshness, or safe recipient selection. Unknown pairs explicitly return `resolved=false`, preserving the known input identity.
+
+## Bounds and omissions
+
+Agent lists default to **20** rows; explicit `--limit` must be **1–200** in both details. Context retains defaults of five messages before/after; values must be nonnegative and `before + after + 1` must be at most 200. Its metadata includes the requested `before`, `after`, and total `limit`. Resolve accepts at most 200 inputs and thus at most 200 total results; its metadata reports that cap. There are no cursors or inferred next pages. Reaching or falling below a limit does not prove complete history.
+
+Compact message `text` is display text, capped at **320 Unicode code points**, preserving valid UTF-8. `text_truncated` explicitly records cutting; there is no appended ellipsis that changes the text. Other selected labels (names, aliases, filenames) have the same cap and report affected fields in `fields_truncated`. Identifiers are never truncated. `meta.recovery` documents full retrieval. Full exposes only selected public DTO fields: it does not serialize internal structs, keys, authenticated media URLs, session paths, raw protobufs or blobs. It does not expose local download paths or button URLs; `downloaded`/`downloaded_at` are the selected download observations. The selected `account.store_ref` is the intentional path exception.
+
+The total encoded envelope, including newline, is capped at **1 MiB compact / 8 MiB full**, checked before writing any success bytes. `payload_too_large` is an error with guidance to reduce row/context limits or retrieve one message. Full removes per-text truncation, not row/envelope bounds.
+
+List/search and context neighbors retain legacy exclusion of tombstones, explicitly reported as `meta.excluded=["tombstones"]`. Direct `show` and a context target can return a tombstone with `revoked`, `deleted_for_me`, `deleted_at`, `deletion_reason`, and `payload_purged_at` when present. `edited` remains visible in both details. Full may show retained tombstone content until an explicit purge has erased it. Compact includes essential media type/filename/MIME, quote identity, reaction target/emoji and forwarded state when present; optional full fields are intentionally selected by the documented detail level.
+
+## Evidence and errors
+
+`meta.source` is always `local`; `completeness` and `freshness` are **unknown** in v1. Local message bounds, row counts and anchor status describe only the archive. Coverage `ready` means a local anchor exists, not complete history. Missing timestamps are null. `last_message_at` is a message date, never a synchronization date. `last_activity_at` is the heartbeat date (possibly stale); a lock or heartbeat does not prove connectivity. Offline `connected` is always **unknown**.
+
+| Exit | Error code | Meaning |
+| --- | --- | --- |
+| 0 | — | Successful query |
+| 2 | `invalid_arguments` | Invalid arguments, unknown commands/flags, invalid detail/limit/filter |
+| 2 | `unsupported_command` | Recognized command outside the initial agent surface |
+| 3 | `not_found` | Requested local item is absent |
+| 4 | `store_unavailable` | Selected configuration/store/session state is absent, unreadable or incompatible |
+| 1 | `payload_too_large` | The encoded result exceeds the detail's envelope cap |
+| 1 | `internal_error` | Unclassified failure |
+
+Errors carry `code` and `message`; `recovery` appears only when an actionable step is known. No network retry prediction is emitted. Exit codes outside agent mode keep their legacy behavior.
+
+```json
+{"schema_version":1,"success":false,"account":{"store_ref":"/path/to/archive"},"meta":{"source":"local","detail":"compact","completeness":"unknown","freshness":"unknown"},"error":{"code":"not_found","message":"Requested item was not found in the selected local archive."}}
+```
+
+Use `--` to terminate flags, for example `messages search -- "--agent"` searches that literal text in legacy mode. A string value such as `--query="text containing --agent"` does not activate agent mode. A known flag's separate value, including a literal `--agent`, is consumed as its value. Invalid boolean values for the agent flag produce a v1 usage error. Unknown flags never execute a mutator while formatting an error.

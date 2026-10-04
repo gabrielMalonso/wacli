@@ -76,6 +76,16 @@ func newMessagesListCmd(flags *rootFlags) *cobra.Command {
 			}
 			msgs = resolveMessageSenderNames(ctx, a, msgs)
 
+			if flags.agent {
+				mode := ""
+				if cmd.Name() == "search" {
+					mode = "like"
+					if a.DB().HasFTS() {
+						mode = "fts5"
+					}
+				}
+				return writeAgentMessages(flags, msgs, limit, mode, "", nil, nil)
+			}
 			if flags.asJSON {
 				return out.WriteJSON(os.Stdout, map[string]any{
 					"messages": msgs,
@@ -152,6 +162,16 @@ func newMessagesSearchCmd(flags *rootFlags) *cobra.Command {
 			}
 			msgs = resolveMessageSenderNames(ctx, a, msgs)
 
+			if flags.agent {
+				mode := ""
+				if cmd.Name() == "search" {
+					mode = "like"
+					if a.DB().HasFTS() {
+						mode = "fts5"
+					}
+				}
+				return writeAgentMessages(flags, msgs, limit, mode, "", nil, nil)
+			}
 			if flags.asJSON {
 				return out.WriteJSON(os.Stdout, map[string]any{
 					"messages": msgs,
@@ -270,6 +290,9 @@ func newMessagesShowCmd(flags *rootFlags) *cobra.Command {
 			}
 			m = resolveMessageSenderNames(ctx, a, []store.Message{m})[0]
 
+			if flags.agent {
+				return out.WriteAgentJSON(os.Stdout, flags.agentAccount, agentMeta(flags), agentMessageDTO(m, flags.detail))
+			}
 			if flags.asJSON {
 				return out.WriteJSON(os.Stdout, m)
 			}
@@ -316,6 +339,9 @@ func newMessagesContextCmd(flags *rootFlags) *cobra.Command {
 			}
 			msgs = resolveMessageSenderNames(ctx, a, msgs)
 
+			if flags.agent {
+				return writeAgentMessages(flags, msgs, before+after+1, "", id, &before, &after)
+			}
 			if flags.asJSON {
 				return out.WriteJSON(os.Stdout, msgs)
 			}

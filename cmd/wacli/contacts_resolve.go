@@ -60,6 +60,9 @@ func newContactsResolveCmd(flags *rootFlags) *cobra.Command {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+			if flags.agent {
+				return writeAgentResolutions(flags, results)
+			}
 			return writeContactResolutions(os.Stdout, flags.asJSON, fullTableOutput(flags.fullOutput), results)
 		},
 	}
