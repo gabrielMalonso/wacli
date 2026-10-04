@@ -14,6 +14,7 @@ import (
 type outboundCommitIO struct {
 	exec        func(context.Context, *sql.Conn, string, ...any) (sql.Result, error)
 	synchronous func(context.Context, *sql.Conn) (int, error)
+	busyTimeout func(context.Context, *sql.Conn) (int, error)
 }
 
 func outboundSQLiteIO() outboundCommitIO {
@@ -24,6 +25,11 @@ func outboundSQLiteIO() outboundCommitIO {
 		synchronous: func(ctx context.Context, c *sql.Conn) (int, error) {
 			var n int
 			err := c.QueryRowContext(ctx, "PRAGMA synchronous").Scan(&n)
+			return n, err
+		},
+		busyTimeout: func(ctx context.Context, c *sql.Conn) (int, error) {
+			var n int
+			err := c.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&n)
 			return n, err
 		},
 	}
@@ -43,6 +49,10 @@ func outboundFullWrite[T any](ctx context.Context, db *sql.DB, disk outboundComm
 	if e != nil || before < 0 || before > 3 {
 		return zero, outboundError("store_error", errors.Join(e, fmt.Errorf("cannot read synchronous configuration")))
 	}
+	busyBefore, e := disk.busyTimeout(ctx, c)
+	if e != nil || busyBefore < 0 {
+		return zero, outboundError("store_error", e)
+	}
 	transaction, commitAttempted := false, false
 	defer func() {
 		// Caller cancellation cannot skip rollback/restoration. This is bounded
@@ -58,7 +68,12 @@ func outboundFullWrite[T any](ctx context.Context, db *sql.DB, disk outboundComm
 		if got != before && checkErr == nil {
 			checkErr = fmt.Errorf("synchronous restoration not confirmed")
 		}
-		cleanupErr = errors.Join(cleanupErr, restoreErr, checkErr)
+		_, restoreBusy := disk.exec(cleanup, c, fmt.Sprintf("PRAGMA busy_timeout=%d", busyBefore))
+		busyGot, checkBusy := disk.busyTimeout(cleanup, c)
+		if checkBusy == nil && busyGot != busyBefore {
+			checkBusy = fmt.Errorf("busy timeout restoration not confirmed")
+		}
+		cleanupErr = errors.Join(cleanupErr, restoreErr, checkErr, restoreBusy, checkBusy)
 		if cleanupErr != nil {
 			// database/sql honors ErrBadConn from Raw and discards this driver
 			// connection instead of returning unexpected settings to the pool.
@@ -71,6 +86,18 @@ func outboundFullWrite[T any](ctx context.Context, db *sql.DB, disk outboundComm
 			err = outboundError(code, errors.Join(err, cleanupErr))
 		}
 	}()
+	// Context cancellation alone may wait through sqlite3's native busy handler.
+	// Only this lease gets a short contention budget; legacy pool settings return.
+	busy := min(busyBefore, 100)
+	if deadline, ok := ctx.Deadline(); ok {
+		busy = min(busy, max(1, int(time.Until(deadline).Milliseconds())))
+	}
+	if _, e = disk.exec(ctx, c, fmt.Sprintf("PRAGMA busy_timeout=%d", busy)); e != nil {
+		return zero, outboundError("store_error", e)
+	}
+	if got, check := disk.busyTimeout(ctx, c); check != nil || got != busy {
+		return zero, outboundError("store_error", errors.Join(check, fmt.Errorf("busy timeout not confirmed")))
+	}
 	if _, e = disk.exec(ctx, c, "PRAGMA synchronous=FULL"); e != nil {
 		return zero, outboundError("store_error", e)
 	}

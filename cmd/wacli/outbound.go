@@ -9,8 +9,8 @@ import (
 )
 
 func newOutboundCmd(flags *rootFlags) *cobra.Command {
-	c := &cobra.Command{Use: "outbound", Short: "Inspect retained outbound operations offline (sending is not available)"}
-	c.AddCommand(newOutboundShowCmd(flags), newOutboundListCmd(flags))
+	c := &cobra.Command{Use: "outbound", Short: "Dispatch explicit revisions and inspect retained outbound operations"}
+	c.AddCommand(newOutboundShowCmd(flags), newOutboundListCmd(flags), newOutboundSendCmd(flags))
 	return c
 }
 func newOutboundShowCmd(flags *rootFlags) *cobra.Command {

@@ -146,6 +146,13 @@ func ValidateOutboundKey(key string) error {
 	return nil
 }
 
+func ValidateOutboundMessageID(id string) error {
+	if !validOutboundToken(id, true) {
+		return invalidOutbound("message-id")
+	}
+	return nil
+}
+
 func ValidateOutboundAccount(pn string) error {
 	n, err := NormalizeDraftTarget(pn)
 	if err != nil || n != pn || len(pn) > 128 || !strings.HasSuffix(pn, "@s.whatsapp.net") {
@@ -264,6 +271,10 @@ func (o OutboundOperation) validate() error {
 	}
 	return nil
 }
+
+// ValidateOutboundOperation checks typed IPC snapshots with the same invariants
+// as retained records. It does not assert that a peer actually committed them.
+func ValidateOutboundOperation(o OutboundOperation) error { return o.validate() }
 
 func (o OutboundOperation) EvidenceStatus(e OutboundEvidence) string {
 	if e.Scope == "recipient" {

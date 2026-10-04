@@ -1,6 +1,6 @@
 # Agent output contract
 
-Read when: integrating a coding agent with bounded archive queries, explicit history recovery, local drafts, and stable errors.
+Read when: integrating a coding agent with bounded archive queries, explicit history recovery, local drafts, durable outbound dispatch, and stable errors.
 
 `--agent` enables JSON contract **v1**. `--detail compact|full` chooses its public detail level; compact is the default. Flags work before or after the subcommand. `--agent --json` still returns v1. Existing `--json` envelopes, field names, list defaults, tables, and `--full` table behavior remain unchanged. `--detail` without `--agent` is an error; `--full` does not select full agent detail.
 
@@ -25,6 +25,7 @@ wacli --store /path/to/archive --agent doctor
 | `history backfill --chat JID` | Explicit live action: chat, attempt ID, requests/responses, net growth, stop reason and persisted `evidence` | Evidence options, anchors and scoped global sync counter |
 | `draft show/create/update/discard` | Frozen local revision, identity, payload hash and state | Untruncated content and document expected snapshot path |
 | `draft list` | Stored summary array with page metadata | Same bounded summaries |
+| `outbound send D --revision R --expect-hash H --key K` | Explicit live action: operation, duplicate, persistence, known result/ACK, history warning and SDK retry policy | Nullable checkpoint timestamps |
 | `outbound show/list` | Operation with observation page / operations array; frozen binding, phase/result and derived evidence | Nullable retained checkpoint timestamps |
 | `auth status` | Local authentication observation, public linked JID/phone when known, `session_revoked`, `connected` | Same observation |
 | `doctor` (offline) | Auth observation, lock state, FTS availability and heartbeat activity date | Store counts and `last_message_at` |
@@ -35,7 +36,7 @@ All archive queries use the existing read-only opener, validate the archive sche
 
 ## History recovery
 
-`--agent history backfill --chat JID` explicitly requests recovery using the existing standalone runner or connected sync owner. It does not authorize any other mutation, connection command, or download. The central command capability remains an explicit allowlist: unsupported, local read, local draft write, or history recovery. `--read-only` and `WACLI_READONLY=1` reject this action with `read_only` (exit 2); malformed options and `--events` fail with exit 2 before opening/delegating. Bounds remain count 1–500, up to 100 batches, wait/idle up to five minutes (legacy nonpositive defaults preserved). There is no new executor, replay, journal or automatic retry policy.
+`--agent history backfill --chat JID` explicitly requests recovery using the existing standalone runner or connected sync owner. It does not authorize any other mutation, connection command, or download. The central command capability remains an explicit allowlist: unsupported, local read, local draft write, history recovery, or outbound dispatch. `--read-only` and `WACLI_READONLY=1` reject this action with `read_only` (exit 2); malformed options and `--events` fail with exit 2 before opening/delegating. Bounds remain count 1–500, up to 100 batches, wait/idle up to five minutes (legacy nonpositive defaults preserved). There is no new executor, replay, journal or automatic retry policy.
 
 `meta.source="live"` describes the action's capability, including parsing, policy and pre-dispatch failures; it does not assert a request reached the primary. Coverage remains `source="local"`. Both freshness and completeness stay `unknown`. Success exposes only the final successful operation observation; partial results on errors are available through retained evidence when persistence succeeded.
 
@@ -164,7 +165,7 @@ These are live local search pages with the same limits described above, without 
 
 ## Evidence and errors
 
-`meta.source` is always `local`; `completeness` and `freshness` are **unknown** in v1. Local message bounds, row counts and anchor status describe only the archive. Coverage `ready` means a local anchor exists, not complete history. Missing timestamps are null. `last_message_at` is a message date, never a synchronization date. `last_activity_at` is the heartbeat date (possibly stale); a lock or heartbeat does not prove connectivity. Offline `connected` is always **unknown**.
+For local queries, `meta.source` is `local`; `completeness` and `freshness` are **unknown** in v1. Local message bounds, row counts and anchor status describe only the archive. Coverage `ready` means a local anchor exists, not complete history. Missing timestamps are null. `last_message_at` is a message date, never a synchronization date. `last_activity_at` is the heartbeat date (possibly stale); a lock or heartbeat does not prove connectivity. Offline `connected` is always **unknown**.
 
 | Exit | Error code | Meaning |
 | --- | --- | --- |
@@ -187,8 +188,14 @@ Use `--` to terminate flags, for example `messages search -- "--agent"` searches
 
 ## Local draft capability
 
-`outbound show/list` are pure `local_read` queries over schema 31. They open no session/media/socket, acquire no LOCK and never initialize or migrate. Both support scoped agent cursors; show paginates observations while deriving status from all retained facts in the read snapshot. Full adds nullable checkpoint timestamps. Persisted corruption uses sanitized `store_error`, exit 4. Sending, recovery and network capabilities are not available. See [outbound operations](outbound.md) for state/certainty, participant scope, idempotency/restoration limits and future integration boundaries.
+`outbound show/list` are pure `local_read` queries over schema 31. They open no session/media/socket, acquire no LOCK and never initialize or migrate. Both support scoped agent cursors; show paginates observations while deriving status from all retained facts in the read snapshot. Full adds nullable checkpoint timestamps. Persisted corruption uses sanitized `store_error`, exit 4. `outbound send` is the separate explicit live capability; no recover/retry/resume action exists. See [outbound operations](outbound.md) for state/certainty, participant scope, idempotency/restoration limits and dispatch and protocol retry boundaries.
 
 Only `draft create/update/discard` gain `local_draft_write`; `draft show/list` use `local_read`. Every draft envelope, including policy/parsing failures, remains v1 `source=local`. Other mutation capabilities remain blocked. See [local drafts](drafts.md) for payload/field/file limits, compact review, identity freezing, expected snapshot paths, live pagination and growing retention.
 
 Draft policy/usage/cursor errors use exit 2, not-found exit 3, store/identity/document failures exit 4, and CAS/uncertainty exit 1. Optional `error.draft={draft_id,revision_id,hash}` is confined to this operation. `local_write_uncertain` includes output failure after commit or unconfirmed IPC correlation; check exact IDs without automatic replay. Hashes never authorize sending. Show/list require no current session and never inspect document bytes.
+
+## Outbound dispatch capability
+
+Only `outbound send D --revision R --expect-hash H --key K` gains the outbound live capability. Source remains `live` for usage/readonly errors and pure-local duplicates. Other mutation allowlists remain unchanged. The same retained binding returns the original OP/message IDs before session/network checks; no automatic application retry or fallback occurs.
+
+`error.outbound` carries request/operation/message IDs, D/R/H/key/frozen own PN, phase, retained attempt result, known result, persistence confirmation and optional known ACK timestamp. Output failure after an effect retains this query correlation. Compact/full are capped at 1/8 MiB; no body, protobuf, media secrets or raw internal causes are exposed. The adapter's one invocation does not limit SDK frame or retry-receipt retransmission, including after uncertainty/cancellation. Accepted never establishes delivered/read. See [outbound operations](outbound.md) for deadlines, IPC, snapshot handling, certainty and restoration limits.

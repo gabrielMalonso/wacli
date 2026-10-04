@@ -46,6 +46,7 @@ const docsURL = "https://wacli.sh"
 type rootFlags struct {
 	agentCapability       agentCapability
 	agentHistoryAttemptID string
+	agentOutboundRequest  *app.OutboundSendRequest
 	agentRunStarted       bool
 	agent                 bool
 	cursor                string
@@ -73,7 +74,7 @@ func execute(args []string) error {
 		Version:       effectiveVersion(),
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			events := out.NewEventWriter(os.Stderr, flags.events)
-			if flags.agent && flags.agentCapability == agentHistoryRecovery {
+			if flags.agent && (flags.agentCapability == agentHistoryRecovery || flags.agentCapability == agentOutboundSend) {
 				events = out.NewEventWriter(io.Discard, true)
 			}
 			wa.SetLibsignalEvents(events)
@@ -84,7 +85,7 @@ func execute(args []string) error {
 	rootCmd.PersistentFlags().StringVar(&flags.storeDir, "store", "", "store directory (default: $WACLI_STORE_DIR, XDG state dir on Linux, or ~/.wacli)")
 	rootCmd.PersistentFlags().StringVar(&flags.account, "account", "", "named account from config.yaml")
 	rootCmd.PersistentFlags().BoolVar(&flags.asJSON, "json", false, "output JSON instead of human-readable text")
-	rootCmd.PersistentFlags().BoolVar(&flags.agent, "agent", false, "output the versioned agent JSON contract (supported queries, local drafts and explicit history recovery)")
+	rootCmd.PersistentFlags().BoolVar(&flags.agent, "agent", false, "output the versioned agent JSON contract (queries, drafts, history recovery and outbound dispatch)")
 	rootCmd.PersistentFlags().StringVar(&flags.cursor, "cursor", "", "resume agent list or temporal search pagination")
 	rootCmd.PersistentFlags().StringVar(&flags.detail, "detail", "compact", "agent detail: compact|full (requires --agent)")
 	rootCmd.PersistentFlags().BoolVar(&flags.fullOutput, "full", false, "disable truncation in table output")
@@ -162,6 +163,8 @@ func execute(args []string) error {
 			}
 			if flags.agentCapability == agentHistoryRecovery {
 				err = classifyHistoryAgentError(err, flags.agentHistoryAttemptID)
+			} else if flags.agentCapability == agentOutboundSend {
+				err = classifyOutboundActionError(err, flags.agentOutboundRequest)
 			} else {
 				err = classifyAgentError(err)
 			}
@@ -182,6 +185,8 @@ func writeRootError(flags rootFlags, err error) {
 		typed := classifyAgentError(err)
 		if flags.agentCapability == agentHistoryRecovery {
 			typed = classifyHistoryAgentError(err, flags.agentHistoryAttemptID)
+		} else if flags.agentCapability == agentOutboundSend {
+			typed = classifyOutboundActionError(err, flags.agentOutboundRequest)
 		}
 		_ = out.WriteAgentError(os.Stderr, flags.agentAccount, meta, typed)
 		return
@@ -221,7 +226,7 @@ func newApp(ctx context.Context, flags *rootFlags, needLock bool, allowUnauthed 
 
 	events := out.NewEventWriter(os.Stderr, flags.events)
 	var waDiagnostics io.Writer
-	if flags.agent && flags.agentCapability == agentHistoryRecovery {
+	if flags.agent && (flags.agentCapability == agentHistoryRecovery || flags.agentCapability == agentOutboundSend) {
 		events = out.NewEventWriter(io.Discard, true)
 		waDiagnostics = io.Discard
 	}

@@ -26,6 +26,7 @@ const (
 	agentLocalRead
 	agentHistoryRecovery
 	agentLocalDraftWrite
+	agentOutboundSend
 )
 
 // Recover output intent even if Cobra stops on an earlier parse error. Inspect
@@ -191,6 +192,8 @@ func agentCommandCapability(cmd *cobra.Command) agentCapability {
 		return agentLocalDraftWrite
 	case "history backfill":
 		return agentHistoryRecovery
+	case "outbound send":
+		return agentOutboundSend
 	case "doctor":
 		connect, _ := cmd.Flags().GetBool("connect")
 		if !connect {
@@ -228,6 +231,17 @@ func validateAgentCommand(cmd *cobra.Command, args []string, flags *rootFlags) e
 		}
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), "wacli ")
+	if path == "outbound send" {
+		if flags.isReadOnly() {
+			return &out.AgentError{Code: "read_only", Message: "Read-only policy rejects outbound dispatch.", ExitCode: 2}
+		}
+		revision, _ := cmd.Flags().GetString("revision")
+		hash, _ := cmd.Flags().GetString("expect-hash")
+		key, _ := cmd.Flags().GetString("key")
+		if err := app.ValidateOutboundSelection(args[0], revision, hash, key); err != nil {
+			return usage(err)
+		}
+	}
 	if path == "history backfill" {
 		if flags.isReadOnly() {
 			return &out.AgentError{Code: "read_only", Message: "Read-only policy rejects history recovery.", ExitCode: 2}
@@ -437,7 +451,7 @@ func agentMeta(flags *rootFlags) out.AgentMeta {
 		detail = "compact"
 	}
 	source := "local"
-	if flags.agentCapability == agentHistoryRecovery {
+	if flags.agentCapability == agentHistoryRecovery || flags.agentCapability == agentOutboundSend {
 		source = "live"
 	}
 	meta := out.AgentMeta{Source: source, Detail: detail, Completeness: "unknown", Freshness: "unknown"}
