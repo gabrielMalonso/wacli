@@ -17,12 +17,22 @@ type OutboundArchive struct {
 	Reserve    func(context.Context, OutboundReservation) (OutboundOperation, error)
 	Checkpoint func(context.Context, OutboundCheckpoint) (OutboundOperation, error)
 	Observe    func(context.Context, string, DraftIdentity, string, OutboundObservation) (OutboundOperation, error)
+	ByMessage  func(context.Context, string, string) (OutboundOperation, error)
 	Read       func(context.Context, string, string, string, int, string) (OutboundEntry, error)
 	List       func(context.Context, string, string, int, string) (OutboundPage, error)
 }
 
 func (d *DB) Outbound() OutboundArchive {
-	return OutboundArchive{d.reserveOutbound, d.checkpointOutbound, d.observeOutbound, d.readOutbound, d.listOutbound}
+	return OutboundArchive{d.reserveOutbound, d.checkpointOutbound, d.observeOutbound, d.outboundByMessage, d.readOutbound, d.listOutbound}
+}
+
+// outboundByMessage uses the retained account/message UNIQUE index. Only the
+// frozen revision summary is loaded; payloads and observations are not consulted.
+func (d *DB) outboundByMessage(ctx context.Context, account, messageID string) (OutboundOperation, error) {
+	if ValidateOutboundAccount(account) != nil || ValidateOutboundMessageID(messageID) != nil {
+		return OutboundOperation{}, invalidOutbound("message lookup")
+	}
+	return scanOutbound(d.sql.QueryRowContext(ctx, "SELECT "+outboundColumns+outboundFrom+"WHERE o.account_jid=? AND o.message_id=?", account, messageID))
 }
 
 const outboundColumns = `o.id,o.version,o.account_jid,o.idempotency_key,o.draft_id,o.revision_id,o.payload_hash,o.message_id,o.phase,o.attempt_result,o.generation,o.created_at,o.updated_at,o.preparing_at,o.upload_possible_at,o.upload_returned_at,o.dispatch_possible_at,o.finalized_at,o.error_code,r.summary_json,r.payload_hash,r.payload_version,d.account_jid`

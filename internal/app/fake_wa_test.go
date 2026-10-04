@@ -314,6 +314,27 @@ func (f *fakeWA) ResolvePNToLID(ctx context.Context, jid types.JID) types.JID {
 	return jid
 }
 
+func (f *fakeWA) CheckPublicPair(ctx context.Context, first, second types.JID) (wa.PublicPairResult, error) {
+	if err := ctx.Err(); err != nil {
+		return wa.PublicPairUnverified, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	pn, lid := first.ToNonAD(), second.ToNonAD()
+	if pn.Server == types.HiddenUserServer {
+		pn, lid = lid, pn
+	}
+	for actualLID, actualPN := range f.lids {
+		if actualLID == lid && actualPN != pn || actualPN == pn && actualLID != lid {
+			return wa.PublicPairContradictory, nil
+		}
+		if actualLID == lid && actualPN == pn {
+			return wa.PublicPairVerified, nil
+		}
+	}
+	return wa.PublicPairUnverified, nil
+}
+
 func (f *fakeWA) GetUserInfo(ctx context.Context, jids []types.JID) (map[types.JID]types.UserInfo, error) {
 	return map[types.JID]types.UserInfo{}, nil
 }

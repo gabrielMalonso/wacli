@@ -80,6 +80,7 @@ type SyncOptions struct {
 	WebhookEvents       SyncWebhookEventSet // nil = messages only
 	afterHistorySync    func(*events.HistorySync)
 	historyStoreError   func(types.JID, error) // optional observer for backfill persistence failures
+	outboundHistory     *outboundEvidenceBatch // shared by download and persistence, never per message
 }
 
 type SyncResult struct {
