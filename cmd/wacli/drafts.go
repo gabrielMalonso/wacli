@@ -14,7 +14,7 @@ import (
 
 func newDraftCmd(flags *rootFlags) *cobra.Command {
 	cmd := &cobra.Command{Use: "draft", Short: "Prepare and inspect durable local drafts without sending"}
-	cmd.AddCommand(newDraftWriteCmd(flags, "create"), newDraftWriteCmd(flags, "update"), newDraftDiscardCmd(flags), newDraftShowCmd(flags), newDraftListCmd(flags))
+	cmd.AddCommand(newDraftWriteCmd(flags, "create"), newDraftWriteCmd(flags, "update"), newDraftDiscardCmd(flags), newDraftShowCmd(flags), newDraftListCmd(flags), newDraftCleanupCmd(flags))
 	return cmd
 }
 

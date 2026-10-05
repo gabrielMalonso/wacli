@@ -54,16 +54,28 @@ type AgentDraftError struct {
 // AgentError carries a stable public code and a typed cause for exit handling.
 // Recovery is emitted only when an actionable next step is known.
 type AgentError struct {
-	Media     *AgentMediaError     `json:"media,omitempty"`
-	ChatState *AgentChatStateError `json:"chat_state,omitempty"`
-	Outbound  *AgentOutboundError  `json:"outbound,omitempty"`
-	Draft     *AgentDraftError     `json:"draft,omitempty"`
-	History   *AgentHistoryError   `json:"history,omitempty"`
-	Code      string               `json:"code"`
-	Message   string               `json:"message"`
-	Recovery  string               `json:"recovery,omitempty"`
-	ExitCode  int                  `json:"-"`
-	Cause     error                `json:"-"`
+	Cleanup   *AgentDraftCleanupError `json:"cleanup,omitempty"`
+	Media     *AgentMediaError        `json:"media,omitempty"`
+	ChatState *AgentChatStateError    `json:"chat_state,omitempty"`
+	Outbound  *AgentOutboundError     `json:"outbound,omitempty"`
+	Draft     *AgentDraftError        `json:"draft,omitempty"`
+	History   *AgentHistoryError      `json:"history,omitempty"`
+	Code      string                  `json:"code"`
+	Message   string                  `json:"message"`
+	Recovery  string                  `json:"recovery,omitempty"`
+	ExitCode  int                     `json:"-"`
+	Cause     error                   `json:"-"`
+}
+
+// Cleanup knowledge concerns logical unlink effects, never freed disk blocks.
+type AgentDraftCleanupError struct {
+	DraftID       string `json:"draft_id,omitempty"`
+	RevisionID    string `json:"revision_id,omitempty"`
+	Hash          string `json:"hash,omitempty"`
+	Effect        string `json:"effect"`
+	Outcome       string `json:"outcome"`
+	DirectorySync string `json:"directory_sync"`
+	RemovedBytes  *int64 `json:"removed_bytes"`
 }
 
 // Publication knowledge does not assert rollback or future file stability.

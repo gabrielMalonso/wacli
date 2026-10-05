@@ -1,7 +1,9 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -268,5 +270,30 @@ func (s *draftCleanupSnapshot) checkIdentity(size int64) error {
 	if err != nil || !current.Mode().IsRegular() || current.Mode() != s.info.Mode() || !os.SameFile(current, fd) || current.Size() != size || !current.ModTime().Equal(s.info.ModTime()) {
 		return fmt.Errorf("managed snapshot path changed")
 	}
+	return nil
+}
+
+// Accept only the canonical internal typed request; malformed or duplicate
+// fields cannot become an authorization to remove bytes.
+func (r *DraftCleanupRequest) UnmarshalJSON(raw []byte) error {
+	type plain DraftCleanupRequest
+	var value plain
+	if !utf8.Valid(raw) || len(raw) > 16384 {
+		return store.DraftCleanupFailure(store.DraftCleanupInvalidArguments, store.DraftCleanupSelection{}, nil)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		return store.DraftCleanupFailure(store.DraftCleanupInvalidArguments, store.DraftCleanupSelection{}, nil)
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil || !bytes.Equal(raw, canonical) {
+		return store.DraftCleanupFailure(store.DraftCleanupInvalidArguments, value.Selection, nil)
+	}
+	next := DraftCleanupRequest(value)
+	if err := next.Validate(); err != nil {
+		return err
+	}
+	*r = next
 	return nil
 }
