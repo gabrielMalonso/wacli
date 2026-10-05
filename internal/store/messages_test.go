@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
 	"strings"
@@ -1490,5 +1491,57 @@ func TestPurgeMessageClearsStoredLocation(t *testing.T) {
 	}
 	if _, err := db.GetMessageLocation(chat, "mid"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("purged message retained its coordinates: err = %v", err)
+	}
+}
+
+func TestMessageRawWhitespaceRoundTrip(t *testing.T) {
+	for _, tc := range []struct{ name, text string }{
+		{"unicode edges", "\n\r\n\t \u00a0\u2003ação🙂\u00a0 \t\r\n"},
+		{"whitespace only", " \t\n\r\n\u00a0\u2003"},
+		{"literal empty", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openTestDB(t)
+			chat := "15550000002@s.whatsapp.net"
+			if err := db.UpsertChat(chat, "dm", "fixture", time.Unix(1700000000, 0)); err != nil {
+				t.Fatal(err)
+			}
+			p := UpsertMessageParams{ChatJID: chat, MsgID: "raw", Timestamp: time.Unix(1700000000, 0), Text: tc.text, MediaCaption: tc.text, DisplayText: " display ", QuotedMsgID: " quoted "}
+			if err := db.UpsertMessage(p); err != nil {
+				t.Fatal(err)
+			}
+			m, err := db.GetMessage(chat, p.MsgID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for field, got := range map[string]string{"text": m.Text, "caption": m.MediaCaption} {
+				if !bytes.Equal([]byte(tc.text), []byte(got)) {
+					t.Errorf("%s: expected %d raw bytes, observed %d", field, len(tc.text), len(got))
+				}
+			}
+			var text, caption sql.NullString
+			if err := db.sql.QueryRow(`SELECT text,media_caption FROM messages WHERE chat_jid=? AND msg_id=?`, chat, p.MsgID).Scan(&text, &caption); err != nil {
+				t.Fatal(err)
+			}
+			if text.Valid != (tc.text != "") || caption.Valid != (tc.text != "") {
+				t.Error("only literal empty content should be NULL")
+			}
+			if m.DisplayText != "display" || m.QuotedMsgID != "quoted" {
+				t.Error("presentation/metadata normalization changed")
+			}
+			if err := db.UpdateMessageText(" "+chat+" ", " raw ", tc.text); err != nil {
+				t.Fatal(err)
+			}
+			edited, err := db.GetMessage(chat, p.MsgID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal([]byte(tc.text), []byte(edited.Text)) {
+				t.Errorf("edit: expected %d raw bytes, observed %d", len(tc.text), len(edited.Text))
+			}
+			if !edited.Edited || edited.DisplayText != strings.TrimSpace(tc.text) || edited.MediaCaption != "" || edited.QuotedMsgID != "quoted" {
+				t.Error("edit presentation/metadata semantics changed")
+			}
+		})
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -569,5 +570,92 @@ func TestOutboundContactHistoryFailureRemainsAccepted(t *testing.T) {
 	again, err := x.send(t.Context(), r, nil)
 	if err != nil || !again.Duplicate || again.Entry.Operation.ID != result.Entry.Operation.ID || again.Entry.Operation.Generation != result.Entry.Operation.Generation || f.sends != 1 || f.ids != 1 || historyCalls != 1 {
 		t.Fatal("history failure triggered resend or persistence replay", err)
+	}
+}
+
+func TestOutboundRawWhitespaceHistoryAndFrozenRevision(t *testing.T) {
+	for _, kind := range []store.DraftKind{store.DraftTextKind, store.DraftDocumentKind} {
+		t.Run(string(kind), func(t *testing.T) {
+			a, _, r, f, old := outboundAppFixture(t, kind)
+			raw := strings.Repeat("á", 77) + "\n"
+			input := DraftInput{To: "90002@lid", Message: draftTextPointer(raw)}
+			if kind == store.DraftDocumentKind {
+				raw = "\t\u00a0caption🙂\r\n"
+				input.Message = nil
+				input.File = filepath.Join(a.StoreDir(), "source.txt")
+				input.Caption = raw
+			}
+			rid, err := store.NewDraftID()
+			if err != nil {
+				t.Fatal(err)
+			}
+			entry, err := a.WriteLocalDraft(t.Context(), DraftWriteRequest{Version: 1, Action: "update", DraftID: r.DraftID, RevisionID: rid, ExpectedRevision: r.RevisionID, StoreRef: a.StoreDir(), Input: &input}, os.Open)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.RevisionID, r.Hash = rid, entry.Revision.Payload().Hash()
+			a.opts.WAFactory = func(wa.Options) (WAClient, error) {
+				return &outboundLifecycleFake{fakeWA: newFakeWA(), adapter: f}, nil
+			}
+			result, err := a.SendOutbound(t.Context(), r, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sent := f.sent.GetConversation()
+			if kind == store.DraftDocumentKind {
+				sent = f.sent.GetDocumentMessage().GetCaption()
+			}
+			if !bytes.Equal([]byte(raw), []byte(sent)) {
+				t.Error("fake argument differs from frozen content")
+			}
+			m, err := a.DB().GetMessage(result.Entry.Operation.Recipient.JID, f.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal([]byte(raw), []byte(m.Text)) {
+				t.Errorf("history text: expected %d raw bytes, observed %d", len(raw), len(m.Text))
+			}
+			if kind == store.DraftDocumentKind && !bytes.Equal([]byte(raw), []byte(m.MediaCaption)) {
+				t.Errorf("history caption: expected %d raw bytes, observed %d", len(raw), len(m.MediaCaption))
+			}
+			// Exercise normal ingestion independently of the synthetic send acknowledgement.
+			chat := types.NewJID("15550000002", types.DefaultUserServer)
+			evt := &events.Message{Info: types.MessageInfo{MessageSource: types.MessageSource{Chat: chat, Sender: types.NewJID("15550000001", types.DefaultUserServer), IsFromMe: true}, ID: f.id, Timestamp: time.Now()}, Message: f.sent}
+			pm := wa.ParseLiveMessage(evt)
+			if !bytes.Equal([]byte(raw), []byte(pm.Text)) {
+				t.Error("parser lost raw text")
+			}
+			if err := a.storeParsedMessage(t.Context(), pm); err != nil {
+				t.Fatal(err)
+			}
+			synced, err := a.DB().GetMessage(chat.String(), f.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal([]byte(raw), []byte(synced.Text)) || kind == store.DraftDocumentKind && !bytes.Equal([]byte(raw), []byte(synced.MediaCaption)) {
+				t.Error("ingestion lost raw whitespace")
+			}
+			frozen, err := a.DB().ReadDraft(t.Context(), r.DraftID, r.RevisionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			previous, err := a.DB().ReadDraft(t.Context(), old.DraftID(), old.ID())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(entry.Revision.Payload().CanonicalJSON(), frozen.Revision.Payload().CanonicalJSON()) || entry.Revision.Review() != frozen.Revision.Review() || r.Hash != frozen.Revision.Payload().Hash() || !bytes.Equal(old.Payload().CanonicalJSON(), previous.Revision.Payload().CanonicalJSON()) || old.Payload().Hash() != previous.Revision.Payload().Hash() {
+				t.Error("frozen revisions/review/hash changed")
+			}
+			again, err := a.SendOutbound(t.Context(), r, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !again.Duplicate || f.sends != 1 || again.Entry.Operation.ID != result.Entry.Operation.ID || again.Entry.Operation.MessageID != f.id || again.Entry.Operation.Key != r.Key || again.Entry.Operation.Hash != r.Hash || again.Entry.Operation.RevisionID != r.RevisionID {
+				t.Error("retained binding changed or replay sent again")
+			}
+			if result.Entry.Evidence.Accepted != "observed" || result.Entry.Evidence.Delivered != "unknown" || result.Entry.Evidence.Read != "unknown" {
+				t.Error("synthetic acknowledgement invented delivery/read")
+			}
+		})
 	}
 }

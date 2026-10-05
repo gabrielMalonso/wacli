@@ -39,6 +39,12 @@ Agent temporal search uses `wacli --agent messages search "invoice" --sort time 
 - `--starred` restricts list/search results to messages marked as starred by WhatsApp.
 - Time filters accept RFC3339 or `YYYY-MM-DD`.
 
+## Raw content and presentation
+
+New message writes preserve leading/trailing whitespace in stored `Text` and `MediaCaption`, including LF, CRLF, tabs and Unicode spaces. Local text edits preserve raw `Text` too. Literal empty content remains NULL; edit, merge, tombstone and purge rules are unchanged.
+
+Agent `messages show --detail full` exposes these local fields as `full.content` and `full.caption`; legacy JSON retains `Text` and `MediaCaption` inside `data`. Agent `data.text` (including full detail), tables and human output remain formatted presentation, which may trim whitespace or use media/quote labels. The human RAW block is also formatted. These local fields are not a record of original protobuf bytes or evidence of what a device received. Existing rows are not repaired or migrated; bytes already lost cannot be recovered from the archive alone.
+
 ## Media captions
 
 Plain audio messages have an empty `MediaCaption`. Their `Text` keeps the `[Audio]` display fallback, so they can still match searches for `Audio`. Text supplied alongside an audio payload remains its caption, including a literal `[Audio]` supplied by the sender. Existing rows are not migrated; an ordinary live or history re-ingestion can replace a legacy synthetic caption, subject to the existing edit and deletion rules.
