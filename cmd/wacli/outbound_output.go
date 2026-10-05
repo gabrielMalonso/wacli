@@ -56,7 +56,7 @@ func outboundFull(flags *rootFlags) bool {
 func outboundMeta(flags *rootFlags, page *out.AgentPage) out.AgentMeta {
 	m := agentMeta(flags)
 	m.Page = page
-	m.Recovery = "Inspect the exact draft_id/revision_id with draft show --revision; pending is not a running-process assertion. Sending and replay are not available."
+	m.Recovery = "Inspect the exact draft_id/revision_id with draft show --revision; pending is not a running-process assertion. Do not resend an operation to resolve uncertainty."
 	return m
 }
 

@@ -144,7 +144,7 @@ func chatStateCLIArgs(r app.ChatStateRequest) []string {
 func TestAgentChatStatePreflightBeforeEffects(t *testing.T) {
 	t.Setenv("WACLI_READONLY", "0")
 	for _, action := range []string{"mark-unread", "archive", "unarchive"} {
-		for _, extra := range [][]string{{"--chat", "Alice"}, {"--chat", localReadPN, "--pick", "0"}, {"--chat", "123@newsletter"}, {"--read-only"}, {"--chat", localReadPN, "--timeout", "bad"}, {"--chat", localReadPN, "extra"}, {}} {
+		for _, extra := range [][]string{{"--chat", "PRIVATE_NAME"}, {"--chat", localReadPN, "--pick", "0"}, {"--chat", "123@newsletter"}, {"--read-only"}, {"--chat", localReadPN, "--timeout", "PRIVATE_TIMEOUT"}, {"--PRIVATE_FLAG=x"}, {"--chat", localReadPN, "PRIVATE_POSITIONAL"}, {}} {
 			t.Run(action+"/"+strings.Join(extra, "/"), func(t *testing.T) {
 				dir := filepath.Join(t.TempDir(), "missing")
 				args := append([]string{"--agent", "--store", dir, "chats", action}, extra...)
@@ -152,7 +152,11 @@ func TestAgentChatStatePreflightBeforeEffects(t *testing.T) {
 				if err == nil || stdout != "" || decodeAgentTest(t, stderr).Meta.Source != "live" || commandExitCode(err) != 2 {
 					t.Fatal(stdout, stderr, err)
 				}
-				failure := decodeAgentTest(t, stderr).Error.ChatState
+				envelope := decodeAgentTest(t, stderr)
+				if strings.Contains(envelope.Error.Message+envelope.Error.Recovery, "PRIVATE_") || envelope.Error.Code == "invalid_arguments" && envelope.Error.Message != "Invalid explicit chat state arguments." {
+					t.Fatal("unsanitized preflight", stderr)
+				}
+				failure := envelope.Error.ChatState
 				if failure == nil || failure.Action != action || failure.Outcome != "not_dispatched" || failure.LocalMirror != "unknown" {
 					t.Fatal("missing preflight invocation knowledge", stderr)
 				}
@@ -176,6 +180,23 @@ func TestAgentChatStatePreflightBeforeEffects(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatal("env policy effect")
+	}
+}
+
+func TestAgentChatStateUsageSanitizationPreservesCauseAndCorrelation(t *testing.T) {
+	cause := errors.New("PRIVATE_CALLER_VALUE")
+	request := &app.ChatStateRequest{Version: 1, Requested: localReadPN, Action: app.ChatStateAction("archive")}
+	correlation := &out.AgentChatStateError{Requested: request.Requested, Action: string(request.Action), Outcome: "not_dispatched", LocalMirror: "unknown"}
+	for _, existingCorrelation := range []*out.AgentChatStateError{nil, correlation} {
+		original := agentUsageError(cause)
+		original.ChatState = existingCorrelation
+		classified := classifyChatStateAgentError(original, request)
+		if classified.Message != "Invalid explicit chat state arguments." || classified.Code != "invalid_arguments" || classified.ExitCode != 2 || !errors.Is(classified, cause) || classified.ChatState == nil || *classified.ChatState != *correlation {
+			t.Fatalf("changed error knowledge: %+v", classified)
+		}
+		if original.Message != cause.Error() || original.ChatState != existingCorrelation {
+			t.Fatal("classifier mutated its cause")
+		}
 	}
 }
 
