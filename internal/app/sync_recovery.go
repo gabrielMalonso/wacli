@@ -42,6 +42,12 @@ func (a *App) handleAppStateSyncError(ctx context.Context, evt *events.AppStateS
 	if a.appStateRecoveryClosing {
 		return
 	}
+	// Retain the SDK failure that prompted recovery, even if the refresh succeeds.
+	phase := appStateRecoveryDelta
+	if evt.FullSync {
+		phase = appStateRecoveryFullSync
+	}
+	recordAppStateRecovery(ctx, name, phase, evt.Error)
 	if _, loaded := recoveries.LoadOrStore(name, struct{}{}); loaded {
 		return
 	}

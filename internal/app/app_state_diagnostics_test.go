@@ -109,6 +109,30 @@ func assertRecoveryFailure(t *testing.T, state AppStateDiagnostics) {
 	requireRecoveryObservation(t, state, "regular_low", appStateRecoverySnapshot, AppStateRecoveryFailed, "deadline_exceeded")
 }
 
+func TestSyncAppStateRetainsSDKFailureAfterRecovery(t *testing.T) {
+	for _, fullSync := range []bool{false, true} {
+		a := newTestApp(t)
+		a.opts.Events = out.NewEventWriter(io.Discard, true)
+		a.wa = newFakeWA()
+		a.appStateReplayOnClose = true
+		run := &appStateRecoveryRun{}
+		ctx := context.WithValue(t.Context(), appStateRecoveryRunKey{}, run)
+		a.handleAppStateSyncError(ctx, &events.AppStateSyncError{Name: appstate.WAPatchRegularLow, FullSync: fullSync, Error: appstate.ErrMismatchingLTHash}, &sync.Map{})
+		a.appStateRecoveryWorkers.Wait()
+		a.Close()
+		state := (SyncResult{recovery: run, storeDir: a.StoreDir()}).AppStateSnapshot()
+		phase := appStateRecoveryDelta
+		if fullSync {
+			phase = appStateRecoveryFullSync
+		}
+		requireRecoveryObservation(t, state, "regular_low", phase, AppStateRecoveryFailed, "lthash_mismatch")
+		requireRecoveryObservation(t, state, "regular_low", appStateRecoveryFullSync, AppStateRecoveryCompleted, "")
+		if len(state.PendingCollections) != 3 {
+			t.Fatal("successful repair lost normal preventive shutdown debt")
+		}
+	}
+}
+
 func TestAppStateRecoveryFactsAreBoundedAndKeepEarlierFailure(t *testing.T) {
 	run := &appStateRecoveryRun{}
 	ctx := context.WithValue(t.Context(), appStateRecoveryRunKey{}, run)
