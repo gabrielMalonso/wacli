@@ -33,6 +33,7 @@ Read when: you need the user-facing command map, global flags, store model, or l
 - [messages](messages.md) - list, search, show, and contextualize stored messages.
 - [calls](calls.md) - list stored WhatsApp call events.
 - [draft](drafts.md) - prepare and inspect durable local revisions without sending.
+- [outbound](outbound.md) - dispatch an exact reviewed revision/hash and inspect retained evidence.
 - [send](send.md) - send text, files, stickers, statuses, replies, and reactions.
 - [media](media.md) - download media attached to stored messages.
 - [contacts](contacts.md) - search contacts and manage local aliases/tags.
@@ -50,6 +51,8 @@ Read when: you need the user-facing command map, global flags, store model, or l
 - [completion](completion.md) - generate shell completion scripts.
 - [help](help.md) - inspect command help from the CLI.
 - [companion integrations](integrations.md) - build read-only local tools on top of synced data.
+- [offline acceptance](offline-acceptance.md) - map generic reference requirements to commands and reproduce synthetic validation.
+- [fork maintenance](fork-maintenance.md) - review scoped fork PRs and isolated upstream updates.
 
 ## Common flow
 
