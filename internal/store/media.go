@@ -2,6 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql/driver"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/openclaw/wacli/internal/store/storedb"
@@ -110,4 +113,58 @@ func (d *DB) MarkMediaDownloaded(chatJID, msgID, localPath string, downloadedAt 
 		ChatJid:      chatJID,
 		MsgID:        msgID,
 	})
+}
+
+// MarkMediaDownloadedContext limits native SQLite contention on this lease only.
+// recorded confirms the update completed, even if restoring the connection later
+// fails. Calls finish synchronously; cancellation does not roll back a known write
+// or promise interruption of arbitrary filesystem calls.
+func (d *DB) MarkMediaDownloadedContext(ctx context.Context, chatJID, msgID, localPath string, downloadedAt time.Time) (recorded bool, err error) {
+	conn, err := d.sql.Conn(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close()
+	var previous int
+	if err := conn.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&previous); err != nil {
+		return false, err
+	}
+	defer func() {
+		// Connection-local restoration needs no write lock. Caller cancellation
+		// cannot return altered settings to the pool; failed restoration evicts it.
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+		defer cancel()
+		_, restoreErr := conn.ExecContext(cleanup, fmt.Sprintf("PRAGMA busy_timeout=%d", previous))
+		var restored int
+		checkErr := conn.QueryRowContext(cleanup, "PRAGMA busy_timeout").Scan(&restored)
+		if checkErr == nil && restored != previous {
+			checkErr = errors.New("media busy timeout restoration not confirmed")
+		}
+		if restoreErr != nil || checkErr != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			err = errors.Join(err, restoreErr, checkErr)
+		}
+	}()
+	// ExecContext joins the driver's work, but its interrupt can wait through
+	// sqlite3's native busy handler. Shorten that wait without changing defaults.
+	busy := min(previous, 50)
+	if deadline, ok := ctx.Deadline(); ok {
+		busy = min(busy, max(0, int(time.Until(deadline).Milliseconds())))
+	}
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", busy)); err != nil {
+		return false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	err = storedb.New(conn).MarkMediaDownloaded(ctx, storedb.MarkMediaDownloadedParams{
+		LocalPath:    nullStringIfEmpty(localPath),
+		DownloadedAt: sqlNullInt64(unix(downloadedAt)),
+		ChatJid:      chatJID,
+		MsgID:        msgID,
+	})
+	if err != nil {
+		return false, errors.Join(err, ctx.Err())
+	}
+	return true, nil
 }

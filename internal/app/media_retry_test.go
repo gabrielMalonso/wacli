@@ -19,6 +19,71 @@ func notOnPhoneHook(info *types.MessageInfo, _ []byte) any {
 	return &events.MediaRetry{MessageID: types.MessageID(info.ID), ChatID: info.Chat, Error: &events.MediaRetryError{Code: 2}}
 }
 
+func TestMediaRetrySecondReceiptRechecksRetainedReply(t *testing.T) {
+	a, f, opts := exactRetryFixture(t)
+	f.onMediaRetry = nil
+	checks, classified := 0, 0
+	_, err := a.retrySelectedMedia(exactRetryContext(t), []store.PendingMediaDownload{{ChatJID: opts.ChatJID, MsgID: opts.MsgID}}, RetryMediaOptions{BatchSize: 1, Wait: 10 * time.Millisecond},
+		func(_ context.Context, _ store.MediaDownloadInfo, _ string, n retryNotif, got bool, _ *MediaRetryResult) MediaRetryOutcome {
+			if got && n.err == nil {
+				classified++
+			}
+			return MediaRetryOutcome{}
+		}, func(store.MediaDownloadInfo) error {
+			checks++
+			if checks == 3 { // Selection load, first send, then second send's recheck.
+				chat, _ := types.ParseJID(opts.ChatJID)
+				info := &types.MessageInfo{ID: opts.MsgID, MessageSource: types.MessageSource{Chat: chat}}
+				f.emit(notOnPhoneHook(info, nil))
+			}
+			return nil
+		})
+	if err != nil || classified != 1 || len(f.mediaRetryReceipts) != 1 {
+		t.Fatalf("receipt after observed response: classified=%d receipts=%v error=%v", classified, f.mediaRetryReceipts, err)
+	}
+}
+
+func TestMediaRetrySendErrorAllowsReplyBeforeClassificationWithoutRetry(t *testing.T) {
+	for _, reply := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reply=%t", reply), func(t *testing.T) {
+			a, f, opts := exactRetryFixture(t)
+			insertExactMedia(t, a, opts.ChatJID, "other")
+			marker := errors.New("synthetic transport failure")
+			a.wa = &mediaRetrySendErrorWA{f, func(info *types.MessageInfo) error {
+				if info.ID == opts.MsgID {
+					return marker
+				}
+				return nil
+			}}
+			f.onMediaRetry = func(info *types.MessageInfo, key []byte) any {
+				if info.ID == opts.MsgID {
+					return nil
+				}
+				if reply {
+					first := *info
+					first.ID = opts.MsgID
+					f.emit(exactSuccessEvent(t, &first, key))
+				}
+				return notOnPhoneHook(info, key)
+			}
+			selectedSeen := false
+			_, err := a.retrySelectedMedia(exactRetryContext(t), []store.PendingMediaDownload{{ChatJID: opts.ChatJID, MsgID: opts.MsgID}, {ChatJID: opts.ChatJID, MsgID: "other"}}, RetryMediaOptions{BatchSize: 2, Wait: time.Second},
+				func(_ context.Context, _ store.MediaDownloadInfo, id string, n retryNotif, got bool, _ *MediaRetryResult) MediaRetryOutcome {
+					if id == opts.MsgID {
+						selectedSeen = true
+						if !got || (reply && (n.err != nil || n.code != wa.MediaRetrySuccess)) || (!reply && !errors.Is(n.err, marker)) {
+							t.Fatalf("reply/send error precedence: reply=%t got=%t notification=%+v", reply, got, n)
+						}
+					}
+					return MediaRetryOutcome{}
+				}, nil)
+			if err != nil || !selectedSeen || len(f.mediaRetryReceipts) != 2 {
+				t.Fatalf("send error retried or result lost: seen=%t receipts=%v err=%v", selectedSeen, f.mediaRetryReceipts, err)
+			}
+		})
+	}
+}
+
 func TestRetryMediaMarksNotOnPhone(t *testing.T) {
 	a := newTestApp(t)
 	f := newFakeWA()

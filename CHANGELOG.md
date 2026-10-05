@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Media: keep exact-retry download recording within the operation context using a short, restored connection-local SQLite contention budget, retaining independent publication and confirmed persistence effects. Recheck retained responses after row validation before a second receipt, and preserve phone responses over local send errors in either arrival order. Keep legacy recording, bulk selection/addressing, SDK retries and the two-attempt limit; validate with synthetic locks and WA fakes only.
+
 - Drafts: keep mutable update/discard timestamps nondecreasing across backward clock adjustments, preserve retained creation/update times and return the persisted values. Guard discard against concurrent record changes so eligible documents remain inspectable by cleanup; retain immutable revision timestamps/hashes. No migration or automatic repair of earlier inconsistent records.
 
 - Local reads: propagate message chat-filter stat errors other than session absence and readonly session-opening failures instead of silently returning empty matches. Expose offline doctor auth-source failures through legacy `store_error` while preserving diagnostic exit 0, existing bool fields, known auth/JID data on archive-only failures, and normal session absence; agent errors remain sanitized with exit 4 and no auth data. Keep optional display-name decoration and identity queries unchanged.

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"errors"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +40,91 @@ func exactRetryFixture(t *testing.T) (*App, *fakeWA, RetryMediaExactOptions) {
 		DownloadBytes: func(context.Context, store.MediaDownloadInfo, string, bool) ([]byte, error) {
 			return bytes.Clone(exactFixtureBytes), nil
 		},
+	}
+}
+
+type mediaRetrySendErrorWA struct {
+	*fakeWA
+	sendError func(*types.MessageInfo) error
+}
+
+func (f *mediaRetrySendErrorWA) SendMediaRetryReceipt(ctx context.Context, info *types.MessageInfo, key []byte) error {
+	if err := f.fakeWA.SendMediaRetryReceipt(ctx, info, key); err != nil {
+		return err
+	}
+	return f.sendError(info)
+}
+
+func TestRetryMediaExactPreservesReplyOnSendError(t *testing.T) {
+	a, f, opts := exactRetryFixture(t)
+	f.onMediaRetry = func(info *types.MessageInfo, key []byte) any { return exactSuccessEvent(t, info, key) }
+	a.wa = &mediaRetrySendErrorWA{f, func(*types.MessageInfo) error { return errors.New("synthetic transport failure") }}
+	result, err := a.RetryMediaExact(exactRetryContext(t), opts)
+	if err != nil || result.Status != "downloaded" || result.Observation.Phone != "reuploaded" || !result.Recorded || len(f.mediaRetryReceipts) != 1 {
+		t.Fatalf("observed reply overwritten: %+v %v receipts=%v", result, err, f.mediaRetryReceipts)
+	}
+	assertExactOutput(t, opts)
+}
+
+func TestRetryMediaExactRecordingContentionPreservesPublishedFile(t *testing.T) {
+	for _, mode := range []string{"busy", "cancel", "deadline"} {
+		t.Run(mode, func(t *testing.T) {
+			a, _, opts := exactRetryFixture(t)
+			disk, err := sql.Open("sqlite3", filepath.Join(a.StoreDir(), "wacli.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer disk.Close()
+			lock, err := disk.Conn(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lock.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			if mode == "deadline" {
+				ctx, cancel = context.WithTimeout(ctx, 30*time.Millisecond)
+				defer cancel()
+			}
+			locked := false
+			opts.Output.Check = func() error {
+				if locked {
+					return nil
+				}
+				if _, err := os.Stat(opts.Output.Path); err != nil {
+					return nil
+				}
+				if _, err := lock.ExecContext(t.Context(), "BEGIN IMMEDIATE"); err != nil {
+					return err
+				}
+				locked = true
+				if mode == "cancel" {
+					timer := time.AfterFunc(5*time.Millisecond, cancel)
+					t.Cleanup(func() { timer.Stop() })
+				}
+				return nil
+			}
+			defer lock.ExecContext(context.Background(), "ROLLBACK")
+			started := time.Now()
+			result, err := a.RetryMediaExact(ctx, opts)
+			if !locked || err == nil || result.Recorded || result.RecordedAt != nil || result.FilePublication != "written" || time.Since(started) > 400*time.Millisecond {
+				t.Fatalf("unbounded or misreported recording: %+v %v elapsed=%s locked=%t", result, err, time.Since(started), locked)
+			}
+			if mode == "cancel" {
+				assertExactFailure(t, result, err, "cancelled", "written", false)
+			}
+			assertExactOutput(t, opts)
+			if result.Output.Path == nil || result.Output.SHA256 == "" {
+				t.Fatal("published evidence lost on persistence failure")
+			}
+			if _, err := lock.ExecContext(t.Context(), "ROLLBACK"); err != nil {
+				t.Fatal(err)
+			}
+			info, err := a.db.GetMediaDownloadInfo(opts.ChatJID, opts.MsgID)
+			if err != nil || info.LocalPath != "" || !info.DownloadedAt.IsZero() {
+				t.Fatalf("late commit after release: %+v %v", info, err)
+			}
+		})
 	}
 }
 
