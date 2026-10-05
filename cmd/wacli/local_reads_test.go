@@ -358,6 +358,8 @@ func TestLocalReadsDefaultRejectUnsupportedSchemasAndKeepDoctorDiagnostics(t *te
 		{"newer", "INSERT INTO schema_migrations(version, name, applied_at) SELECT MAX(version) + 1, 'future migration', 1 FROM schema_migrations", "newer than supported"},
 		{"unversioned", "DROP TABLE schema_migrations", "explicit writable upgrade"},
 		{"missing earlier migration", "DELETE FROM schema_migrations WHERE version = 27", "explicit writable upgrade"},
+		{"zero replacing migration", "UPDATE schema_migrations SET version = 0 WHERE version = 27", "unknown migration versions"},
+		{"negative replacing migration", "UPDATE schema_migrations SET version = -1 WHERE version = 1", "unknown migration versions"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := seedLocalReadStore(t)

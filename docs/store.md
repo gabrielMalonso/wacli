@@ -36,6 +36,10 @@ version: older or unversioned stores need an **explicit writable upgrade** (for
 example, `auth` or `sync`); a newer schema needs a compatible newer wacli binary.
 Local queries never perform that upgrade automatically. These writable commands
 may connect to WhatsApp; there is currently no dedicated offline upgrade command.
+Read-only validation also requires the complete supported migration-version set.
+A synthetic/anomalous ledger that replaces an expected version with zero or a
+negative value is refused even if its maximum version and row count still match;
+this check does not diagnose general database corruption.
 
 SQLite readers still need to see committed WAL data. When SQLite sidecars already
 exist, readers use normal SQLite locking and can incidentally create or update
@@ -79,6 +83,7 @@ wacli groups prune [--days N] [--left-only=false|--include-active] [--dry-run] [
 - Destructive cleanup commands require confirmation unless `--confirm` is passed.
 - If a row cannot be deleted, bulk cleanup continues with the other targets, then exits nonzero with the underlying errors and the number successfully deleted. In `--json` mode, failures use the error envelope on stderr and do not emit a success result on stdout. Successfully deleted rows stay deleted; failed deletions are rolled back individually.
 - Use `--dry-run` first; it reads the existing current-schema store without taking the writer lock, deleting media, migrating schemas, or changing data/permissions. It works alongside sync, subject to the SQLite WAL bookkeeping caveat above.
+- `store cleanup --dry-run` counts each selected chat once, including retained tombstones and chats with zero messages, and reuses those counts in text output. A counting error stops the preview before emitting its result. Selection and individual counts remain separate reads, not a globally atomic snapshot.
 - `--read-only` and `WACLI_READONLY=1` allow `--dry-run` previews and reject cleanup/purge execution before opening the store for writes. Defaults, target selection, and confirmation requirements are unchanged.
 - Use `--account NAME` to target a named account store. Use `--store DIR` for manual stores or migration debugging; it cannot be combined with `--account`.
 

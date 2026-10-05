@@ -119,8 +119,8 @@ func (d *DB) validateReadable() error {
 	if !hasMigrations {
 		return fmt.Errorf("local store has no schema version; an explicit writable upgrade with wacli auth or sync is required (these commands may connect to WhatsApp)")
 	}
-	var version, applied int
-	if err := d.sql.QueryRow("SELECT COALESCE(MAX(version), 0), COUNT(*) FROM schema_migrations").Scan(&version, &applied); err != nil {
+	var first, version, applied int
+	if err := d.sql.QueryRow("SELECT COALESCE(MIN(version), 0), COALESCE(MAX(version), 0), COUNT(*) FROM schema_migrations").Scan(&first, &version, &applied); err != nil {
 		return err
 	}
 	current := schemaMigrations[len(schemaMigrations)-1].version
@@ -132,6 +132,10 @@ func (d *DB) validateReadable() error {
 	}
 	if applied != len(schemaMigrations) {
 		return fmt.Errorf("local store schema has missing migrations; an explicit writable upgrade with wacli auth or sync is required (these commands may connect to WhatsApp)")
+	}
+	// The version primary key makes bounds and count sufficient for the full set.
+	if first != schemaMigrations[0].version {
+		return fmt.Errorf("local store schema has unknown migration versions; use a compatible migration ledger before reading")
 	}
 	return nil
 }

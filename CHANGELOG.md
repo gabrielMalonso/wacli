@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Maintenance/compatibility: reject anomalous readonly migration ledgers with unsupported interval bounds even when maximum/count match. Count selected chats once in `store cleanup --dry-run`, reuse text counts and propagate counting errors before output, retaining selection, tombstones, zero counts and JSON/text formats. Destructive cleanup is unchanged.
+
 - Local results: normalize agent search sender filters consistently across relevance/time order; retain exact legacy sender matching. Read context neighbors across already verified chat identities using raw timestamp/rowid bounds, preserving target priority, tombstones, per-side limits and unknown public timestamps. Keep pinned chats ahead of activity after legacy PN/LID display fusion, with stable ties and unchanged flag fusion.
 
 - AppState: reconcile archive/pin from the exact SDK ChatSettings cache at ordered persistence, retaining uncertainty and unread boundaries. Protect standalone media connections, sync shutdown and incremental fetches with existing durable recovery generations; retain debt on partial pages, cancellation or persistence failure without replaying user mutations. Graceful shutdown can require full collection reads at next startup. Validate delayed callbacks, lifecycle gaps and offline media reuse with synthetic fixed-SDK fixtures.
