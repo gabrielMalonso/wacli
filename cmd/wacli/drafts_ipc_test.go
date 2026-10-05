@@ -147,76 +147,95 @@ func TestDraftIPCReadOnlyOwner(t *testing.T) {
 	if _, err := a.DB().ReadDraftRecord(context.Background(), id); err == nil {
 		t.Fatal("readonly owner wrote")
 	}
+	req.Version = 2
+	req.Input = &app.DraftInput{To: localReadPN, Image: &app.DraftImageInput{Path: "UNOPENED_IMAGE"}}
+	_, err = delegateSend(context.Background(), &rootFlags{storeDir: dir, timeout: time.Second}, sendDelegateRequest{Kind: draftWriteKind, Draft: &req})
+	if typed := classifyDraftError(err); typed.Code != "read_only" || typed.ExitCode != 2 {
+		t.Fatal("readonly image owner", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, store.DraftMediaDirectory)); !os.IsNotExist(err) {
+		t.Fatal("readonly image snapshot effect", err)
+	}
 }
 func TestDraftIPCUncertainOldOwnerLostReplyAndMismatch(t *testing.T) {
 	t.Setenv("WACLI_READONLY", "0")
-	for _, mode := range []string{"old_owner", "lost_reply", "mismatch_id", "mismatch_hash", "missing_typed"} {
-		t.Run(mode, func(t *testing.T) {
-			dir, a := draftOwnerFixture(t, false)
-			lk, err := lock.Acquire(dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer lk.Release()
-			ln, err := net.Listen("unix", sendDelegateSocketPath(dir))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer ln.Close()
-			done := make(chan sendDelegateRequest, 1)
-			go func() {
-				conn, err := ln.Accept()
+	for _, inputKind := range []string{"text", "image"} {
+		for _, mode := range []string{"old_owner", "lost_reply", "mismatch_id", "mismatch_hash", "mismatch_request_hash", "missing_typed"} {
+			t.Run(inputKind+"/"+mode, func(t *testing.T) {
+				dir, a := draftOwnerFixture(t, false)
+				lk, err := lock.Acquire(dir)
 				if err != nil {
-					return
+					t.Fatal(err)
 				}
-				defer conn.Close()
-				var req sendDelegateRequest
-				if err := json.NewDecoder(conn).Decode(&req); err != nil {
-					t.Error(err)
-					return
-				}
-				done <- req
-				if mode == "old_owner" || mode == "missing_typed" {
-					_ = json.NewEncoder(conn).Encode(sendDelegateResponse{Error: "unsupported old owner"})
-					return
-				}
-				resp, err := executeDelegatedSend(context.Background(), a, req)
+				defer lk.Release()
+				ln, err := net.Listen("unix", sendDelegateSocketPath(dir))
 				if err != nil {
-					t.Error(err)
-					return
+					t.Fatal(err)
 				}
-				if mode == "lost_reply" {
-					return
-				}
-				if mode == "mismatch_id" {
-					resp.DraftResult.RevisionID = strings.Repeat("f", 32)
+				defer ln.Close()
+				done := make(chan sendDelegateRequest, 1)
+				go func() {
+					conn, err := ln.Accept()
+					if err != nil {
+						return
+					}
+					defer conn.Close()
+					var req sendDelegateRequest
+					if err := json.NewDecoder(conn).Decode(&req); err != nil {
+						t.Error(err)
+						return
+					}
+					done <- req
+					if mode == "old_owner" || mode == "missing_typed" {
+						_ = json.NewEncoder(conn).Encode(sendDelegateResponse{Error: "unsupported old owner"})
+						return
+					}
+					resp, err := executeDelegatedSend(context.Background(), a, req)
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					if mode == "lost_reply" {
+						return
+					}
+					if mode == "mismatch_id" {
+						resp.DraftResult.RevisionID = strings.Repeat("f", 32)
+					} else if mode == "mismatch_request_hash" {
+						resp.DraftResult.RequestHash = strings.Repeat("0", 64)
+					} else {
+						resp.DraftResult.Hash = strings.Repeat("0", 64)
+					}
+					_ = json.NewEncoder(conn).Encode(resp)
+				}()
+				args := []string{"--agent", "--store", dir, "--timeout", "2s", "draft", "create", "--to", localReadPN}
+				if inputKind == "image" {
+					args = append(args, "--image", draftCLIImageFile(t, dir))
 				} else {
-					resp.DraftResult.Hash = strings.Repeat("0", 64)
+					args = append(args, "--message", "persist once")
 				}
-				_ = json.NewEncoder(conn).Encode(resp)
-			}()
-			stdout, stderr, err := runPresenceDelegateHelper(t, []string{"--agent", "--store", dir, "--timeout", "2s", "draft", "create", "--to", localReadPN, "--message", "persist once"})
-			if err == nil || stdout != "" {
-				t.Fatal("uncertainty presented success", err, stdout)
-			}
-			e := decodeAgentTest(t, stderr)
-			if e.Error.Code != "local_write_uncertain" || e.Error.Draft == nil || e.Error.ExitCode != 0 {
-				t.Fatal(stderr)
-			}
-			req := <-done
-			if e.Error.Draft.DraftID != req.Draft.DraftID || e.Error.Draft.RevisionID != req.Draft.RevisionID {
-				t.Fatal("missing IDs")
-			}
-			if mode != "old_owner" && mode != "missing_typed" {
-				if _, err := a.DB().ReadDraft(context.Background(), req.Draft.DraftID, req.Draft.RevisionID); err != nil {
-					t.Fatal("lost reply erased commit", err)
+				stdout, stderr, err := runPresenceDelegateHelper(t, args)
+				if err == nil || stdout != "" {
+					t.Fatal("uncertainty presented success", err, stdout)
 				}
-			}
-			page, err := a.DB().ListDrafts(context.Background(), dir, true, 20, "")
-			if err != nil || len(page.Items) > 1 {
-				t.Fatal("fallback/replay", err)
-			}
-		})
+				e := decodeAgentTest(t, stderr)
+				if e.Error.Code != "local_write_uncertain" || e.Error.Draft == nil || e.Error.ExitCode != 0 {
+					t.Fatal(stderr)
+				}
+				req := <-done
+				if e.Error.Draft.DraftID != req.Draft.DraftID || e.Error.Draft.RevisionID != req.Draft.RevisionID {
+					t.Fatal("missing IDs")
+				}
+				if mode != "old_owner" && mode != "missing_typed" {
+					if _, err := a.DB().ReadDraft(context.Background(), req.Draft.DraftID, req.Draft.RevisionID); err != nil {
+						t.Fatal("lost reply erased commit", err)
+					}
+				}
+				page, err := a.DB().ListDrafts(context.Background(), dir, true, 20, "")
+				if err != nil || len(page.Items) > 1 {
+					t.Fatal("fallback/replay", err)
+				}
+			})
+		}
 	}
 }
 

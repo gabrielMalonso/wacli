@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"image/jpeg"
 	"mime"
 	"slices"
 	"strconv"
@@ -31,6 +32,7 @@ const (
 	DraftTextKind     DraftKind = "text"
 	DraftDocumentKind DraftKind = "document"
 	DraftContactKind  DraftKind = "contact"
+	DraftImageKind    DraftKind = "image"
 )
 
 // DraftValidationError contains field names, never caller content or paths.
@@ -65,6 +67,51 @@ type DraftDocument struct {
 	Size     int64  `json:"size"`
 	SHA256   string `json:"sha256"`
 }
+
+// DraftImage freezes every effective image field, including the exact thumbnail.
+// JPEGThumbnail is private payload data; public previews expose only metadata.
+type DraftImage struct {
+	MIME          string `json:"mime"`
+	Caption       string `json:"caption"`
+	Size          int64  `json:"size"`
+	SHA256        string `json:"sha256"`
+	Width         uint32 `json:"width"`
+	Height        uint32 `json:"height"`
+	JPEGThumbnail []byte `json:"jpeg_thumbnail"`
+}
+
+const MaxDraftImagePixels = 40_000_000
+const MaxDraftImageThumbnailBytes = 32 << 10
+
+func NewDraftImage(value DraftImage) (DraftImage, error) {
+	if value.MIME != "image/jpeg" && value.MIME != "image/png" {
+		return DraftImage{}, invalidDraft("image.mime", "only JPEG and PNG are supported")
+	}
+	if err := checkDraftString("image.caption", value.Caption, false); err != nil {
+		return DraftImage{}, err
+	}
+	if value.Size <= 0 || value.Size > MaxDraftFileBytes || !draftHex(value.SHA256, sha256.Size*2) {
+		return DraftImage{}, invalidDraft("image", "invalid size or SHA-256")
+	}
+	if value.Width == 0 || value.Height == 0 || uint64(value.Width)*uint64(value.Height) > MaxDraftImagePixels {
+		return DraftImage{}, invalidDraft("image.dimensions", "positive dimensions within 40 million pixels required")
+	}
+	if len(value.JPEGThumbnail) == 0 || len(value.JPEGThumbnail) > MaxDraftImageThumbnailBytes {
+		return DraftImage{}, invalidDraft("image.thumbnail", "bounded JPEG thumbnail required")
+	}
+	cfg, err := jpeg.DecodeConfig(bytes.NewReader(value.JPEGThumbnail))
+	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > 96 || cfg.Height > 96 {
+		return DraftImage{}, invalidDraft("image.thumbnail", "JPEG thumbnail must fit within 96 pixels")
+	}
+	if _, err := jpeg.Decode(bytes.NewReader(value.JPEGThumbnail)); err != nil {
+		return DraftImage{}, invalidDraft("image.thumbnail", "complete JPEG thumbnail required")
+	}
+	value.JPEGThumbnail = bytes.Clone(value.JPEGThumbnail)
+	return value, nil
+}
+
+// HasUpload distinguishes the supported snapshot kinds from text/contact.
+func (kind DraftKind) HasUpload() bool { return kind == DraftDocumentKind || kind == DraftImageKind }
 
 type DraftContact struct {
 	DisplayName string `json:"display_name"`
@@ -102,6 +149,7 @@ type DraftPayloadData struct {
 	Document  *DraftDocument `json:"document,omitempty"`
 	Contact   *DraftContact  `json:"contact,omitempty"`
 	Reply     *DraftReply    `json:"reply,omitempty"`
+	Image     *DraftImage    `json:"image,omitempty"`
 }
 
 type DraftPayload struct {
@@ -140,7 +188,7 @@ func NewDraftPayload(data DraftPayloadData) (DraftPayload, error) {
 		return DraftPayload{}, invalidDraft("recipient", "matches the observed local account")
 	}
 	count := 0
-	for _, present := range []bool{data.Text != nil, data.Document != nil, data.Contact != nil} {
+	for _, present := range []bool{data.Text != nil, data.Document != nil, data.Contact != nil, data.Image != nil} {
 		if present {
 			count++
 		}
@@ -171,6 +219,15 @@ func NewDraftPayload(data DraftPayloadData) (DraftPayload, error) {
 			return DraftPayload{}, err
 		}
 		data.Document = &document
+	case DraftImageKind:
+		if data.Image == nil {
+			return DraftPayload{}, invalidDraft("kind", "does not match content")
+		}
+		value, err := NewDraftImage(*data.Image)
+		if err != nil {
+			return DraftPayload{}, err
+		}
+		data.Image = &value
 	case DraftContactKind:
 		if data.Contact == nil || data.Reply != nil {
 			return DraftPayload{}, invalidDraft("kind", "contact content is required and contact replies are unsupported")

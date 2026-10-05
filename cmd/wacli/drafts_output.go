@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +26,19 @@ type draftDocumentDTO struct {
 	VerifiedAtCreate time.Time `json:"verified_at_create"`
 	SnapshotPath     string    `json:"snapshot_path,omitempty"`
 }
+type draftImageDTO struct {
+	MIME             string    `json:"mime"`
+	Caption          string    `json:"caption"`
+	Size             int64     `json:"size"`
+	SHA256           string    `json:"sha256"`
+	Width            uint32    `json:"width"`
+	Height           uint32    `json:"height"`
+	ThumbnailBytes   int       `json:"thumbnail_bytes"`
+	ThumbnailSHA256  string    `json:"thumbnail_sha256"`
+	VerifiedAtCreate time.Time `json:"verified_at_create"`
+	SnapshotPath     string    `json:"snapshot_path,omitempty"`
+}
+
 type draftDTO struct {
 	ID              string               `json:"id"`
 	RevisionID      string               `json:"revision_id"`
@@ -45,6 +60,7 @@ type draftDTO struct {
 	Defaults        store.DraftDefaults  `json:"defaults"`
 	Text            *store.DraftText     `json:"text,omitempty"`
 	Document        *draftDocumentDTO    `json:"document,omitempty"`
+	Image           *draftImageDTO       `json:"image,omitempty"`
 	Contact         *store.DraftContact  `json:"contact,omitempty"`
 	Reply           *store.DraftReply    `json:"reply,omitempty"`
 	TruncatedFields []string             `json:"truncated_fields,omitempty"`
@@ -89,7 +105,21 @@ func projectDraft(entry store.DraftEntry, storeRef string, full bool) draftDTO {
 		}
 		d.Recovery = "Inspect document bytes appropriately. Snapshot metadata describes creation, not current availability/integrity or approval."
 	}
-	if d.Document != nil && !full {
+	if p.Image != nil {
+		value := p.Image
+		thumbnailDigest := sha256.Sum256(value.JPEGThumbnail)
+		d.Image = &draftImageDTO{MIME: value.MIME, Caption: cut("image.caption", value.Caption), Size: value.Size, SHA256: value.SHA256, Width: value.Width, Height: value.Height, ThumbnailBytes: len(value.JPEGThumbnail), ThumbnailSHA256: hex.EncodeToString(thumbnailDigest[:]), VerifiedAtCreate: review.VerifiedAtCreate}
+		if full {
+			relative, err := store.DraftSnapshotRelativePath(revision.ID())
+			if err == nil {
+				d.Image.SnapshotPath = filepath.Join(storeRef, filepath.FromSlash(relative))
+			}
+		}
+		d.Recovery = "Inspect image bytes visually with appropriate local tools. Metadata describes creation, not current availability/integrity or human approval."
+	}
+	if d.Image != nil && !full {
+		d.Recovery = fmt.Sprintf("Use draft show %s --revision %s --agent --detail full; inspect image bytes separately. Metadata describes creation only, not current availability/integrity. No approval is recorded.", r.ID, revision.ID())
+	} else if d.Document != nil && !full {
 		d.Recovery = fmt.Sprintf("Use draft show %s --revision %s --agent --detail full; inspect document bytes separately. Metadata describes creation only, not current availability/integrity. No approval is recorded.", r.ID, revision.ID())
 	} else if len(d.TruncatedFields) > 0 {
 		d.Recovery = fmt.Sprintf("Use draft show %s --revision %s --agent --detail full; No approval is recorded.", r.ID, revision.ID())
@@ -153,6 +183,9 @@ func classifyDraftError(err error) *out.AgentError {
 		exit = 2
 		message = "Invalid complete local draft input."
 		recovery = "Check complete input; for --reply-to, inspect messages show --chat CHAT_JID --id MESSAGE_ID --agent --detail full locally. Use a compatible quote or explicitly recreate without --reply-to."
+	case "image_unavailable":
+		exit = 4
+		message = "Image preparation failed locally; published or uncertain artifacts are retained."
 	case "document_unavailable":
 		exit = 4
 		message = "Document preparation failed locally; published or uncertain artifacts are retained."

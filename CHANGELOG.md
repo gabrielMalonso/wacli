@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Drafts: add explicit immutable static JPEG/PNG `--image` preparation and MediaImage dispatch through retained outbound, including frozen MIME/dimensions/caption/thumbnail, managed exact bytes, compatible-owner request v2, searchable image history and correlated image echoes. Reject animated PNG and invalid/oversized images before network; preserve old canonical payloads/hashes, readonly, idempotency and SDK retries. Public previews expose thumbnail metadata only; retain image bytes outside document cleanup. No schema/dependency/conversion or immutable voice/audio support. Validation uses fixtures/fakes; live compatibility remains pending.
+
 - Draft writes: give specific wait-and-inspect guidance for final `store_locked` errors while preserving exit 4, Cause, correlation, snapshot precedence and uncertain-result handling.
 
 - Local message history: preserve raw text and media-caption whitespace on new writes and raw text edits. Keep formatted presentation and empty-content/quote guards; detect exact quote divergence across verified aliases. No historical repair, migration or change to outbound payload construction.

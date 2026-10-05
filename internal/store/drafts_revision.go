@@ -56,14 +56,14 @@ func NewDraftRevision(draftID, revisionID string, createdAt time.Time, payload D
 		return DraftRevision{}, invalidDraft("requested_jid", "does not match requested input")
 	}
 	review.RequestedJID = requested
-	if data.Kind == DraftDocumentKind {
+	if data.Kind.HasUpload() {
 		path, err := DraftSnapshotRelativePath(revisionID)
 		if err != nil || review.SnapshotPath != path || review.VerifiedAtCreate.IsZero() {
 			return DraftRevision{}, invalidDraft("snapshot", "matching revision path and creation verification are required")
 		}
 		review.VerifiedAtCreate = review.VerifiedAtCreate.UTC()
 	} else if review.SnapshotPath != "" || !review.VerifiedAtCreate.IsZero() {
-		return DraftRevision{}, invalidDraft("snapshot", "only document revisions reference a snapshot")
+		return DraftRevision{}, invalidDraft("snapshot", "only document/image revisions reference a snapshot")
 	}
 	encoded, err := json.Marshal(review)
 	if err != nil || len(encoded) > MaxDraftPayloadBytes {

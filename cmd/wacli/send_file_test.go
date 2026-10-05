@@ -284,7 +284,7 @@ func TestScaledDimensions(t *testing.T) {
 		{width: 40, height: 30, wantW: 40, wantH: 30},
 		{width: 1, height: 1000, wantW: 1, wantH: 96},
 	} {
-		gotW, gotH := scaledDimensions(tc.width, tc.height, imageThumbnailMaxDimension)
+		gotW, gotH := wa.ScaledImageDimensions(tc.width, tc.height, wa.ImageThumbnailMaxDimension)
 		if gotW != tc.wantW || gotH != tc.wantH {
 			t.Fatalf("scaledDimensions(%d,%d) = %dx%d, want %dx%d", tc.width, tc.height, gotW, gotH, tc.wantW, tc.wantH)
 		}

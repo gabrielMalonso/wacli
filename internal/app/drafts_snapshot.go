@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,8 +14,10 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/openclaw/wacli/internal/store"
+	"github.com/openclaw/wacli/internal/wa"
 )
 
 type DraftPublication string
@@ -41,6 +44,8 @@ func (e *DraftSnapshotError) Unwrap() error { return e.Cause }
 type DraftSnapshotOptions struct {
 	StoreDir, RevisionID, SourcePath string
 	Filename, MIME, Caption          string
+	Image                            bool
+	validateImage                    func(store.DraftImage) error
 	// The process opening the file must enforce its media roots here. There
 	// is deliberately no unrestricted default or pre-open stat shortcut.
 	OpenSource func(string) (*os.File, error)
@@ -51,12 +56,22 @@ type DraftSnapshot struct {
 	revisionID, relativePath string
 	document                 store.DraftDocument
 	verifiedAt               time.Time
+	image                    *store.DraftImage
 }
 
 func (s DraftSnapshot) RevisionID() string            { return s.revisionID }
 func (s DraftSnapshot) Document() store.DraftDocument { return s.document }
 func (s DraftSnapshot) VerifiedAtCreate() time.Time   { return s.verifiedAt }
 func (s DraftSnapshot) RelativePath() string          { return s.relativePath }
+
+func (s DraftSnapshot) Image() *store.DraftImage {
+	if s.image == nil {
+		return nil
+	}
+	value := *s.image
+	value.JPEGThumbnail = bytes.Clone(value.JPEGThumbnail)
+	return &value
+}
 
 type draftSnapshotIO struct {
 	syncFile func(*os.File) error
@@ -87,14 +102,19 @@ func createDraftSnapshot(ctx context.Context, opts DraftSnapshotOptions, disk dr
 	if name == "" {
 		name = filepath.Base(opts.SourcePath)
 	}
-	// Validate fields and MIME before touching source or store. A dummy
-	// digest is used only for validation, never returned as file identity.
-	probe := store.DraftDocument{Filename: name, MIME: opts.MIME, Caption: opts.Caption, SHA256: strings.Repeat("0", sha256.Size*2)}
-	if probe.MIME == "" {
-		probe.MIME = "application/octet-stream"
-	}
-	if _, err := store.NewDraftDocument(probe); err != nil {
-		return DraftSnapshot{}, err
+	// Validate input fields before touching source or store.
+	if opts.Image {
+		if opts.Filename != "" || opts.MIME != "" || !utf8.ValidString(opts.Caption) || len(opts.Caption) > store.MaxDraftFieldBytes {
+			return DraftSnapshot{}, fmt.Errorf("invalid image input")
+		}
+	} else {
+		probe := store.DraftDocument{Filename: name, MIME: opts.MIME, Caption: opts.Caption, SHA256: strings.Repeat("0", sha256.Size*2)}
+		if probe.MIME == "" {
+			probe.MIME = "application/octet-stream"
+		}
+		if _, err := store.NewDraftDocument(probe); err != nil {
+			return DraftSnapshot{}, err
+		}
 	}
 	state := DraftUnpublished
 	fail := func(stage string, err error) (DraftSnapshot, error) {
@@ -149,14 +169,38 @@ func createDraftSnapshot(ctx context.Context, opts DraftSnapshotOptions, disk dr
 			_ = root.Remove(tempName)
 		}
 	}()
-	meta, err := copyDraftSnapshotBytes(ctx, temp, source, store.MaxDraftFileBytes)
+	var captured bytes.Buffer
+	var destination io.Writer = temp
+	if opts.Image {
+		destination = io.MultiWriter(temp, &captured)
+	}
+	meta, err := copyDraftSnapshotBytes(ctx, destination, source, store.MaxDraftFileBytes)
 	if err != nil {
 		return fail("copy", err)
 	}
-	document := store.DraftDocument{Filename: name, MIME: detectDraftDocumentMIME(opts.MIME, meta.sniff), Caption: opts.Caption, Size: meta.size, SHA256: meta.sha256}
-	document, err = store.NewDraftDocument(document)
-	if err != nil {
-		return fail("metadata", err)
+	var document store.DraftDocument
+	var image *store.DraftImage
+	if opts.Image {
+		metadata, err := wa.PrepareStaticImage(captured.Bytes())
+		if err != nil {
+			return fail("image", err)
+		}
+		value, err := store.NewDraftImage(store.DraftImage{MIME: metadata.MIME, Caption: opts.Caption, Size: meta.size, SHA256: meta.sha256, Width: metadata.Width, Height: metadata.Height, JPEGThumbnail: metadata.JPEGThumbnail})
+		if err != nil {
+			return fail("image", err)
+		}
+		if opts.validateImage != nil {
+			if err := opts.validateImage(value); err != nil {
+				return fail("image", err)
+			}
+		}
+		image = &value
+	} else {
+		document = store.DraftDocument{Filename: name, MIME: detectDraftDocumentMIME(opts.MIME, meta.sniff), Caption: opts.Caption, Size: meta.size, SHA256: meta.sha256}
+		document, err = store.NewDraftDocument(document)
+		if err != nil {
+			return fail("metadata", err)
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return fail("copy", err)
@@ -196,7 +240,7 @@ func createDraftSnapshot(ctx context.Context, opts DraftSnapshotOptions, disk dr
 	if err := ctx.Err(); err != nil {
 		return fail("publish", err)
 	}
-	return DraftSnapshot{opts.RevisionID, relativePath, document, time.Now().UTC()}, nil
+	return DraftSnapshot{revisionID: opts.RevisionID, relativePath: relativePath, document: document, verifiedAt: time.Now().UTC(), image: image}, nil
 }
 
 // Opening the existing store is intentional: this helper cannot initialize

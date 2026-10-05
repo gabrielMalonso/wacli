@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/openclaw/wacli/internal/store"
+	"github.com/openclaw/wacli/internal/wa"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
@@ -60,6 +61,14 @@ func prepareOutboundPayload(p store.DraftPayloadData, uploaded *whatsmeow.Upload
 		}
 	case store.DraftContactKind:
 		msg.ContactMessage = &waE2E.ContactMessage{DisplayName: proto.String(p.Contact.DisplayName), Vcard: proto.String(p.Contact.VCard)}
+	case store.DraftImageKind:
+		up := whatsmeow.UploadResponse{}
+		if uploaded != nil {
+			up = *uploaded
+		}
+		value := p.Image
+		msg.ImageMessage = wa.BuildImageMessage(up, value.Caption, wa.ImageMetadata{MIME: value.MIME, Width: value.Width, Height: value.Height, JPEGThumbnail: value.JPEGThumbnail})
+		msg.ImageMessage.ContextInfo = ci
 	case store.DraftDocumentKind:
 		msg.DocumentMessage = &waE2E.DocumentMessage{FileName: proto.String(p.Document.Filename), Mimetype: proto.String(p.Document.MIME), Caption: proto.String(p.Document.Caption), ContextInfo: ci}
 		if uploaded != nil {

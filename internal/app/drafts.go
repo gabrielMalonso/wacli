@@ -16,6 +16,11 @@ import (
 	"github.com/openclaw/wacli/internal/store"
 )
 
+// DraftImageInput selects image preparation without legacy document fields.
+type DraftImageInput struct {
+	Path string `json:"path"`
+}
+
 // DraftInput is a bounded local request, never a send operation. Message is a
 // pointer so missing text and an explicitly empty text cannot select another kind.
 type DraftInput struct {
@@ -28,6 +33,7 @@ type DraftInput struct {
 	MIME     string              `json:"mime,omitempty"`
 	Caption  string              `json:"caption,omitempty"`
 	Contact  *store.DraftContact `json:"contact,omitempty"`
+	Image    *DraftImageInput    `json:"image,omitempty"`
 }
 
 type DraftWriteRequest struct {
@@ -42,7 +48,8 @@ type DraftWriteRequest struct {
 }
 
 func (r DraftWriteRequest) Validate() error {
-	if r.Version != 1 {
+	image := r.Input != nil && r.Input.Image != nil
+	if (r.Version != 1 && r.Version != 2) || (r.Version == 2) != image || image && r.Action != "create" && r.Action != "update" {
 		return &store.DraftValidationError{Field: "request.version", Reason: "unsupported"}
 	}
 	for _, id := range []string{r.DraftID, r.RevisionID} {
@@ -108,13 +115,22 @@ func (in DraftInput) Validate() error {
 	if in.File != "" {
 		count++
 	}
+	if in.Image != nil {
+		count++
+	}
 	if in.Contact != nil {
 		count++
 	}
 	if count != 1 {
-		return &store.DraftValidationError{Field: "input", Reason: "exactly one text, file or contact variant is required"}
+		return &store.DraftValidationError{Field: "input", Reason: "exactly one text, document, image or contact variant is required"}
 	}
 	fields := []string{in.To, in.ReplyTo, in.Filename, in.MIME, in.Caption, in.File}
+	if in.Image != nil {
+		if in.Image.Path == "" || in.Filename != "" || in.MIME != "" {
+			return &store.DraftValidationError{Field: "image", Reason: "image path required; document options are unsupported"}
+		}
+		fields = append(fields, in.Image.Path)
+	}
 	if in.Message != nil {
 		fields = append(fields, *in.Message)
 		if *in.Message == "" {
@@ -126,7 +142,7 @@ func (in DraftInput) Validate() error {
 			return &store.DraftValidationError{Field: "input", Reason: "field UTF-8/64 KiB limit exceeded"}
 		}
 	}
-	if in.Message == nil && len(in.Mentions) > 0 || in.File == "" && (in.Filename != "" || in.MIME != "" || in.Caption != "") || in.Contact != nil && in.ReplyTo != "" {
+	if in.Message == nil && len(in.Mentions) > 0 || in.File == "" && (in.Filename != "" || in.MIME != "" || in.Image == nil && in.Caption != "") || in.Contact != nil && in.ReplyTo != "" {
 		return &store.DraftValidationError{Field: "input", Reason: "options do not match content variant"}
 	}
 	if in.Contact != nil {
@@ -260,6 +276,10 @@ func (a *App) WriteLocalDraft(ctx context.Context, request DraftWriteRequest, op
 	} else if input.Contact != nil {
 		data.Kind = store.DraftContactKind
 		data.Contact = input.Contact
+	} else if input.Image != nil {
+		data.Kind = store.DraftImageKind
+		// Content metadata is filled from the captured image bytes below.
+		data.Image = &store.DraftImage{MIME: "image/png", Caption: input.Caption}
 	} else {
 		name := input.Filename
 		if name == "" {
@@ -281,7 +301,12 @@ func (a *App) WriteLocalDraft(ctx context.Context, request DraftWriteRequest, op
 		}
 		data.Reply = &candidate
 	}
-	if _, err := store.NewDraftPayload(data); err != nil {
+	preflightData := data
+	if data.Image != nil {
+		preflightData.Kind, preflightData.Image = store.DraftTextKind, nil
+		preflightData.Text = &store.DraftText{Text: "image preparation"}
+	}
+	if _, err := store.NewDraftPayload(preflightData); err != nil {
 		return store.DraftEntry{}, err
 	}
 	name := ""
@@ -302,16 +327,38 @@ func (a *App) WriteLocalDraft(ctx context.Context, request DraftWriteRequest, op
 		}
 	}
 	review := store.DraftReviewSnapshot{RequestedRaw: input.To, RecipientName: name, AccountName: request.AccountName}
-	if data.Document != nil {
+	if data.Document != nil || data.Image != nil {
 		review.SnapshotPath, _ = store.DraftSnapshotRelativePath(request.RevisionID)
 		review.VerifiedAtCreate = time.Now().UTC()
-		preflight, _ := store.NewDraftPayload(data)
-		if _, err := store.NewDraftRevision(request.DraftID, request.RevisionID, time.Now().UTC(), preflight, review); err != nil {
-			return store.DraftEntry{}, err
+		if data.Document != nil {
+			preflight, _ := store.NewDraftPayload(data)
+			if _, err := store.NewDraftRevision(request.DraftID, request.RevisionID, time.Now().UTC(), preflight, review); err != nil {
+				return store.DraftEntry{}, err
+			}
 		}
-		snapshot, err := CreateDraftSnapshot(ctx, DraftSnapshotOptions{StoreDir: a.StoreDir(), RevisionID: request.RevisionID, SourcePath: input.File, Filename: input.Filename, MIME: input.MIME, Caption: input.Caption, OpenSource: openSource})
+		sourcePath := input.File
+		if input.Image != nil {
+			sourcePath = input.Image.Path
+		}
+		options := DraftSnapshotOptions{StoreDir: a.StoreDir(), RevisionID: request.RevisionID, SourcePath: sourcePath, Image: input.Image != nil, Filename: input.Filename, MIME: input.MIME, Caption: input.Caption, OpenSource: openSource}
+		if input.Image != nil {
+			options.validateImage = func(value store.DraftImage) error {
+				candidate := data
+				candidate.Image = &value
+				payload, err := store.NewDraftPayload(candidate)
+				if err != nil {
+					return err
+				}
+				_, err = store.NewDraftRevision(request.DraftID, request.RevisionID, time.Now().UTC(), payload, review)
+				return err
+			}
+		}
+		snapshot, err := CreateDraftSnapshot(ctx, options)
 		if err != nil {
 			code := "document_unavailable"
+			if input.Image != nil {
+				code = "image_unavailable"
+			}
 			var snapshotErr *DraftSnapshotError
 			if errors.As(err, &snapshotErr) && snapshotErr.Publication == DraftPublicationUnknown {
 				code = "local_write_uncertain"
@@ -321,8 +368,12 @@ func (a *App) WriteLocalDraft(ctx context.Context, request DraftWriteRequest, op
 		if snapshot.RevisionID() != request.RevisionID {
 			return store.DraftEntry{}, store.DraftFailure("local_write_uncertain", request.DraftID, request.RevisionID, "", nil)
 		}
-		doc := snapshot.Document()
-		data.Document = &doc
+		if input.Image != nil {
+			data.Image = snapshot.Image()
+		} else {
+			doc := snapshot.Document()
+			data.Document = &doc
+		}
 		review.SnapshotPath = snapshot.RelativePath()
 		review.VerifiedAtCreate = snapshot.VerifiedAtCreate()
 	}

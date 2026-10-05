@@ -83,3 +83,37 @@ Test names must execute with `PASS`, not `SKIP`; check exit status and logs. The
 ## Live acceptance still pending
 
 The manager must separately authorize/use a test account and phone to validate pairing/sync freshness, real PN/LID/group targets, text/reply/document/card compatibility, ACK and receipt attribution (including group participants/privacy), app-state read/unread/archive, phone history and exact media recovery/CDN behavior. Test standalone recovery without a follow owner, and owner actions with a compatible running follow process. STT needs an explicitly chosen trusted adapter/environment and authorized audio to measure language/quality; this offline stub cannot approve it. No personal store, private logs/JIDs, credentials or clinical data belong in this acceptance record.
+
+## Immutable image increment
+
+The image feature is an approved extension reviewed from `92df3f9d8243367531b011e4071c4ca24ce13298`, distinct from the historical baseline above. Fixtures exercise static JPEG/PNG preparation, APNG/truncated/format/pixel rejection with small headers, old canonical hashes, exact snapshots, readonly/version/union guards, CLI standalone/owner, original-byte MediaImage dispatch, SDK-boundary failures/idempotency, image history/echo and metadata-only DTOs. They do not establish live WhatsApp compatibility or human visual review. Voice/audio are excluded.
+
+With the existing installed toolchain and cached modules only, reproduce the real base-owner proof by extracting the pinned source and copying **only** the test helper, leaving its production decoder/validator/executor unchanged:
+
+```bash
+source /home/gabriel-alonso/Projetos/wacli/dist/dev-env.sh
+export GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local
+mkdir -p dist/.tmp
+export TMPDIR=/tmp GOTMPDIR=/tmp
+image_base_dir="$(mktemp -d "$PWD/dist/.tmp/image-base.XXXXXX")"
+git archive 92df3f9d8243367531b011e4071c4ca24ce13298 | tar -x -C "$image_base_dir"
+python3 - "$image_base_dir" <<'PY'
+from pathlib import Path
+import sys
+source = Path('cmd/wacli/drafts_image_compat_test.go').read_text()
+helper = source[source.index('func TestImageBaseOwnerProcess'):source.index('func TestDraftImageRealBaseOwnerAndOldClient')]
+imports = '''package main
+import("context";"errors";"fmt";"io";"os";"sync/atomic";"testing";
+"github.com/openclaw/wacli/internal/app";"github.com/openclaw/wacli/internal/lock";"github.com/openclaw/wacli/internal/wa")
+'''
+Path(sys.argv[1], 'cmd/wacli/image_base_owner_test.go').write_text(imports + helper)
+PY
+(cd "$image_base_dir" && go test -c -tags sqlite_fts5 -o "$image_base_dir/base-tests" ./cmd/wacli && CGO_ENABLED=1 CGO_CFLAGS=-Wno-error=missing-braces go build -tags sqlite_fts5 -o "$image_base_dir/base-cli" ./cmd/wacli)
+export WACLI_IMAGE_BASE_TEST_BINARY="$image_base_dir/base-tests"
+export WACLI_IMAGE_BASE_BINARY="$image_base_dir/base-cli"
+go test -count=1 -v -tags sqlite_fts5 ./cmd/wacli -run '^TestDraftImageRealBaseOwnerAndOldClient$'
+```
+
+For the full gate, use ordinary short real `TMPDIR=/tmp` and `GOTMPDIR=/tmp`, without `/proc` aliases, a media-root override or namespace/mount changes. Normal test/toolchain cleanup of its own temporary files is part of execution; do not manually clean outside the workspace. Neither HOME nor any account/store is repurposed. Retain the base copy and proof logs under ignored `dist`. For the already-cached deadcode tool metadata, use `GOPROXY="file://$GOMODCACHE/cache/download"` with `GOSUMDB=off`, without network fallback or installations.
+
+Run image tests in both plain and FTS modes, plus a proportional race run. After building the final CLI, set `WACLI_DRAFT_E2E_BINARY` and `WACLI_OUTBOUND_E2E_BINARY` to that absolute binary path and run `TestDraftImageProductionBinary` and `TestOutboundImageProductionBinary` explicitly with PASS. The base test also verifies old-client `--image` refusal, old-owner create/update refusal and old-owner stored-image dispatch failure before any WA factory call. Public-source paths, thumbnail blobs and false delivery/read claims must remain absent from returned DTOs. Keep the exact pre-PR full gate and final-SHA evidence described above; fixtures never authorize live sends.

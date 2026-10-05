@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +28,7 @@ import (
 type outboundFake struct {
 	account             store.DraftIdentity
 	uploads, sends, ids int
+	uploadType          whatsmeow.MediaType
 	sent                *waE2E.Message
 	bytes               []byte
 	id                  string
@@ -48,8 +51,9 @@ func (f *outboundFake) SendOutbound(ctx context.Context, to types.JID, id string
 	}
 	return whatsmeow.SendResponse{ID: id, Chat: to, Sender: types.NewJID("90001", types.HiddenUserServer), Timestamp: time.Now().UTC()}, nil
 }
-func (f *outboundFake) Upload(ctx context.Context, b []byte, _ whatsmeow.MediaType) (whatsmeow.UploadResponse, error) {
+func (f *outboundFake) Upload(ctx context.Context, b []byte, kind whatsmeow.MediaType) (whatsmeow.UploadResponse, error) {
 	f.uploads++
+	f.uploadType = kind
 	f.bytes = bytes.Clone(b)
 	if f.onUpload != nil {
 		return f.onUpload(ctx, b)
@@ -77,6 +81,25 @@ func outboundAppFixture(t *testing.T, kind store.DraftKind) (*App, outboundRunne
 			t.Fatal(err)
 		}
 	}
+	if kind == store.DraftImageKind {
+		input.Message = nil
+		input.Image = &DraftImageInput{Path: filepath.Join(a.StoreDir(), "source.png")}
+		var data bytes.Buffer
+		if err := png.Encode(&data, image.NewRGBA(image.Rect(0, 0, 2, 1))); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(input.Image.Path, data.Bytes(), 0600); err != nil {
+			t.Fatal(err)
+		}
+		input.Caption = " literal\\n\n🔷 "
+		input.ReplyTo = "image-quoted"
+		if err := a.DB().UpsertChat(input.To, "dm", "fixture", time.Unix(1, 0)); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.DB().UpsertMessage(store.UpsertMessageParams{ChatJID: input.To, MsgID: input.ReplyTo, SenderJID: input.To, Text: " frozen\n quote ", Timestamp: time.Unix(1, 0)}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	e, err := a.WriteLocalDraft(t.Context(), draftAppRequest(t, a, input), os.Open)
 	if err != nil {
 		t.Fatal(err)
@@ -92,9 +115,14 @@ func outboundAppFixture(t *testing.T, kind store.DraftKind) (*App, outboundRunne
 }
 
 func TestOutboundTypedPayloadAndRetainedDuplicate(t *testing.T) {
-	for _, kind := range []store.DraftKind{store.DraftTextKind, store.DraftContactKind, store.DraftDocumentKind} {
+	for _, kind := range []store.DraftKind{store.DraftTextKind, store.DraftContactKind, store.DraftDocumentKind, store.DraftImageKind} {
 		t.Run(string(kind), func(t *testing.T) {
 			a, x, r, f, rev := outboundAppFixture(t, kind)
+			if kind == store.DraftImageKind {
+				if err := a.DB().UpsertMessage(store.UpsertMessageParams{ChatJID: "90002@lid", MsgID: "image-quoted", SenderJID: "90002@lid", Text: "edited after preparation", Timestamp: time.Unix(2, 0)}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			admissions := 0
 			result, err := x.send(t.Context(), r, func(context.Context) error { admissions++; return nil })
 			if err != nil || result.Entry.Operation.Result != store.OutboundAccepted || result.Persistence != "confirmed" || result.KnownACK == nil {
@@ -114,6 +142,20 @@ func TestOutboundTypedPayloadAndRetainedDuplicate(t *testing.T) {
 				media, err := a.DB().GetMediaDownloadInfo(result.Entry.Operation.Recipient.JID, f.id)
 				if err != nil || media.DirectPath != "/fixture" || len(media.MediaKey) != 32 || media.FileLength != uint64(len(f.bytes)) {
 					t.Fatal("secondary document projection", media, err)
+				}
+			} else if kind == store.DraftImageKind {
+				value := rev.Payload().Data().Image
+				msg := f.sent.GetImageMessage()
+				if f.uploadType != whatsmeow.MediaImage || msg.GetWidth() != value.Width || msg.GetHeight() != value.Height || msg.GetCaption() != value.Caption || !bytes.Equal(msg.GetJPEGThumbnail(), value.JPEGThumbnail) || msg.GetFileLength() != uint64(value.Size) {
+					t.Fatal("image wire", msg)
+				}
+				quote := msg.GetContextInfo()
+				if quote.GetStanzaID() != "image-quoted" || quote.GetParticipant() != "90002@lid" || quote.GetRemoteJID() != "90002@lid" || quote.GetQuotedMessage().GetConversation() != " frozen\n quote " {
+					t.Fatal("image quote followed current history", quote)
+				}
+				info, err := a.DB().GetMediaDownloadInfo(result.Entry.Operation.Recipient.JID, f.id)
+				if err != nil || info.MediaType != "image" || info.MimeType != value.MIME {
+					t.Fatal(info, err)
 				}
 			} else if !proto.Equal(f.sent, want) || f.uploads != 0 {
 				t.Fatal("payload", f.sent, want)
@@ -170,47 +212,49 @@ func TestOutboundMilestonesFailuresAndNoApplicationRetry(t *testing.T) {
 		{name: "send response lost", sendError: true, want: store.OutboundUncertain, uploads: 1, sends: 1},
 		{name: "caller canceled in send", cancel: true, want: store.OutboundUncertain, uploads: 1, sends: 1},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			_, x, r, f, _ := outboundAppFixture(t, store.DraftDocumentKind)
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			original := x.repository.Checkpoint
-			x.repository.Checkpoint = func(ctx context.Context, ch store.OutboundCheckpoint) (store.OutboundOperation, error) {
-				if ch.Phase == c.phase {
-					if c.lostCommit {
-						_, err := original(ctx, ch)
-						if err != nil {
-							return store.OutboundOperation{}, err
+	for _, kind := range []store.DraftKind{store.DraftDocumentKind, store.DraftImageKind} {
+		for _, c := range cases {
+			t.Run(string(kind)+"/"+c.name, func(t *testing.T) {
+				_, x, r, f, _ := outboundAppFixture(t, kind)
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				original := x.repository.Checkpoint
+				x.repository.Checkpoint = func(ctx context.Context, ch store.OutboundCheckpoint) (store.OutboundOperation, error) {
+					if ch.Phase == c.phase {
+						if c.lostCommit {
+							_, err := original(ctx, ch)
+							if err != nil {
+								return store.OutboundOperation{}, err
+							}
 						}
+						return store.OutboundOperation{}, errors.New("synthetic commit failure")
 					}
-					return store.OutboundOperation{}, errors.New("synthetic commit failure")
+					return original(ctx, ch)
 				}
-				return original(ctx, ch)
-			}
-			if c.uploadError {
-				f.onUpload = func(context.Context, []byte) (whatsmeow.UploadResponse, error) {
-					return whatsmeow.UploadResponse{}, errors.New("upload uncertain")
-				}
-			}
-			if c.sendError || c.cancel {
-				f.onSend = func(context.Context, types.JID, string, *waE2E.Message) (whatsmeow.SendResponse, error) {
-					if c.cancel {
-						cancel()
-						return whatsmeow.SendResponse{}, context.Canceled
+				if c.uploadError {
+					f.onUpload = func(context.Context, []byte) (whatsmeow.UploadResponse, error) {
+						return whatsmeow.UploadResponse{}, errors.New("upload uncertain")
 					}
-					return whatsmeow.SendResponse{}, errors.New("lost ACK")
 				}
-			}
-			result, err := x.send(ctx, r, nil)
-			if err == nil || result.Persistence != "confirmed" || result.Entry.Operation.Result != c.want || f.uploads != c.uploads || f.sends != c.sends {
-				t.Fatal(result, err, f.uploads, f.sends)
-			}
-			duplicate, err := x.send(t.Context(), r, nil)
-			if err != nil || !duplicate.Duplicate || f.uploads != c.uploads || f.sends != c.sends {
-				t.Fatal("replayed", duplicate, err)
-			}
-		})
+				if c.sendError || c.cancel {
+					f.onSend = func(context.Context, types.JID, string, *waE2E.Message) (whatsmeow.SendResponse, error) {
+						if c.cancel {
+							cancel()
+							return whatsmeow.SendResponse{}, context.Canceled
+						}
+						return whatsmeow.SendResponse{}, errors.New("lost ACK")
+					}
+				}
+				result, err := x.send(ctx, r, nil)
+				if err == nil || result.Persistence != "confirmed" || result.Entry.Operation.Result != c.want || f.uploads != c.uploads || f.sends != c.sends {
+					t.Fatal(result, err, f.uploads, f.sends)
+				}
+				duplicate, err := x.send(t.Context(), r, nil)
+				if err != nil || !duplicate.Duplicate || f.uploads != c.uploads || f.sends != c.sends {
+					t.Fatal("replayed", duplicate, err)
+				}
+			})
+		}
 	}
 }
 

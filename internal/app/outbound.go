@@ -164,7 +164,7 @@ func (x outboundRunner) send(ctx context.Context, r OutboundSendRequest, beforeN
 		return finish(store.OutboundNotDispatched, "store_error", nil, err)
 	}
 	var buffer []byte
-	if p.Document != nil {
+	if p.Kind.HasUpload() {
 		buffer, err = x.document(ctx, entry.Revision)
 		if err != nil {
 			return finish(store.OutboundNotDispatched, "preparation_failed", nil, err)
@@ -177,7 +177,7 @@ func (x outboundRunner) send(ctx context.Context, r OutboundSendRequest, beforeN
 		return finish(store.OutboundNotDispatched, "identity_changed", nil, err)
 	}
 	var uploaded *whatsmeow.UploadResponse
-	if p.Document != nil {
+	if p.Kind.HasUpload() {
 		if err = step(store.OutboundUploadPossible); err != nil {
 			return finish(store.OutboundNotDispatched, "store_error", nil, err)
 		}
@@ -186,7 +186,11 @@ func (x outboundRunner) send(ctx context.Context, r OutboundSendRequest, beforeN
 		}
 		digest := sha256.Sum256(buffer)
 		length := uint64(len(buffer))
-		response, uploadErr := client.Upload(ctx, buffer, whatsmeow.MediaDocument)
+		uploadType := whatsmeow.MediaDocument
+		if p.Kind == store.DraftImageKind {
+			uploadType = whatsmeow.MediaImage
+		}
+		response, uploadErr := client.Upload(ctx, buffer, uploadType)
 		if uploadErr != nil {
 			return finish(store.OutboundNotDispatched, outboundContextCode(uploadErr, "upload_error"), nil, uploadErr)
 		}
@@ -338,6 +342,14 @@ func (a *App) persistOutboundHistory(p store.DraftPayloadData, o store.OutboundO
 			u.MediaKey = uploaded.MediaKey
 			u.FileSHA256 = uploaded.FileSHA256
 			u.FileEncSHA256 = uploaded.FileEncSHA256
+		}
+	}
+	if p.Image != nil {
+		u.Text, u.MediaCaption = p.Image.Caption, p.Image.Caption
+		u.MediaType, u.MimeType, u.FileLength = "image", p.Image.MIME, uint64(p.Image.Size)
+		if uploaded != nil {
+			u.DirectPath, u.MediaKey = uploaded.DirectPath, uploaded.MediaKey
+			u.FileSHA256, u.FileEncSHA256 = uploaded.FileSHA256, uploaded.FileEncSHA256
 		}
 	}
 	if p.Reply != nil {
