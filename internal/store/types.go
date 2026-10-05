@@ -43,19 +43,22 @@ type GroupParticipant struct {
 }
 
 type MediaDownloadInfo struct {
-	ChatJID       string
-	ChatName      string
-	MsgID         string
-	MediaType     string
-	Filename      string
-	MimeType      string
-	DirectPath    string
-	MediaKey      []byte
-	FileSHA256    []byte
-	FileEncSHA256 []byte
-	FileLength    uint64
-	LocalPath     string
-	DownloadedAt  time.Time
+	ChatJID            string
+	ChatName           string
+	MsgID              string
+	MediaType          string
+	Filename           string
+	MimeType           string
+	DirectPath         string
+	MediaKey           []byte
+	FileSHA256         []byte
+	FileEncSHA256      []byte
+	FileLength         uint64
+	LocalPath          string
+	DownloadedAt       time.Time
+	MediaUnavailableAt time.Time
+	Tombstone          bool
+	InvalidFileLength  bool
 }
 
 type Button struct {

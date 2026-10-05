@@ -16,6 +16,9 @@ func TestPendingMediaQueriesHonorCanceledContext(t *testing.T) {
 	if _, err := db.CountPendingMediaDownloads(ctx, ""); !errors.Is(err, context.Canceled) {
 		t.Fatalf("CountPendingMediaDownloads error = %v, want context.Canceled", err)
 	}
+	if _, err := db.GetMediaDownloadInfoContext(ctx, "chat", "msg"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetMediaDownloadInfoContext error = %v", err)
+	}
 	if _, err := db.ListPendingMediaDownloads(ctx, "", 0); !errors.Is(err, context.Canceled) {
 		t.Fatalf("ListPendingMediaDownloads error = %v, want context.Canceled", err)
 	}
@@ -89,5 +92,32 @@ func assertMediaUnavailableCleared(t *testing.T, db *DB, chatJID, msgID string) 
 	}
 	if unavailableAt.Valid {
 		t.Fatalf("media_unavailable_at still set: %d", unavailableAt.Int64)
+	}
+}
+
+func TestMediaDownloadInfoObservesTombstonePresenceAndInvalidLength(t *testing.T) {
+	db := openTestDB(t)
+	chat := "123@s.whatsapp.net"
+	if err := db.UpsertChat(chat, "dm", "Fixture", time.Unix(1000, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMessage(UpsertMessageParams{ChatJID: chat, MsgID: "media", Timestamp: time.Unix(1000, 0), MediaType: "audio"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, at := range []int64{0, -1, 1001} {
+		if _, err := db.sql.Exec(`UPDATE messages SET deleted_at=? WHERE chat_jid=? AND msg_id=?`, at, chat, "media"); err != nil {
+			t.Fatal(err)
+		}
+		info, err := db.GetMediaDownloadInfo(chat, "media")
+		if err != nil || !info.Tombstone {
+			t.Fatalf("tombstone at %d: %+v %v", at, info, err)
+		}
+	}
+	if _, err := db.sql.Exec(`UPDATE messages SET deleted_at=NULL,file_length=-1 WHERE chat_jid=? AND msg_id=?`, chat, "media"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := db.GetMediaDownloadInfo(chat, "media")
+	if err != nil || info.Tombstone || !info.InvalidFileLength {
+		t.Fatalf("invalid length: %+v %v", info, err)
 	}
 }
