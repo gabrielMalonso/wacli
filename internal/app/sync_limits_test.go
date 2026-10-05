@@ -78,7 +78,7 @@ func TestSyncFlushesFinalHistoryPollVoteAtMaxMessages(t *testing.T) {
 	a.wa = f
 
 	chat := types.JID{User: "123", Server: types.DefaultUserServer}
-	voter := types.JID{User: "777", Server: types.DefaultUserServer}
+	voter := chat // A valid incoming DM author lets the fixture reach its limit.
 	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	pollMsgID := "poll-final-limit"
 	if err := a.db.UpsertPoll(store.Poll{

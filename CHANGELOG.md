@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- History: attribute newly imported own messages to the observed local account, keeping absent authors unknown and refusing conflicting author/PN-LID assertions. Preserve history content, stars, edits and crypto identities. Refuse unknown-author replays of retained known-sender rows; existing timestamp/edit/deletion protections and strict draft quotes remain unchanged. Previously imported incorrect senders remain pending separate review; no migration or automatic repair.
+
 - Diagnostics: add local app-state replay debt to doctor human/legacy JSON/agent compact/full and sync summaries, with explicit unknown/null diagnostics for unavailable reads. Sync reports bounded per-invocation recovery outcomes after closing/draining App while retaining its writer lock; later completion does not erase earlier failure. Preserve existing exits and `success`/`synced` semantics, distinguish preventive shutdown debt from known recovery failures, and make no integrity, freshness or remote-cause claim.
 
 - Tests/docs: align offline pagination fixture assertions with normal readonly SQLite bookkeeping, allowing only regular archive WAL/SHM sidecars and an empty WAL while retaining exact database bytes/schema, database/directory permissions and rejection of new databases/session/LOCK files. Compare database bytes with `Buffer.equals` and a concise assertion so mismatches do not construct large buffer diffs. Clarify readonly WhatsApp/archive write barriers, requested export/download output, explicitly selected unsandboxed adapters and bookkeeping exceptions; CLI/agent behavior is unchanged.
