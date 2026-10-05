@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Agents: add exact-message `media status` with opt-in local verification and `media download --output` using a readonly archive without a session, LOCK or IPC. Reuse digest-verified cache/destinations without network keys, preserve dated unavailable observations and unknown current availability, confine agent file IO, and publish verified 0600 files without replacing existing destinations. Keep legacy media behavior and bulk retry unchanged; validate with local HTTPS/owner-LOCK fixtures only.
+
 - Agents: add only explicit `chats mark-unread/archive/unarchive` through existing app-state recovery and a bounded typed owner IPC kind, outside send queue/pacing. Freeze strict public account/target observations without requiring unknown PN/LID aliases; report SDK completion, uncertainty and local mirror/output failures without replay or remote-state guarantees. Preserve legacy behavior, independent requests and draining; no schema or journal. Validate standalone/owner lifecycle, deadlines, identities and errors with fixtures/fakes.
 
 - Tests/docs: cover independent outbound requests sharing one account through existing LOCK/owner IPC, including response correlation, queue expiry, parallel local reads, uncertainty and no application replay. Document concurrent use and legacy limits without changing production behavior.
