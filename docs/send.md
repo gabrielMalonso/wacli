@@ -2,6 +2,8 @@
 
 The legacy commands below retain their existing behavior. The separate [outbound action](outbound.md) sends an explicit frozen draft revision/hash/key once through the application. It preserves SDK protocol retries, even after an uncertain result, and offers local show/list queries; it does not use the legacy application retry runner.
 
+Newly accepted outbound contact drafts record searchable local history text as `Contact: NAME (PHONE)`, using the frozen display name and vCard with the same formatting as received cards. Both legacy message reads and `messages show --agent --detail full` expose that text; the stored message type remains `text`. This applies only to new sends after upgrading. Existing name-only history rows are not repaired, and repeating an outbound key retains the original operation without sending or rewriting its history. A secondary history failure retains accepted status with `history_warning`; it does not authorize another send or establish recipient delivery.
+
 Read when: sending text, files, stickers, locations, polls, status broadcasts, quoted replies, or reactions.
 
 `wacli send` requires authentication, a live connection, and writable mode. Send attempts are bounded and retry once after reconnect for known stale-session/usync timeout failures. `Sent to ...` and JSON `sent: true` mean WhatsApp accepted the send request and returned a message ID; they do not confirm recipient delivery. After a successful send, wacli keeps the connection alive briefly so whatsmeow can handle retry receipts from devices that could not decrypt the first copy. Repeated send commands within 5 seconds print a stderr warning so tight loops make WhatsApp rate-limit/account-risk visible.

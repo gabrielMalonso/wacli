@@ -12,6 +12,7 @@ import (
 	"github.com/openclaw/wacli/internal/store"
 	"github.com/openclaw/wacli/internal/wa"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 )
 
 // LookupOutboundSend resolves an existing binding without session, current
@@ -323,7 +324,7 @@ func (a *App) persistOutboundHistory(p store.DraftPayloadData, o store.OutboundO
 		u.Text = p.Text.Text
 	}
 	if p.Contact != nil {
-		u.Text = p.Contact.DisplayName
+		u.Text = wa.ContactDisplayText(&waE2E.ContactMessage{DisplayName: &p.Contact.DisplayName, Vcard: &p.Contact.VCard})
 	}
 	if p.Document != nil {
 		u.Text = p.Document.Caption

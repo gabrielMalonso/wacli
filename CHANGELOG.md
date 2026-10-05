@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Outbound contacts: persist searchable names and vCard phone numbers for newly accepted contact drafts using the received-card text formatter. Preserve `type=text`, legacy reads, frozen wire payloads, retained-key idempotency and accepted results with secondary history warnings. Existing name-only history is not repaired or replayed.
+
 - History: attribute newly imported own messages to the observed local account, keeping absent authors unknown and refusing conflicting author/PN-LID assertions. Preserve history content, stars, edits and crypto identities. Refuse unknown-author replays of retained known-sender rows; existing timestamp/edit/deletion protections and strict draft quotes remain unchanged. Previously imported incorrect senders remain pending separate review; no migration or automatic repair.
 
 - Diagnostics: add local app-state replay debt to doctor human/legacy JSON/agent compact/full and sync summaries, with explicit unknown/null diagnostics for unavailable reads. Sync reports bounded per-invocation recovery outcomes after closing/draining App while retaining its writer lock; later completion does not erase earlier failure. Preserve existing exits and `success`/`synced` semantics, distinguish preventive shutdown debt from known recovery failures, and make no integrity, freshness or remote-cause claim.

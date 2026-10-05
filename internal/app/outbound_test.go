@@ -501,3 +501,73 @@ func TestOutboundIdentityChangedDuringUploadStopsDispatch(t *testing.T) {
 		t.Fatal(result, err, f.uploads, f.sends)
 	}
 }
+
+func TestOutboundContactHistoryAndRetainedDuplicate(t *testing.T) {
+	for _, name := range []string{"Fixture", "A\\B;C,D\r\nTEL:+999\rFN:injected\n尾"} {
+		t.Run(name, func(t *testing.T) {
+			a, x, r, f, rev := outboundAppFixture(t, store.DraftContactKind)
+			if name != "Fixture" {
+				contact, err := store.NewDraftContact(name, "15550000003")
+				if err != nil {
+					t.Fatal(err)
+				}
+				entry, err := a.WriteLocalDraft(t.Context(), draftAppRequest(t, a, DraftInput{To: "90002@lid", Contact: &contact}), os.Open)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rev = entry.Revision
+				r.DraftID, r.RevisionID, r.Hash = entry.Record.ID, rev.ID(), rev.Payload().Hash()
+			}
+			historyCalls := 0
+			history := x.history
+			x.history = func(p store.DraftPayloadData, o store.OutboundOperation, response whatsmeow.SendResponse, uploaded *whatsmeow.UploadResponse) error {
+				historyCalls++
+				return history(p, o, response, uploaded)
+			}
+			result, err := x.send(t.Context(), r, nil)
+			if err != nil || result.HistoryWarning || result.KnownResult != store.OutboundAccepted || result.Persistence != "confirmed" || result.Entry.Evidence.Accepted != "observed" || result.Entry.Evidence.Delivered != "unknown" {
+				t.Fatal(result, err)
+			}
+			card := rev.Payload().Data().Contact
+			wire := f.sent.GetContactMessage()
+			if wire.GetDisplayName() != card.DisplayName || wire.GetVcard() != card.VCard {
+				t.Fatal("wire changed from frozen contact")
+			}
+			op := result.Entry.Operation
+			m, err := a.DB().GetMessage(op.Recipient.JID, op.MessageID)
+			want := "Contact: " + name + " (+15550000003)"
+			if err != nil || m.Text != want || m.DisplayText != "" || m.MediaType != "" || !m.FromMe || m.SenderJID != "90001@lid" {
+				t.Fatalf("contact projection: text=%q, err=%v", m.Text, err)
+			}
+			found, err := a.DB().SearchMessages(store.SearchMessagesParams{ChatJID: op.Recipient.JID, Query: card.Phone, Type: "text"})
+			if err != nil || len(found) != 1 || found[0].MsgID != op.MessageID || found[0].Text != want {
+				t.Fatal("contact phone not searchable", err)
+			}
+			again, err := x.send(t.Context(), r, nil)
+			count, countErr := a.DB().CountMessages()
+			if err != nil || !again.Duplicate || again.Entry.Operation.ID != op.ID || again.Entry.Operation.Generation != op.Generation || f.sends != 1 || f.ids != 1 || historyCalls != 1 || countErr != nil || count != 1 {
+				t.Fatal("duplicate changed operation, send or history", err, countErr)
+			}
+			if a.wa != nil {
+				t.Fatal("real WA client opened")
+			}
+		})
+	}
+}
+
+func TestOutboundContactHistoryFailureRemainsAccepted(t *testing.T) {
+	_, x, r, f, _ := outboundAppFixture(t, store.DraftContactKind)
+	historyCalls := 0
+	x.history = func(store.DraftPayloadData, store.OutboundOperation, whatsmeow.SendResponse, *whatsmeow.UploadResponse) error {
+		historyCalls++
+		return errors.New("synthetic history failure")
+	}
+	result, err := x.send(t.Context(), r, nil)
+	if err != nil || !result.HistoryWarning || result.KnownResult != store.OutboundAccepted || result.Persistence != "confirmed" || result.Entry.Evidence.Accepted != "observed" {
+		t.Fatal("secondary history failure changed acceptance", err)
+	}
+	again, err := x.send(t.Context(), r, nil)
+	if err != nil || !again.Duplicate || again.Entry.Operation.ID != result.Entry.Operation.ID || again.Entry.Operation.Generation != result.Entry.Operation.Generation || f.sends != 1 || f.ids != 1 || historyCalls != 1 {
+		t.Fatal("history failure triggered resend or persistence replay", err)
+	}
+}
