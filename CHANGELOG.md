@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Drafts: keep mutable update/discard timestamps nondecreasing across backward clock adjustments, preserve retained creation/update times and return the persisted values. Guard discard against concurrent record changes so eligible documents remain inspectable by cleanup; retain immutable revision timestamps/hashes. No migration or automatic repair of earlier inconsistent records.
+
 - Local reads: propagate message chat-filter stat errors other than session absence and readonly session-opening failures instead of silently returning empty matches. Expose offline doctor auth-source failures through legacy `store_error` while preserving diagnostic exit 0, existing bool fields, known auth/JID data on archive-only failures, and normal session absence; agent errors remain sanitized with exit 4 and no auth data. Keep optional display-name decoration and identity queries unchanged.
 
 - Readonly SQLite: use normal `mode=ro`/`query_only` for archives, public-session identity resolution, auth status and offline doctor without inferring immutability from absent sidecars. Permit required WAL/SHM bookkeeping even on clean WAL files; report opener permission failures without fallback. Preserve missing-file/directory no-create, schema checks, permissions and SQL readonly behavior; document live-read snapshot limits and validate with synthetic WAL/DELETE fixtures.
