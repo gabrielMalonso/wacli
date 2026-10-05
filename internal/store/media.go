@@ -8,23 +8,30 @@ import (
 )
 
 func (d *DB) GetMediaDownloadInfo(chatJID, msgID string) (MediaDownloadInfo, error) {
-	row, err := d.q.GetMediaDownloadInfo(storeCtx(), storedb.GetMediaDownloadInfoParams{ChatJid: chatJID, MsgID: msgID})
+	return d.GetMediaDownloadInfoContext(storeCtx(), chatJID, msgID)
+}
+
+func (d *DB) GetMediaDownloadInfoContext(ctx context.Context, chatJID, msgID string) (MediaDownloadInfo, error) {
+	row, err := d.q.GetMediaDownloadInfo(ctx, storedb.GetMediaDownloadInfoParams{ChatJid: chatJID, MsgID: msgID})
 	if err != nil {
 		return MediaDownloadInfo{}, err
 	}
 	info := MediaDownloadInfo{
-		ChatJID:       row.ChatJid,
-		ChatName:      row.Name,
-		MsgID:         row.MsgID,
-		MediaType:     row.MediaType,
-		Filename:      row.Filename,
-		MimeType:      row.MimeType,
-		DirectPath:    row.DirectPath,
-		MediaKey:      row.MediaKey,
-		FileSHA256:    row.FileSha256,
-		FileEncSHA256: row.FileEncSha256,
-		LocalPath:     row.LocalPath,
-		DownloadedAt:  fromUnix(row.DownloadedAt),
+		ChatJID:            row.ChatJid,
+		ChatName:           row.Name,
+		MsgID:              row.MsgID,
+		MediaType:          row.MediaType,
+		Filename:           row.Filename,
+		MimeType:           row.MimeType,
+		DirectPath:         row.DirectPath,
+		MediaKey:           row.MediaKey,
+		FileSHA256:         row.FileSha256,
+		FileEncSHA256:      row.FileEncSha256,
+		LocalPath:          row.LocalPath,
+		DownloadedAt:       fromUnix(row.DownloadedAt),
+		MediaUnavailableAt: fromUnix(row.MediaUnavailableAt),
+		Tombstone:          row.Tombstone != 0,
+		InvalidFileLength:  row.FileLength < 0,
 	}
 	if row.FileLength > 0 {
 		info.FileLength = uint64(row.FileLength)

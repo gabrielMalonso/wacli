@@ -7,6 +7,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
+	"unicode"
 
 	"github.com/openclaw/wacli/internal/app"
 	"github.com/openclaw/wacli/internal/config"
@@ -28,6 +30,8 @@ const (
 	agentLocalDraftWrite
 	agentOutboundSend
 	agentChatState
+	agentMediaDownload
+	agentMediaRead
 )
 
 // Recover output intent even if Cobra stops on an earlier parse error. Inspect
@@ -194,6 +198,10 @@ func agentCommandCapability(cmd *cobra.Command) agentCapability {
 		return agentLocalRead
 	case "draft show", "draft list", "outbound show", "outbound list":
 		return agentLocalRead
+	case "media status":
+		return agentMediaRead
+	case "media download":
+		return agentMediaDownload
 	case "draft create", "draft update", "draft discard":
 		return agentLocalDraftWrite
 	case "history backfill":
@@ -239,6 +247,28 @@ func validateAgentCommand(cmd *cobra.Command, args []string, flags *rootFlags) e
 		}
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), "wacli ")
+	if path == "media status" || path == "media download" {
+		chat, _ := cmd.Flags().GetString("chat")
+		id, _ := cmd.Flags().GetString("id")
+		if err := validateAgentMediaSelection(chat, id); err != nil {
+			return usage(err)
+		}
+		output, _ := cmd.Flags().GetString("output")
+		if len(output) > 4096 || strings.Contains(output, "://") || strings.IndexFunc(output, unicode.IsControl) >= 0 {
+			return usage(fmt.Errorf("--output requires a local filesystem path without controls"))
+		}
+		if path == "media download" {
+			if strings.TrimSpace(output) == "" {
+				return usage(fmt.Errorf("--output is required with --agent media download"))
+			}
+		}
+		if flags.timeout <= 0 || flags.timeout > 5*time.Minute {
+			return usage(fmt.Errorf("media --timeout must be positive and at most 5m"))
+		}
+		if _, err := outboundMediaRoots(); err != nil {
+			return usage(fmt.Errorf("invalid WACLI_MEDIA_ROOTS configuration"))
+		}
+	}
 	if flags.agentCapability == agentChatState {
 		if flags.isReadOnly() {
 			return &out.AgentError{Code: "read_only", Message: "Read-only policy rejects chat state mutations.", ExitCode: 2}
@@ -468,7 +498,7 @@ func agentMeta(flags *rootFlags) out.AgentMeta {
 		detail = "compact"
 	}
 	source := "local"
-	if flags.agentCapability == agentHistoryRecovery || flags.agentCapability == agentOutboundSend || flags.agentCapability == agentChatState {
+	if flags.agentCapability == agentHistoryRecovery || flags.agentCapability == agentOutboundSend || flags.agentCapability == agentChatState || flags.agentCapability == agentMediaDownload {
 		source = "live"
 	}
 	meta := out.AgentMeta{Source: source, Detail: detail, Completeness: "unknown", Freshness: "unknown"}

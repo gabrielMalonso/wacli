@@ -22,6 +22,7 @@ func newMediaCmd(flags *rootFlags) *cobra.Command {
 	cmd.AddCommand(newMediaDownloadCmd(flags))
 	cmd.AddCommand(newMediaBackfillCmd(flags))
 	cmd.AddCommand(newMediaRetryCmd(flags))
+	cmd.AddCommand(newMediaStatusCmd(flags))
 	return cmd
 }
 
@@ -224,6 +225,9 @@ func newMediaDownloadCmd(flags *rootFlags) *cobra.Command {
 		Use:   "download",
 		Short: "Download media for a message",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if flags.agent {
+				return runAgentMedia(cmd, flags, chat, id, outputPath, true, true)
+			}
 			if chat == "" || id == "" {
 				return fmt.Errorf("--chat and --id are required")
 			}

@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,10 @@ import (
 )
 
 const MaxMediaDownloadSize = 100 * 1024 * 1024
+
+var ErrMediaTooLarge = errors.New("media too large")
+var ErrMediaMetadataInvalid = errors.New("invalid media download metadata")
+var ErrMediaDecryptFailed = errors.New("failed to decrypt file")
 
 var directMediaBaseURL = "https://mmg.whatsapp.net"
 
@@ -138,27 +143,9 @@ func (c *Client) DownloadRetriedMediaToFile(ctx context.Context, directPath stri
 }
 
 func DownloadMediaDirectToFile(ctx context.Context, directPath string, encFileHash, fileHash, mediaKey []byte, fileLength uint64, mediaType string, targetPath string) (int64, error) {
-	if strings.TrimSpace(directPath) == "" {
-		return 0, fmt.Errorf("direct path is required")
-	}
-	mt, err := MediaTypeFromString(mediaType)
+	plaintext, err := downloadMediaDirectPlaintext(ctx, directPath, encFileHash, fileHash, mediaKey, fileLength, mediaType)
 	if err != nil {
 		return 0, err
-	}
-	mediaURL, err := directMediaURL(directPath, encFileHash, mt)
-	if err != nil {
-		return 0, err
-	}
-	if _, err := mediaDownloadLength(fileLength); err != nil {
-		return 0, err
-	}
-
-	plaintext, err := downloadAndDecryptDirect(ctx, mediaURL, encFileHash, fileHash, mediaKey, fileLength, mt)
-	if err != nil {
-		return 0, err
-	}
-	if len(plaintext) > MaxMediaDownloadSize {
-		return 0, fmt.Errorf("media too large; maximum download size is %d bytes", MaxMediaDownloadSize)
 	}
 	if err := fsutil.EnsureWritableDir(filepath.Dir(targetPath)); err != nil {
 		return 0, fmt.Errorf("create output dir: %w", err)
@@ -191,6 +178,43 @@ func DownloadMediaDirectToFile(ctx context.Context, directPath string, encFileHa
 	}
 	success = true
 	return int64(len(plaintext)), nil
+}
+
+// DownloadMediaDirectBytes shares legacy decryption without writing files or
+// opening a WA session. Agents require a plaintext digest and a complete key.
+// This is bounded buffering, not streaming: ciphertext, plaintext and the CBC
+// copy can coexist. Callers own destination policy and no-replace publication.
+func DownloadMediaDirectBytes(ctx context.Context, directPath string, encFileHash, fileHash, mediaKey []byte, fileLength uint64, mediaType string) ([]byte, error) {
+	if len(fileHash) != sha256.Size || len(mediaKey) != 32 || (len(encFileHash) != 0 && len(encFileHash) != sha256.Size) {
+		return nil, ErrMediaMetadataInvalid
+	}
+	return downloadMediaDirectPlaintext(ctx, directPath, encFileHash, fileHash, mediaKey, fileLength, mediaType)
+}
+
+func downloadMediaDirectPlaintext(ctx context.Context, directPath string, encFileHash, fileHash, mediaKey []byte, fileLength uint64, mediaType string) ([]byte, error) {
+	if strings.TrimSpace(directPath) == "" {
+		return nil, fmt.Errorf("direct path is required")
+	}
+	mt, err := MediaTypeFromString(mediaType)
+	if err != nil {
+		return nil, err
+	}
+	mediaURL, err := directMediaURL(directPath, encFileHash, mt)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := mediaDownloadLength(fileLength); err != nil {
+		return nil, err
+	}
+
+	plaintext, err := downloadAndDecryptDirect(ctx, mediaURL, encFileHash, fileHash, mediaKey, fileLength, mt)
+	if err != nil {
+		return nil, err
+	}
+	if len(plaintext) > MaxMediaDownloadSize {
+		return nil, fmt.Errorf("%w; maximum download size is %d bytes", ErrMediaTooLarge, MaxMediaDownloadSize)
+	}
+	return plaintext, nil
 }
 
 func directMediaURL(directPath string, encFileHash []byte, mediaType whatsmeow.MediaType) (string, error) {
@@ -246,7 +270,7 @@ func downloadAndDecryptDirect(ctx context.Context, mediaURL string, encFileHash,
 		return nil, whatsmeow.ErrTooShortFile
 	}
 	if len(encrypted) > MaxMediaDownloadSize+maxEncryptedMediaDownloadOverhead {
-		return nil, fmt.Errorf("media too large; maximum download size is %d bytes", MaxMediaDownloadSize)
+		return nil, fmt.Errorf("%w; maximum download size is %d bytes", ErrMediaTooLarge, MaxMediaDownloadSize)
 	}
 	if len(encFileHash) == sha256.Size {
 		sum := sha256.Sum256(encrypted)
@@ -263,7 +287,7 @@ func downloadAndDecryptDirect(ctx context.Context, mediaURL string, encFileHash,
 	}
 	plaintext, err := cbcutil.Decrypt(cipherKey, iv, append([]byte(nil), ciphertext...))
 	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt file: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrMediaDecryptFailed, err)
 	}
 	if fileLength > 0 && uint64(len(plaintext)) != fileLength {
 		return nil, fmt.Errorf("%w: expected %d, got %d", whatsmeow.ErrFileLengthMismatch, fileLength, len(plaintext))
@@ -297,7 +321,7 @@ func downloadDirectBytes(ctx context.Context, mediaURL string) ([]byte, error) {
 		return nil, err
 	}
 	if len(body) > MaxMediaDownloadSize+maxEncryptedMediaDownloadOverhead {
-		return nil, fmt.Errorf("media too large; maximum download size is %d bytes", MaxMediaDownloadSize)
+		return nil, fmt.Errorf("%w; maximum download size is %d bytes", ErrMediaTooLarge, MaxMediaDownloadSize)
 	}
 	return body, nil
 }
@@ -399,7 +423,7 @@ func (f *limitedDownloadFile) noteWritten(end int64) {
 
 func mediaDownloadLength(fileLength uint64) (int, error) {
 	if fileLength > MaxMediaDownloadSize {
-		return 0, fmt.Errorf("media too large (%d bytes); maximum download size is %d bytes", fileLength, MaxMediaDownloadSize)
+		return 0, fmt.Errorf("%w (%d bytes); maximum download size is %d bytes", ErrMediaTooLarge, fileLength, MaxMediaDownloadSize)
 	}
 	if fileLength > 0 {
 		return int(fileLength), nil

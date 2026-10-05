@@ -367,7 +367,9 @@ SELECT m.chat_jid,
        m.file_enc_sha256,
        COALESCE(m.file_length,0),
        COALESCE(m.local_path,''),
-       COALESCE(m.downloaded_at,0)
+       COALESCE(m.downloaded_at,0),
+       COALESCE(m.media_unavailable_at,0) AS media_unavailable_at,
+       CASE WHEN m.deleted_at IS NULL THEN 0 ELSE 1 END AS tombstone
 FROM messages m
 LEFT JOIN chats c ON c.jid = m.chat_jid
 WHERE m.chat_jid = ? AND m.msg_id = ?;

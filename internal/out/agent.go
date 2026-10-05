@@ -54,6 +54,7 @@ type AgentDraftError struct {
 // AgentError carries a stable public code and a typed cause for exit handling.
 // Recovery is emitted only when an actionable next step is known.
 type AgentError struct {
+	Media     *AgentMediaError     `json:"media,omitempty"`
 	ChatState *AgentChatStateError `json:"chat_state,omitempty"`
 	Outbound  *AgentOutboundError  `json:"outbound,omitempty"`
 	Draft     *AgentDraftError     `json:"draft,omitempty"`
@@ -63,6 +64,18 @@ type AgentError struct {
 	Recovery  string               `json:"recovery,omitempty"`
 	ExitCode  int                  `json:"-"`
 	Cause     error                `json:"-"`
+}
+
+// Publication knowledge does not assert rollback or future file stability.
+type AgentMediaError struct {
+	ChatJID         string  `json:"chat_jid"`
+	ID              string  `json:"id"`
+	Status          string  `json:"status"`
+	FilePublication string  `json:"file_publication"`
+	Recorded        bool    `json:"recorded"`
+	Path            *string `json:"path,omitempty"`
+	Bytes           *int64  `json:"bytes,omitempty"`
+	SHA256          string  `json:"sha256,omitempty"`
 }
 
 // Chat-state invocation knowledge is separate from current remote state.
