@@ -40,7 +40,7 @@ No OFFSET, schema or index is added. SQL returns limit+1 rows to Go, but SQLite 
 
 ## Notes
 
-- `list` is local and sorted by pinned chats first, then newest known message timestamp.
+- `list` is local and sorted by pinned chats first, then newest known message timestamp. Legacy display resolution keeps that priority after PN/LID rows are fused; equal pin/activity keys retain their incoming order. Fusion continues to retain the first row's pin/archive/mute flags and the newest activity, without inferring remote state.
 - WhatsApp system events, such as a changed security code or a group notice, arrive as payloads with no content and are stored as `(message)` rows. They do not set that timestamp, so they cannot move a chat up the list; a chat that holds nothing else has no timestamp and sorts last.
 - On the next writable open, activity matching the newest locally stored message is recomputed from stored content. Activity newer than every local message is preserved. If an unstored message advertised by history has the exact same second as a local placeholder, the repair uses local content; syncing that message restores its activity.
 - `--query` filters by chat name or JID.
