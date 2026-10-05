@@ -89,6 +89,9 @@ func TestAgentSupportedCommandsPreserveReadOnlyStore(t *testing.T) {
 				if value.Meta.Source != "local" || value.Meta.Detail != detail || value.Meta.Freshness != "unknown" || value.Meta.Completeness != "unknown" {
 					t.Fatalf("misleading meta: %s", stdout)
 				}
+				if value.Meta.Recovery != "" {
+					t.Fatalf("recovery without truncation: %s", stdout)
+				}
 				if got := snapshotLocalStore(t, dir); !reflect.DeepEqual(got, before) {
 					t.Fatalf("query modified fixture: before=%v after=%v", before, got)
 				}
@@ -141,6 +144,9 @@ func TestAgentUnicodeAndPublicMessageContent(t *testing.T) {
 			}
 			if detail == "full" && (msg.TextTruncated || msg.Full == nil || msg.Full.Content != text || len(msg.Full.Buttons) != 1) {
 				t.Fatalf("missing public full: %s", stdout)
+			}
+			if strings.Contains(value.Meta.Recovery, "messages show") != (msg.TextTruncated || len(msg.FieldsTruncated) > 0) {
+				t.Fatalf("wrong text recovery: %s", stdout)
 			}
 		}
 	}

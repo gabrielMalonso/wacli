@@ -144,7 +144,12 @@ func newChatsShowCmd(flags *rootFlags) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return out.WriteAgentJSON(os.Stdout, flags.agentAccount, agentMeta(flags), agentChatDTO(c, flags.detail))
+				d := agentChatDTO(c, flags.detail)
+				meta := agentMeta(flags)
+				if len(d.FieldsTruncated) > 0 {
+					meta.Recovery = agentChatRecovery
+				}
+				return out.WriteAgentJSON(os.Stdout, flags.agentAccount, meta, d)
 			}
 			c, err := getChatForDisplay(ctx, a, jid)
 			if err != nil {

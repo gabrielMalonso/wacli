@@ -104,10 +104,13 @@ func writeAgentChatStateResult(dst io.Writer, flags *rootFlags, result app.ChatS
 func classifyChatStateAgentError(err error, request *app.ChatStateRequest) *out.AgentError {
 	var existing *out.AgentError
 	if errors.As(err, &existing) {
-		if existing.ChatState != nil {
-			return existing
-		}
 		copy := *existing
+		if copy.Code == "invalid_arguments" {
+			copy.Message = "Invalid explicit chat state arguments."
+		}
+		if existing.ChatState != nil {
+			return &copy
+		}
 		copy.ChatState = &out.AgentChatStateError{Outcome: string(app.ChatStateNotDispatched), LocalMirror: string(app.ChatStateMirrorUnknown)}
 		if request != nil {
 			copy.ChatState.Requested, copy.ChatState.Action = request.Requested, string(request.Action)

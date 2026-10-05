@@ -142,7 +142,7 @@ func classifyOutboundActionError(err error, request *app.OutboundSendRequest) *o
 		exit = 2
 	case "not_found":
 		exit = 3
-	case "store_error", "persistence_unconfirmed":
+	case "store_unavailable", "store_error", "persistence_unconfirmed":
 		exit = 4
 	default:
 		exit = 1

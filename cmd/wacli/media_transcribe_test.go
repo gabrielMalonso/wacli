@@ -133,6 +133,9 @@ func exerciseAgentTranscription(t *testing.T, binary string) {
 		if dto.Text != fmt.Sprintf("%d:%s:application/ogg", len(data), digest) || dto.Input.Path != file || dto.Input.Bytes != len(data) || dto.Input.SHA256 != digest || dto.Status != app.TranscriptionCompleted || dto.Language == nil || *dto.Language != "pt-BR" || dto.TextTruncated {
 			t.Fatalf("not exact observed input: %s", env.Data)
 		}
+		if env.Meta.Recovery != "" {
+			t.Fatalf("unnecessary adapter execution hint: %s", env.Meta.Recovery)
+		}
 	}
 	for _, detail := range []string{"compact", "full"} {
 		env := run(append(append([]string{}, base...), "--mime-type", "audio/ogg; mode=long", "--detail", detail), "", 0, true)
@@ -147,10 +150,20 @@ func exerciseAgentTranscription(t *testing.T, binary string) {
 		if dto.Text != strings.Repeat("界", n) || dto.TextTruncated != (detail == "compact") || dto.Input.SHA256 != digest {
 			t.Fatalf("bad detail: %s", env.Data)
 		}
+		if detail == "compact" {
+			if !strings.Contains(env.Meta.Recovery, "No transcript was stored") || !strings.Contains(env.Meta.Recovery, "another explicit adapter execution") || !strings.Contains(env.Meta.Recovery, "Do not repeat automatically") {
+				t.Fatalf("misleading truncated transcript recovery: %s", env.Meta.Recovery)
+			}
+		} else if env.Meta.Recovery != "" {
+			t.Fatalf("full transcript recovery: %s", env.Meta.Recovery)
+		}
 	}
 	empty := run(append(append([]string{}, base...), "--mime-type", "audio/ogg; mode=empty"), "", 0, true)
 	if !bytes.Contains(empty.Data, []byte(`"language":null`)) || !bytes.Contains(empty.Data, []byte(`"status":"empty"`)) {
 		t.Fatalf("false recognition: %s", empty.Data)
+	}
+	if empty.Meta.Recovery != "" {
+		t.Fatalf("empty transcript replay hint: %s", empty.Meta.Recovery)
 	}
 	for _, tc := range []struct {
 		name     string

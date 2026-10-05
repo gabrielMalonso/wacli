@@ -79,6 +79,9 @@ func TestOutboundCLIReadonlyWithoutSessionMediaLockOrOwner(t *testing.T) {
 			if err != nil || stderr != "" || e.Meta.Source != "local" || e.Meta.Freshness != "unknown" || e.Meta.Completeness != "unknown" {
 				t.Fatal(e, err, stderr)
 			}
+			if !strings.Contains(e.Meta.Recovery, "draft show --revision") || !strings.Contains(e.Meta.Recovery, "Do not resend an operation to resolve uncertainty") || strings.Contains(e.Meta.Recovery, "not available") {
+				t.Fatal("misleading outbound capability/recovery", e.Meta.Recovery)
+			}
 			if strings.Contains(string(e.Data), "snapshot_path") || strings.Contains(string(e.Data), "NEVER_OPEN") || strings.Contains(string(e.Data), "running") {
 				t.Fatal("private/invented DTO", string(e.Data))
 			}

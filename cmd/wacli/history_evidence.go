@@ -162,17 +162,18 @@ type historyAgentCoverageEvidenceData struct {
 // This opt-in writer leaves the existing coverage writer and DTO untouched.
 func writeHistoryAgentCoverageEvidence(flags *rootFlags, cs []store.HistoryCoverage, evidence []historyRecoveryDTO, limit int) error {
 	data := historyAgentCoverageEvidenceData{Coverage: make([]agentCoverage, 0, len(cs)), RecoveryEvidence: evidence}
+	meta := agentMeta(flags)
+	meta.Recovery = "Retained recovery observations do not prove completeness."
 	for _, c := range cs {
 		name, cut := agentText(c.Name, flags.detail)
 		d := agentCoverage{ChatJID: c.ChatJID, Kind: c.Kind, Name: name, MessageCount: c.MessageCount, OldestAt: agentTime(c.OldestTS), NewestAt: agentTime(c.NewestTS), Status: c.Status, BlockedReason: c.BlockedReason}
 		if cut {
 			d.FieldsTruncated = []string{"name"}
+			meta.Recovery = "Retained recovery observations do not prove completeness. " + agentCoverageRecovery
 		}
 		data.Coverage = append(data.Coverage, d)
 	}
-	meta := agentMeta(flags)
 	meta.Limit = limit
-	meta.Recovery = "Retained recovery observations do not prove completeness; inspect --detail full for options and checkpoint measurements."
 	return out.WriteAgentJSON(os.Stdout, flags.agentAccount, meta, data)
 }
 
