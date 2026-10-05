@@ -4,6 +4,8 @@ Read when: preparing durable offline previews without sending, or inspecting ret
 
 `draft create/show/list/update/discard/cleanup` prepares only local records in the selected account's existing `wacli.db` (introduced in schema 30; current schema 31). There is no `draft send`, automatic replay, download, transcription, export command or automatic garbage collection. No draft command opens/connects a WhatsApp client. A preview does not verify that a recipient exists remotely. The separate [outbound action](outbound.md) dispatches an explicitly selected immutable revision/hash with a retained idempotency key.
 
+A draft write returning `store_locked` (exit 4) advises waiting for the current writer to finish, then inspecting drafts and the intended result before explicitly requesting the action again. This error does not establish whether another writer created a draft or an earlier request completed; publication and uncertain-result errors retain their own guidance.
+
 ## Commands
 
 Selection preserves the existing `--account`, `--store`, environment and default rules. The resolved store is fixed once before LOCK/IPC and appears as `account.store_ref` in agent JSON and draft write/show/list JSON. Create/update require exactly one locally persisted own PN identity; missing, ambiguous or unreadable public session identity returns exit 4, with no session creation or connection. Show/list/discard/cleanup use the frozen record even without a current session.
