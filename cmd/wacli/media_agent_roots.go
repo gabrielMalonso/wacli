@@ -29,6 +29,9 @@ func openAgentMediaLocation(path, storeDir string, roots []string, cache, create
 		return nil, err
 	}
 	storeReal, err := filepath.EvalSymlinks(storeDir)
+	if errors.Is(err, os.ErrNotExist) && !cache {
+		storeReal, err = transcriptionStoreBoundary(storeDir)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +160,7 @@ func openAgentMediaLocation(path, storeDir string, roots []string, cache, create
 		}
 		if file != nil && file.Mode().IsRegular() {
 			entries, err := os.ReadDir(storeReal)
-			if err != nil {
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
 			for _, entry := range entries {

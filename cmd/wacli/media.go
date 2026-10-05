@@ -23,6 +23,7 @@ func newMediaCmd(flags *rootFlags) *cobra.Command {
 	cmd.AddCommand(newMediaBackfillCmd(flags))
 	cmd.AddCommand(newMediaRetryCmd(flags))
 	cmd.AddCommand(newMediaStatusCmd(flags))
+	cmd.AddCommand(newMediaTranscribeCmd(flags))
 	return cmd
 }
 

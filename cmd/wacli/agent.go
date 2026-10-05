@@ -33,6 +33,7 @@ const (
 	agentMediaDownload
 	agentMediaRead
 	agentMediaRecovery
+	agentMediaTranscription
 )
 
 // Recover output intent even if Cobra stops on an earlier parse error. Inspect
@@ -205,6 +206,8 @@ func agentCommandCapability(cmd *cobra.Command) agentCapability {
 		return agentMediaDownload
 	case "media retry":
 		return agentMediaRecovery
+	case "media transcribe":
+		return agentMediaTranscription
 	case "draft create", "draft update", "draft discard", "draft cleanup apply":
 		return agentLocalDraftWrite
 	case "history backfill":
@@ -250,6 +253,11 @@ func validateAgentCommand(cmd *cobra.Command, args []string, flags *rootFlags) e
 		}
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), "wacli ")
+	if path == "media transcribe" {
+		if err := validateAgentTranscription(cmd, flags); err != nil {
+			return err
+		}
+	}
 	if path == "media retry" {
 		if flags.isReadOnly() {
 			return &out.AgentError{Code: "read_only", Message: "Read-only policy rejects explicit media recovery.", ExitCode: 2}
@@ -519,6 +527,12 @@ func agentMeta(flags *rootFlags) out.AgentMeta {
 		source = "live"
 	}
 	meta := out.AgentMeta{Source: source, Detail: detail, Completeness: "unknown", Freshness: "unknown"}
+	if flags.agentCapability == agentMediaTranscription {
+		if detail == "compact" {
+			meta.Recovery = "Use --detail full in an explicit media transcribe --file PATH --adapter /absolute/executable --agent invocation. This runs the selected adapter again; transcripts are not stored or automatically recovered."
+		}
+		return meta
+	}
 	if detail == "compact" {
 		meta.Recovery = "Use --detail full; retrieve one message with messages show --chat CHAT_JID --id ID --detail full."
 	}
