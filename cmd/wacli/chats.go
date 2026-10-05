@@ -209,6 +209,9 @@ func resolveStoredChatsWith(ctx context.Context, resolver chatDisplayResolver, c
 		out = append(out, chat)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Pinned != out[j].Pinned {
+			return out[i].Pinned
+		}
 		return out[i].LastMessageTS.After(out[j].LastMessageTS)
 	})
 	return out
