@@ -269,8 +269,10 @@ func (d *DB) WriteDraft(ctx context.Context, revision DraftRevision, expected st
 		if err = tx.QueryRowContext(ctx, "SELECT revision_no+1 FROM draft_revisions WHERE id=? AND draft_id=?", expected, id).Scan(&number); err != nil {
 			return DraftEntry{}, err
 		}
+		// Keep mutable record time monotonic without rewriting revision time.
+		updated := max(at, r.CreatedAt.UnixNano(), r.UpdatedAt.UnixNano())
 		var result sql.Result
-		result, err = tx.ExecContext(ctx, `UPDATE drafts SET head_revision_id=?,updated_at=? WHERE id=? AND head_revision_id=? AND state='active' AND account_jid=?`, rid, at, id, expected, p.Account.PN)
+		result, err = tx.ExecContext(ctx, `UPDATE drafts SET head_revision_id=?,updated_at=? WHERE id=? AND head_revision_id=? AND state='active' AND account_jid=?`, rid, updated, id, expected, p.Account.PN)
 		if err == nil {
 			n, rowErr := result.RowsAffected()
 			if rowErr != nil {
@@ -281,7 +283,7 @@ func (d *DB) WriteDraft(ctx context.Context, revision DraftRevision, expected st
 			}
 		}
 		r.HeadRevisionID = rid
-		r.UpdatedAt = revision.CreatedAt()
+		r.UpdatedAt = time.Unix(0, updated).UTC()
 	}
 	if err != nil {
 		return DraftEntry{}, err
@@ -301,8 +303,10 @@ func (d *DB) DiscardDraft(ctx context.Context, id, expected string) (DraftEntry,
 	if err != nil {
 		return DraftEntry{}, err
 	}
-	at := time.Now().UTC()
-	result, err := d.sql.ExecContext(ctx, `UPDATE drafts SET state='discarded',discarded_at=?,updated_at=? WHERE id=? AND head_revision_id=? AND state='active'`, at.UnixNano(), at.UnixNano(), id, expected)
+	at := time.Unix(0, max(time.Now().UnixNano(), entry.Record.CreatedAt.UnixNano(), entry.Record.UpdatedAt.UnixNano())).UTC()
+	// CAS the record used to compute time; a changed head or timestamp must not
+	// yield a successful discard based on the earlier read.
+	result, err := d.sql.ExecContext(ctx, `UPDATE drafts SET state='discarded',discarded_at=?,updated_at=? WHERE id=? AND head_revision_id=? AND state='active' AND updated_at=?`, at.UnixNano(), at.UnixNano(), id, expected, entry.Record.UpdatedAt.UnixNano())
 	if err != nil {
 		return DraftEntry{}, DraftFailure("local_write_uncertain", id, expected, entry.Revision.Payload().Hash(), err)
 	}
