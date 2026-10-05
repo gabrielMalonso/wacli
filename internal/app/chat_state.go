@@ -56,6 +56,9 @@ func (a *App) AddChatStatePersistenceHandler(ctx context.Context) (func(), error
 			a.warnEmptyAppStateKey(v)
 		}
 	})
+	a.waMu.Lock()
+	a.appStateUnobserved = false
+	a.waMu.Unlock()
 	var once sync.Once
 	return func() {
 		once.Do(func() {

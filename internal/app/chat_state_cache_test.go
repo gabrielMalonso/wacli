@@ -230,6 +230,31 @@ func TestAppStateReplayCannotClearUnobservedConnectionDebt(t *testing.T) {
 	}
 }
 
+func TestSyncNewCoverageCanRetirePriorConnectionDebt(t *testing.T) {
+	a := newTestApp(t)
+	f := newFakeWA()
+	a.opts.WAFactory = func(wa.Options) (WAClient, error) { return f, nil }
+	for run := range 2 {
+		ctx, cancel := context.WithCancel(t.Context())
+		_, err := a.Sync(ctx, SyncOptions{Mode: SyncModeFollow, AfterConnect: func(context.Context) error {
+			pending, err := a.db.AppStateRecoveryCollections()
+			if err != nil || len(pending) != 0 {
+				t.Fatalf("run %d: covered startup did not retire prior debt: %v %v", run, pending, err)
+			}
+			cancel()
+			return nil
+		}})
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		pending, err := a.db.AppStateRecoveryCollections()
+		if err != nil || len(pending) != 3 {
+			t.Fatalf("run %d: cleanup lost coverage debt: %v %v", run, pending, err)
+		}
+	}
+}
+
 func TestAppStateReplayPreparationGuardsAndCloseRestoration(t *testing.T) {
 	for _, mode := range []string{"cancelled", "readonly", "marker_failure", "cleared_during_cleanup"} {
 		t.Run(mode, func(t *testing.T) {

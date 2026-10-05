@@ -180,6 +180,9 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 
 	ps := &syncPresence{}
 	handlerID, appStateRecoveries := a.addSyncEventHandler(syncCtx, opts, &messagesStored, &lastEvent, disconnected, loggedOut, staleReconnect, enqueueMedia, enqueueWebhook, limits, ps, mediaQ)
+	a.waMu.Lock()
+	a.appStateUnobserved = false
+	a.waMu.Unlock()
 	removeHandler := true
 	defer func() {
 		if removeHandler {
