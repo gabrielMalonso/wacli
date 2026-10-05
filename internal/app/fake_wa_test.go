@@ -32,8 +32,10 @@ type fakeWA struct {
 	autoReconnect bool
 	linkedLID     string
 
-	nextHandlerID uint32
-	handlers      map[uint32]func(any)
+	nextHandlerID    uint32
+	handlers         map[uint32]func(any)
+	chatSettings     map[types.JID]types.LocalChatSettings
+	settingsVersions map[types.JID]uint64
 
 	connectEvents  []any
 	connectErrs    []error
@@ -147,18 +149,103 @@ type fakeAppStateFetch struct {
 
 func newFakeWA() *fakeWA {
 	return &fakeWA{
-		authed:        true,
-		autoReconnect: true,
-		handlers:      map[uint32]func(any){},
-		contacts:      map[types.JID]types.ContactInfo{},
-		groups:        map[types.JID]*types.GroupInfo{},
-		news:          map[types.JID]*types.NewsletterMetadata{},
-		lids:          map[types.JID]types.JID{},
-		nextHandlerID: 1,
+		authed:           true,
+		autoReconnect:    true,
+		handlers:         map[uint32]func(any){},
+		chatSettings:     map[types.JID]types.LocalChatSettings{},
+		settingsVersions: map[types.JID]uint64{},
+		contacts:         map[types.JID]types.ContactInfo{},
+		groups:           map[types.JID]*types.GroupInfo{},
+		news:             map[types.JID]*types.NewsletterMetadata{},
+		lids:             map[types.JID]types.JID{},
+		nextHandlerID:    1,
 	}
 }
 
 func (f *fakeWA) emit(evt any) {
+	f.applyChatSettings(evt)
+	f.dispatch(evt)
+}
+
+// apply and dispatch are separate because SDK callbacks may arrive after a
+// newer patch has already changed ChatSettings.
+func (f *fakeWA) applyChatSettings(evt any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.applyChatSettingsLocked(evt)
+}
+
+func (f *fakeWA) applyChatSettingsLocked(evt any) {
+	switch v := evt.(type) {
+	case *events.Archive:
+		if v != nil && v.Action != nil {
+			settings := f.chatSettings[v.JID]
+			settings.Found, settings.Archived = true, v.Action.GetArchived()
+			f.chatSettings[v.JID] = settings
+			f.settingsVersions[v.JID]++
+		}
+	case *events.Pin:
+		if v != nil && v.Action != nil {
+			settings := f.chatSettings[v.JID]
+			settings.Found, settings.Pinned = true, v.Action.GetPinned()
+			f.chatSettings[v.JID] = settings
+			f.settingsVersions[v.JID]++
+		}
+	}
+}
+
+func (f *fakeWA) applyChatStatePatch(patch appstate.PatchInfo) {
+	for _, mutation := range patch.Mutations {
+		jid, _ := types.ParseJID(mutation.Index[1])
+		if action := mutation.Value.GetArchiveChatAction(); action != nil {
+			f.applyChatSettings(&events.Archive{JID: jid, Action: action})
+		}
+		if action := mutation.Value.GetPinAction(); action != nil {
+			f.applyChatSettings(&events.Pin{JID: jid, Action: action})
+		}
+	}
+}
+
+func (f *fakeWA) settingsSnapshot() map[types.JID]uint64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	snapshot := make(map[types.JID]uint64, len(f.settingsVersions))
+	for jid, version := range f.settingsVersions {
+		snapshot[jid] = version
+	}
+	return snapshot
+}
+
+func (f *fakeWA) applyFetchedChatSettings(evt any, snapshot map[types.JID]uint64) {
+	var jid types.JID
+	switch v := evt.(type) {
+	case *events.Archive:
+		jid = v.JID
+	case *events.Pin:
+		jid = v.JID
+	default:
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// A callback emitted by the fixture during fetch represents a patch
+	// applied after the returned snapshot, just as in the SDK.
+	if f.settingsVersions[jid] == snapshot[jid] {
+		f.applyChatSettingsLocked(evt)
+		snapshot[jid] = f.settingsVersions[jid]
+	}
+}
+
+func (f *fakeWA) GetChatSettings(ctx context.Context, jid types.JID) (types.LocalChatSettings, error) {
+	if err := ctx.Err(); err != nil {
+		return types.LocalChatSettings{}, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.chatSettings[jid], nil
+}
+
+func (f *fakeWA) dispatch(evt any) {
 	f.mu.Lock()
 	ids := make([]uint32, 0, len(f.handlers))
 	for id := range f.handlers {
@@ -818,8 +905,21 @@ func (f *fakeWA) ArchiveChat(ctx context.Context, target types.JID, archive bool
 	eventCB := f.archiveEvent
 	f.mu.Unlock()
 	beforeApply()
+	if f.archiveErr == nil {
+		f.mu.Lock()
+		settings := f.chatSettings[target]
+		settings.Found, settings.Archived = true, archive
+		if archive {
+			settings.Pinned = false
+		}
+		f.chatSettings[target] = settings
+		f.settingsVersions[target]++
+		f.mu.Unlock()
+	}
 	if eventCB != nil {
+		snapshot := f.settingsSnapshot()
 		if evt := eventCB(); evt != nil {
+			f.applyFetchedChatSettings(evt, snapshot)
 			return []any{evt}, f.archiveErr
 		}
 	}
@@ -831,6 +931,10 @@ func (f *fakeWA) PinChat(ctx context.Context, target types.JID, pin bool, before
 	defer f.mu.Unlock()
 	f.pinCalls = append(f.pinCalls, fakePinCall{target: target, pin: pin})
 	beforeApply()
+	settings := f.chatSettings[target]
+	settings.Found, settings.Pinned = true, pin
+	f.chatSettings[target] = settings
+	f.settingsVersions[target]++
 	return nil, nil
 }
 
@@ -902,10 +1006,12 @@ func (f *fakeWA) FetchAppStateEvents(ctx context.Context, name string, fullSync,
 	if eventCB == nil {
 		return nil, nil
 	}
+	snapshot := f.settingsSnapshot()
 	evt := eventCB(name, fullSync, onlyIfNotSynced)
 	if evt == nil {
 		return nil, nil
 	}
+	f.applyFetchedChatSettings(evt, snapshot)
 	return []any{evt}, nil
 }
 

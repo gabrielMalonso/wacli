@@ -10,6 +10,18 @@ import (
 	"go.mau.fi/whatsmeow/types"
 )
 
+// GetChatSettings reads the SDK's local cache for this exact JID. It neither
+// discovers aliases nor confirms the current remote state.
+func (c *Client) GetChatSettings(ctx context.Context, jid types.JID) (types.LocalChatSettings, error) {
+	c.mu.Lock()
+	cli := c.client
+	c.mu.Unlock()
+	if cli == nil || cli.Store == nil || cli.Store.ChatSettings == nil {
+		return types.LocalChatSettings{}, fmt.Errorf("WhatsApp chat settings unavailable")
+	}
+	return cli.Store.ChatSettings.GetChatSettings(ctx, jid)
+}
+
 func (c *Client) SendAppState(ctx context.Context, patch appstate.PatchInfo) error {
 	c.mu.Lock()
 	cli := c.client

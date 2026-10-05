@@ -41,9 +41,14 @@ func (f *chatStateAgentWA) sendPatch(ctx context.Context, patch appstate.PatchIn
 	f.patches = append(f.patches, patch)
 	f.patchMu.Unlock()
 	if f.sendHook != nil {
-		return f.sendHook(ctx, boundary)
+		events, err := f.sendHook(ctx, boundary)
+		if err == nil {
+			f.applyChatStatePatch(patch)
+		}
+		return events, err
 	}
 	boundary()
+	f.applyChatStatePatch(patch)
 	return nil, nil
 }
 func (f *chatStateAgentWA) ArchiveChat(ctx context.Context, jid types.JID, archive bool, ts time.Time, key *waCommon.MessageKey, boundary func()) ([]any, error) {

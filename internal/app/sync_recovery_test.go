@@ -32,8 +32,13 @@ func (f *appStateContextWA) FetchAppState(ctx context.Context, name string, full
 }
 
 func (f *appStateContextWA) FetchAppStateEvents(ctx context.Context, name string, fullSync, onlyIfNotSynced bool) ([]any, error) {
-	if f.fetchEvents != nil {
-		return f.fetchEvents(ctx, name, fullSync, onlyIfNotSynced)
+	if f.fetchEvents != nil && (fullSync || f.fetchAppState == nil) {
+		snapshot := f.settingsSnapshot()
+		events, err := f.fetchEvents(ctx, name, fullSync, onlyIfNotSynced)
+		for _, evt := range events {
+			f.applyFetchedChatSettings(evt, snapshot)
+		}
+		return events, err
 	}
 	return nil, f.fetchAppState(ctx, name, fullSync, onlyIfNotSynced)
 }
@@ -369,8 +374,12 @@ func TestFailedAppStateReplayPersistsIntentAndRecoversAtStartup(t *testing.T) {
 		var fullFetches, deltas int
 		client := &appStateContextWA{fakeWA: newFakeWA()}
 		client.fetchEvents = func(_ context.Context, collection string, full, _ bool) ([]any, error) {
-			if collection != name || !full {
-				t.Fatalf("recovery fetch = %s, full=%v", collection, full)
+			if collection != name {
+				return nil, nil
+			}
+			if !full {
+				deltas++
+				return []any{&events.Archive{JID: chat, Action: &waSyncAction.ArchiveChatAction{Archived: proto.Bool(false)}}}, nil
 			}
 			fullFetches++
 			if required, err := next.db.AppStateRecoveryRequired(name); err != nil || !required {
@@ -378,24 +387,14 @@ func TestFailedAppStateReplayPersistsIntentAndRecoversAtStartup(t *testing.T) {
 			}
 			return []any{archive}, nil
 		}
-		client.fetchAppState = func(_ context.Context, collection string, full, _ bool) error {
-			if collection == name {
-				if full {
-					t.Fatal("incremental startup unexpectedly used full fetch")
-				}
-				deltas++
-				client.emit(&events.Archive{JID: chat, Action: &waSyncAction.ArchiveChatAction{Archived: proto.Bool(false)}})
-			}
-			return nil
-		}
 		client.requestAppStateRecovery = func(context.Context, string) (types.MessageID, error) {
 			t.Error("successful startup replay requested phone recovery")
 			return "", nil
 		}
 		next.wa = client
-		if _, err := next.Sync(t.Context(), SyncOptions{Mode: SyncModeOnce, IdleExit: time.Millisecond}); err != nil {
-			t.Fatal(err)
-		}
+		// Exercise the startup stage before Sync's separate shutdown coverage
+		// intent, so successful replay clearing and the next delta stay visible.
+		next.syncAppStateDeltas(t.Context(), &sync.Map{})
 		stored, err := next.db.GetChat(chat.String())
 		if err != nil || stored.Archived != (run == 0) {
 			t.Fatalf("run %d chat = %+v, %v", run, stored, err)
