@@ -38,13 +38,14 @@ CGO_ENABLED=1 CGO_CFLAGS="${CGO_CFLAGS:+$CGO_CFLAGS }-Wno-error=missing-braces" 
 node --input-type=module - "$store_dir" "${1:-./dist/wacli}" <<'JS'
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {readFileSync,readdirSync,statSync,chmodSync} from 'node:fs';
+import {readFileSync,readdirSync,statSync,lstatSync,chmodSync} from 'node:fs';
 import {join} from 'node:path';
 const store=process.argv[2],binary=process.argv[3];
 const db=join(store,'wacli.db');
 // Production CLI has only a read-only fixture file and no session/credentials.
 chmodSync(db,0o444);
-const before=readFileSync(db),mode=statSync(db).mode;
+const before=readFileSync(db),mode=statSync(db).mode,dirMode=statSync(store).mode;
+assert.deepEqual(readdirSync(store),['wacli.db']);
 function run(args,exit=0,selected=store) {
  const p=spawnSync(binary,['--store',selected,'--read-only',...args],{encoding:'utf8'});
  assert.equal(p.status,exit,p.stderr);
@@ -92,8 +93,15 @@ assert.equal(legacy.data.length,15);
 assert.ok(legacy.data.slice(0,13).every(c=>c.pinned&&c.last_message_ts==='1970-01-01T00:01:40Z'));
 const p=spawnSync(binary,['--store',join(store,'missing'),'chats','list','--cursor',token],{encoding:'utf8'});
 assert.equal(p.status,2);assert.match(p.stderr,/--cursor requires --agent/);assert.equal(p.stdout,'');
-assert.deepEqual(readFileSync(db),before);assert.equal(statSync(db).mode,mode);
-assert.deepEqual(readdirSync(store),['wacli.db']);
-console.log('Synthetic production chat pagination passed: ties, filters, literal query, detail/limit, typed errors, legacy, immutable archive.');
+assert.ok(readFileSync(db).equals(before),'readonly fixture changed database bytes/schema');assert.equal(statSync(db).mode,mode);
+assert.equal(statSync(store).mode,dirMode);
+// Exact database bytes preserve rows and schema; only SQLite bookkeeping may appear.
+const files=readdirSync(store).sort();
+assert.deepEqual(files.filter(name=>name!=='wacli.db-wal'&&name!=='wacli.db-shm'),['wacli.db']);
+for(const name of files.filter(name=>name!=='wacli.db')) {
+ const info=lstatSync(join(store,name));assert.ok(info.isFile(),`${name} must be a regular SQLite sidecar`);
+ if(name==='wacli.db-wal')assert.equal(info.size,0,'closed readonly fixture must not gain WAL frames');
+}
+console.log('Synthetic production chat pagination passed: ties, filters, literal query, detail/limit, typed errors, legacy, unchanged database/schema/permissions, SQLite bookkeeping only.');
 JS
 printf 'Retained synthetic fixture: %s\n' "$fixture_dir"

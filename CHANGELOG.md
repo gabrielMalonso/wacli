@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Tests/docs: align offline pagination fixture assertions with normal readonly SQLite bookkeeping, allowing only regular archive WAL/SHM sidecars and an empty WAL while retaining exact database bytes/schema, database/directory permissions and rejection of new databases/session/LOCK files. Compare database bytes with `Buffer.equals` and a concise assertion so mismatches do not construct large buffer diffs. Clarify readonly WhatsApp/archive write barriers, requested export/download output, explicitly selected unsandboxed adapters and bookkeeping exceptions; CLI/agent behavior is unchanged.
+
 - Media: keep exact-retry download recording within the operation context using a short, restored connection-local SQLite contention budget, retaining independent publication and confirmed persistence effects. Recheck retained responses after row validation before a second receipt, and preserve phone responses over local send errors in either arrival order. Keep legacy recording, bulk selection/addressing, SDK retries and the two-attempt limit; validate with synthetic locks and WA fakes only.
 
 - Drafts: keep mutable update/discard timestamps nondecreasing across backward clock adjustments, preserve retained creation/update times and return the persisted values. Guard discard against concurrent record changes so eligible documents remain inspectable by cleanup; retain immutable revision timestamps/hashes. No migration or automatic repair of earlier inconsistent records.
