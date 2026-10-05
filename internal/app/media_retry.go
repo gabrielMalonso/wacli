@@ -123,6 +123,8 @@ func (a *App) retrySelectedMedia(
 	var mu sync.Mutex
 	infos := make(map[mediaRetryKey]store.MediaDownloadInfo, len(pending))
 	notifs := make(map[mediaRetryKey]retryNotif, len(pending))
+	// A local send error stops application retry, but cannot erase a phone reply.
+	sendErrors := make(map[mediaRetryKey]error, len(pending))
 	active := true
 
 	handlerID := a.wa.AddEventHandler(func(evt any) {
@@ -247,16 +249,27 @@ func (a *App) retrySelectedMedia(
 		orderedKeys = append(orderedKeys, key)
 	}
 
-	sendReceipt := func(key mediaRetryKey) error {
+	sendReceipt := func(key mediaRetryKey, retry bool) error {
 		r := prepared[key]
 		if checkSelected != nil {
 			if err := checkSelected(r.info); err != nil {
 				return err
 			}
 		}
+		if retry {
+			// Observe again after the row check, which may overlap a reply. WA
+			// can invoke the callback synchronously, so release mu before sending.
+			// A reply arriving after this snapshot can still overlap the send.
+			mu.Lock()
+			_, replied := notifs[key]
+			mu.Unlock()
+			if replied {
+				return nil
+			}
+		}
 		if err := a.wa.SendMediaRetryReceipt(ctx, r.mi, r.info.MediaKey); err != nil {
 			mu.Lock()
-			notifs[key] = retryNotif{err: err}
+			sendErrors[key] = err
 			mu.Unlock()
 		}
 		return nil
@@ -265,7 +278,7 @@ func (a *App) retrySelectedMedia(
 		mu.Lock()
 		defer mu.Unlock()
 		for _, key := range keys {
-			if _, ok := notifs[key]; !ok {
+			if _, ok := notifs[key]; !ok && sendErrors[key] == nil {
 				return false
 			}
 		}
@@ -294,7 +307,7 @@ func (a *App) retrySelectedMedia(
 		defer mu.Unlock()
 		var out []mediaRetryKey
 		for _, key := range keys {
-			if _, ok := notifs[key]; !ok {
+			if _, ok := notifs[key]; !ok && sendErrors[key] == nil {
 				out = append(out, key)
 			}
 		}
@@ -310,7 +323,7 @@ func (a *App) retrySelectedMedia(
 		batch := orderedKeys[start:end]
 
 		for _, key := range batch {
-			if err := sendReceipt(key); err != nil {
+			if err := sendReceipt(key, false); err != nil {
 				return result, err
 			}
 		}
@@ -318,7 +331,7 @@ func (a *App) retrySelectedMedia(
 		// One second attempt for non-responders (often just timing).
 		if retryIDs := missing(batch); len(retryIDs) > 0 && ctx.Err() == nil {
 			for _, key := range retryIDs {
-				if err := sendReceipt(key); err != nil {
+				if err := sendReceipt(key, true); err != nil {
 					return result, err
 				}
 			}
@@ -331,6 +344,9 @@ func (a *App) retrySelectedMedia(
 			}
 			mu.Lock()
 			n, got := notifs[key]
+			if !got && sendErrors[key] != nil {
+				n, got = retryNotif{err: sendErrors[key]}, true
+			}
 			info := infos[key]
 			mu.Unlock()
 			result.Outcomes = append(result.Outcomes, classify(ctx, info, key.msgID, n, got, &result))
