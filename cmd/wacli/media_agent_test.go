@@ -199,7 +199,7 @@ func TestAgentMediaGuardsAndSanitizedParseSource(t *testing.T) {
 		{[]string{"--agent", "media", "download", "--chat", mediaFixtureChat, "--id", "x"}, "live", "invalid_arguments"},
 		{[]string{"--agent", "media", "download", "--timeout", "https://SECRET_KEY/path"}, "live", "invalid_arguments"},
 		{[]string{"--agent", "media", "status", "--verify=SECRET_KEY"}, "local", "invalid_arguments"},
-		{[]string{"--agent", "media", "retry"}, "local", "unsupported_command"},
+		{[]string{"--agent", "media", "retry"}, "live", "invalid_arguments"},
 		{[]string{"--agent", "media", "backfill"}, "local", "unsupported_command"},
 		{[]string{"--agent", "media", "status", "--chat", "123", "--id", "x"}, "local", "invalid_arguments"},
 	} {

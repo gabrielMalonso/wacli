@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"go.mau.fi/whatsmeow"
@@ -307,6 +308,65 @@ func TestDownloadRetriedMediaAuthenticatesReupload(t *testing.T) {
 			partials, err := filepath.Glob(filepath.Join(filepath.Dir(target), ".wacli-download-*"))
 			if err != nil || len(partials) != 0 {
 				t.Fatalf("partial downloads=%v error=%v", partials, err)
+			}
+		})
+	}
+}
+
+func TestDownloadRetriedMediaBytesSharesAuthenticatedDecryptWithoutCipherHash(t *testing.T) {
+	plaintext := []byte("synthetic bytes reupload")
+	key := bytes.Repeat([]byte{7}, 32)
+	encrypted, _, hash := encryptedMediaFixture(t, plaintext, key, whatsmeow.MediaImage)
+	served := encrypted
+	requests := 0
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		requests++
+		if r.URL.Query().Has("hash") {
+			t.Error("reupload requested stale ciphertext hash")
+		}
+		_, _ = w.Write(served)
+	}))
+	defer server.Close()
+	oldBase := directMediaBaseURL
+	directMediaBaseURL = server.URL
+	defer func() { directMediaBaseURL = oldBase }()
+	got, err := DownloadRetriedMediaBytes(context.Background(), "/reuploaded", hash, key, 0, "image")
+	if err != nil || !bytes.Equal(got, plaintext) {
+		t.Fatalf("bytes=%q error=%v", got, err)
+	}
+	for _, tc := range []struct {
+		name        string
+		digest, key []byte
+		body        []byte
+		length      uint64
+		want        error
+	}{
+		{"missing_digest", nil, key, encrypted, 0, ErrMediaMetadataInvalid},
+		{"short_digest", []byte{1}, key, encrypted, 0, ErrMediaMetadataInvalid},
+		{"missing_key", hash, nil, encrypted, 0, ErrMediaMetadataInvalid},
+		{"short_key", hash, []byte{1}, encrypted, 0, ErrMediaMetadataInvalid},
+		{"plaintext_mismatch", bytes.Repeat([]byte{99}, 32), key, encrypted, 0, whatsmeow.ErrInvalidMediaSHA256},
+		{"size_mismatch", hash, key, encrypted, 1, whatsmeow.ErrFileLengthMismatch},
+		{"ciphertext_tampered", hash, key, append([]byte{encrypted[0] ^ 1}, encrypted[1:]...), 0, whatsmeow.ErrInvalidMediaHMAC},
+		{"oversize", hash, key, encrypted, MaxMediaDownloadSize + 1, ErrMediaTooLarge},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mu.Lock()
+			served = tc.body
+			before := requests
+			mu.Unlock()
+			_, err := DownloadRetriedMediaBytes(context.Background(), "/reuploaded", tc.digest, tc.key, tc.length, "image")
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("error=%v want=%v", err, tc.want)
+			}
+			mu.Lock()
+			after := requests
+			mu.Unlock()
+			if (errors.Is(tc.want, ErrMediaMetadataInvalid) || errors.Is(tc.want, ErrMediaTooLarge)) && after != before {
+				t.Fatal("invalid metadata performed HTTP request")
 			}
 		})
 	}

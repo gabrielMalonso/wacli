@@ -306,7 +306,7 @@ func mediaAgentError(err error, d agentMediaStatus, publication string) *out.Age
 		e.Media.SHA256 = d.Output.SHA256
 	}
 	if code == "media_expired" {
-		e.Recovery = "Automatic recovery is not performed. Legacy media retry is bulk; exact message retry is not yet available with --agent."
+		e.Recovery = "Make an explicit recovery decision with media retry --agent --chat JID --id ID --output PATH. It requires a writable standalone LOCK; uncertainty never authorizes automatic replay."
 	}
 	if code == "output_conflict" {
 		e.Recovery = "Choose a different explicit output path; existing files are never replaced by agent download."

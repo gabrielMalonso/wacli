@@ -95,6 +95,19 @@ func (a *App) RetryMedia(ctx context.Context, opts RetryMediaOptions) (MediaRetr
 	if err != nil {
 		return MediaRetryResult{}, fmt.Errorf("list pending media: %w", err)
 	}
+	return a.retrySelectedMedia(ctx, pending, opts, a.classifyRetry, nil)
+}
+
+// retrySelectedMedia shares receipt addressing and notification handling between
+// legacy bulk selection and an explicitly selected message. Publication remains
+// the responsibility of the caller's classifier.
+func (a *App) retrySelectedMedia(
+	ctx context.Context,
+	pending []store.PendingMediaDownload,
+	opts RetryMediaOptions,
+	classify func(context.Context, store.MediaDownloadInfo, string, retryNotif, bool, *MediaRetryResult) MediaRetryOutcome,
+	checkSelected func(store.MediaDownloadInfo) error,
+) (MediaRetryResult, error) {
 	result := MediaRetryResult{Requested: len(pending)}
 	if len(pending) == 0 {
 		if err := ctx.Err(); err != nil {
@@ -110,6 +123,7 @@ func (a *App) RetryMedia(ctx context.Context, opts RetryMediaOptions) (MediaRetr
 	var mu sync.Mutex
 	infos := make(map[mediaRetryKey]store.MediaDownloadInfo, len(pending))
 	notifs := make(map[mediaRetryKey]retryNotif, len(pending))
+	active := true
 
 	handlerID := a.wa.AddEventHandler(func(evt any) {
 		mr, ok := evt.(*events.MediaRetry)
@@ -119,6 +133,18 @@ func (a *App) RetryMedia(ctx context.Context, opts RetryMediaOptions) (MediaRetr
 		key := mediaRetryKey{chatJID: canonicalJIDString(a.canonicalStoreJID(ctx, mr.ChatID)), msgID: string(mr.MessageID)}
 		mu.Lock()
 		defer mu.Unlock()
+		if !active || ctx.Err() != nil {
+			return
+		}
+		// An explicitly selected stored LID can be echoed verbatim even after
+		// a PN mapping becomes known. Prefer its exact key; other replies use
+		// only the existing trusted resolver, never a guessed reverse alias.
+		if checkSelected != nil {
+			raw := mediaRetryKey{chatJID: canonicalJIDString(mr.ChatID), msgID: string(mr.MessageID)}
+			if _, tracked := infos[raw]; tracked {
+				key = raw
+			}
+		}
 		info, tracked := infos[key]
 		if !tracked {
 			return
@@ -129,7 +155,12 @@ func (a *App) RetryMedia(ctx context.Context, opts RetryMediaOptions) (MediaRetr
 		dp, code, derr := wa.DecryptMediaRetry(mr, info.MediaKey)
 		notifs[key] = retryNotif{directPath: dp, code: code, err: derr}
 	})
-	defer a.wa.RemoveEventHandler(handlerID)
+	defer func() {
+		mu.Lock()
+		active = false
+		mu.Unlock()
+		a.wa.RemoveEventHandler(handlerID)
+	}()
 
 	// Load message info + build retry receipts, dropping rows we cannot address.
 	type ready struct {
@@ -148,6 +179,11 @@ func (a *App) RetryMedia(ctx context.Context, opts RetryMediaOptions) (MediaRetr
 			result.Failed++
 			result.Outcomes = append(result.Outcomes, MediaRetryOutcome{ChatJID: p.ChatJID, MsgID: p.MsgID, Status: "error", Detail: fmt.Sprintf("load info: %v", err)})
 			continue
+		}
+		if checkSelected != nil {
+			if err := checkSelected(info); err != nil {
+				return result, err
+			}
 		}
 		msg, err := a.db.GetMessage(p.ChatJID, p.MsgID)
 		if err != nil {
@@ -211,15 +247,19 @@ func (a *App) RetryMedia(ctx context.Context, opts RetryMediaOptions) (MediaRetr
 		orderedKeys = append(orderedKeys, key)
 	}
 
-	sendReceipt := func(key mediaRetryKey) bool {
+	sendReceipt := func(key mediaRetryKey) error {
 		r := prepared[key]
+		if checkSelected != nil {
+			if err := checkSelected(r.info); err != nil {
+				return err
+			}
+		}
 		if err := a.wa.SendMediaRetryReceipt(ctx, r.mi, r.info.MediaKey); err != nil {
 			mu.Lock()
 			notifs[key] = retryNotif{err: err}
 			mu.Unlock()
-			return false
 		}
-		return true
+		return nil
 	}
 	responded := func(keys []mediaRetryKey) bool {
 		mu.Lock()
@@ -270,13 +310,17 @@ func (a *App) RetryMedia(ctx context.Context, opts RetryMediaOptions) (MediaRetr
 		batch := orderedKeys[start:end]
 
 		for _, key := range batch {
-			sendReceipt(key)
+			if err := sendReceipt(key); err != nil {
+				return result, err
+			}
 		}
 		waitForBatch(batch)
 		// One second attempt for non-responders (often just timing).
 		if retryIDs := missing(batch); len(retryIDs) > 0 && ctx.Err() == nil {
 			for _, key := range retryIDs {
-				sendReceipt(key)
+				if err := sendReceipt(key); err != nil {
+					return result, err
+				}
 			}
 			waitForBatch(retryIDs)
 		}
@@ -289,16 +333,18 @@ func (a *App) RetryMedia(ctx context.Context, opts RetryMediaOptions) (MediaRetr
 			n, got := notifs[key]
 			info := infos[key]
 			mu.Unlock()
-			result.Outcomes = append(result.Outcomes, a.classifyRetry(ctx, info, key.msgID, n, got, &result))
+			result.Outcomes = append(result.Outcomes, classify(ctx, info, key.msgID, n, got, &result))
 		}
-		a.emitEvent("media_retry_progress", map[string]any{
-			"done":         end,
-			"total":        len(orderedKeys),
-			"recovered":    result.Recovered,
-			"not_on_phone": result.NotOnPhone,
-			"no_response":  result.NoResponse,
-			"failed":       result.Failed,
-		})
+		if checkSelected == nil {
+			a.emitEvent("media_retry_progress", map[string]any{
+				"done":         end,
+				"total":        len(orderedKeys),
+				"recovered":    result.Recovered,
+				"not_on_phone": result.NotOnPhone,
+				"no_response":  result.NoResponse,
+				"failed":       result.Failed,
+			})
+		}
 	}
 	return result, ctx.Err()
 }
