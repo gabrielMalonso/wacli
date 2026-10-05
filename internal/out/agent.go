@@ -78,16 +78,27 @@ type AgentDraftCleanupError struct {
 	RemovedBytes  *int64 `json:"removed_bytes"`
 }
 
+// Retry observations describe this invocation, never current availability.
+type AgentMediaRetryObservation struct {
+	Phone      string     `json:"phone"`
+	CDN        string     `json:"cdn"`
+	ObservedAt *time.Time `json:"observed_at,omitempty"`
+}
+
 // Publication knowledge does not assert rollback or future file stability.
 type AgentMediaError struct {
-	ChatJID         string  `json:"chat_jid"`
-	ID              string  `json:"id"`
-	Status          string  `json:"status"`
-	FilePublication string  `json:"file_publication"`
-	Recorded        bool    `json:"recorded"`
-	Path            *string `json:"path,omitempty"`
-	Bytes           *int64  `json:"bytes,omitempty"`
-	SHA256          string  `json:"sha256,omitempty"`
+	Retry               *AgentMediaRetryObservation `json:"retry,omitempty"`
+	RecordedAt          *time.Time                  `json:"recorded_at,omitempty"`
+	UnavailableAt       *time.Time                  `json:"unavailable_at,omitempty"`
+	CurrentAvailability string                      `json:"current_availability,omitempty"`
+	ChatJID             string                      `json:"chat_jid"`
+	ID                  string                      `json:"id"`
+	Status              string                      `json:"status"`
+	FilePublication     string                      `json:"file_publication"`
+	Recorded            bool                        `json:"recorded"`
+	Path                *string                     `json:"path,omitempty"`
+	Bytes               *int64                      `json:"bytes,omitempty"`
+	SHA256              string                      `json:"sha256,omitempty"`
 }
 
 // Chat-state invocation knowledge is separate from current remote state.

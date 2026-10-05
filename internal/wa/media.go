@@ -191,6 +191,13 @@ func DownloadMediaDirectBytes(ctx context.Context, directPath string, encFileHas
 	return downloadMediaDirectPlaintext(ctx, directPath, encFileHash, fileHash, mediaKey, fileLength, mediaType)
 }
 
+// DownloadRetriedMediaBytes authenticates re-uploaded media without requiring
+// the original ciphertext hash, which may change when the phone re-uploads it.
+// Callers own confinement and no-replace publication of the plaintext.
+func DownloadRetriedMediaBytes(ctx context.Context, directPath string, fileHash, mediaKey []byte, fileLength uint64, mediaType string) ([]byte, error) {
+	return DownloadMediaDirectBytes(ctx, directPath, nil, fileHash, mediaKey, fileLength, mediaType)
+}
+
 func downloadMediaDirectPlaintext(ctx context.Context, directPath string, encFileHash, fileHash, mediaKey []byte, fileLength uint64, mediaType string) ([]byte, error) {
 	if strings.TrimSpace(directPath) == "" {
 		return nil, fmt.Errorf("direct path is required")

@@ -27,7 +27,7 @@ func newMediaCmd(flags *rootFlags) *cobra.Command {
 }
 
 func newMediaRetryCmd(flags *rootFlags) *cobra.Command {
-	var chat string
+	var chat, id, output string
 	var limit int
 	var batch int
 	var wait time.Duration
@@ -42,6 +42,12 @@ func newMediaRetryCmd(flags *rootFlags) *cobra.Command {
 			"longer holds is marked so it is not retried again. Only works while the phone\n" +
 			"is online and still has the media.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if flags.agent {
+				return runAgentMediaRetry(cmd, flags, chat, id, output, wait)
+			}
+			if cmd.Flags().Changed("id") || cmd.Flags().Changed("output") {
+				return fmt.Errorf("exact media retry --id and --output require --agent")
+			}
 			if limit < 0 {
 				return fmt.Errorf("--limit must be >= 0")
 			}
@@ -104,7 +110,9 @@ func newMediaRetryCmd(flags *rootFlags) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&chat, "chat", "", "limit retry to a single chat JID")
+	cmd.Flags().StringVar(&chat, "chat", "", "chat JID (exact selection with --agent)")
+	cmd.Flags().StringVar(&id, "id", "", "exact message ID (requires --agent and --output)")
+	cmd.Flags().StringVar(&output, "output", "", "explicit output file or directory for exact retry (requires --agent)")
 	cmd.Flags().IntVar(&limit, "limit", 0, "maximum number of messages to retry (0 = all pending)")
 	cmd.Flags().IntVar(&batch, "batch", 32, "number of retry receipts to send per batch")
 	cmd.Flags().DurationVar(&wait, "wait", 30*time.Second, "how long to wait for the phone per attempt")

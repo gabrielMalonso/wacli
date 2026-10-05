@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Agents: add explicit `media retry --chat JID --id ID --output PATH --agent` through the shared legacy retry engine, with exact composite selection, bounded waits/deadline, lazy standalone authentication/connection and no owner IPC or historical LID migration. Preserve PR17 verified cache/destination reuse and no-replace publication; distinguish dated phone/CDN evidence, unknown current availability, file effects and archive persistence through sanitized live outcomes/errors. Refuse readonly, bulk flags, invalid selections and active writer LOCK safely; validate with fixtures/fakes and local HTTP only.
+
 - Drafts: add explicit `draft cleanup preview/apply`. Preview bounded readonly catalogue pages and remove only verified document snapshots of discarded drafts, including a sole head, with no outbound reference in any state. Reaffirm discard through a checked leased FULL commit before unlink; retain all revisions/metadata, keys and receipts, and distinguish confirmed, absent and uncertain filesystem effects through CLI and bounded typed owner IPC, without WA, pacing or automatic replay. No schema/index change, automatic GC, orphan purge or whole-archive compaction.
 
 - Agents: add exact-message `media status` with opt-in local verification and `media download --output` using a readonly archive without a session, LOCK or IPC. Reuse digest-verified cache/destinations without network keys, preserve dated unavailable observations and unknown current availability, confine agent file IO, and publish verified 0600 files without replacing existing destinations. Keep legacy media behavior and bulk retry unchanged; validate with local HTTPS/owner-LOCK fixtures only.

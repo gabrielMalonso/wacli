@@ -32,6 +32,7 @@ const (
 	agentChatState
 	agentMediaDownload
 	agentMediaRead
+	agentMediaRecovery
 )
 
 // Recover output intent even if Cobra stops on an earlier parse error. Inspect
@@ -202,6 +203,8 @@ func agentCommandCapability(cmd *cobra.Command) agentCapability {
 		return agentMediaRead
 	case "media download":
 		return agentMediaDownload
+	case "media retry":
+		return agentMediaRecovery
 	case "draft create", "draft update", "draft discard", "draft cleanup apply":
 		return agentLocalDraftWrite
 	case "history backfill":
@@ -237,7 +240,7 @@ func validateAgentCommand(cmd *cobra.Command, args []string, flags *rootFlags) e
 			return usage(err)
 		}
 	}
-	if cmd.Flags().Lookup("limit") != nil {
+	if flags.agentCapability != agentMediaRecovery && cmd.Flags().Lookup("limit") != nil {
 		if !cmd.Flags().Changed("limit") {
 			_ = cmd.Flags().Set("limit", "20")
 		}
@@ -247,7 +250,21 @@ func validateAgentCommand(cmd *cobra.Command, args []string, flags *rootFlags) e
 		}
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), "wacli ")
-	if path == "media status" || path == "media download" {
+	if path == "media retry" {
+		if flags.isReadOnly() {
+			return &out.AgentError{Code: "read_only", Message: "Read-only policy rejects explicit media recovery.", ExitCode: 2}
+		}
+		for _, name := range []string{"before", "limit", "batch"} {
+			if cmd.Flags().Changed(name) {
+				return usage(fmt.Errorf("bulk flags cannot select exact media recovery"))
+			}
+		}
+		wait, _ := cmd.Flags().GetDuration("wait")
+		if wait < time.Second || wait > 120*time.Second || flags.timeout < time.Second || flags.timeout > 5*time.Minute {
+			return usage(fmt.Errorf("media retry requires --wait 1s..120s and --timeout 1s..5m"))
+		}
+	}
+	if path == "media status" || path == "media download" || path == "media retry" {
 		chat, _ := cmd.Flags().GetString("chat")
 		id, _ := cmd.Flags().GetString("id")
 		if err := validateAgentMediaSelection(chat, id); err != nil {
@@ -257,7 +274,7 @@ func validateAgentCommand(cmd *cobra.Command, args []string, flags *rootFlags) e
 		if len(output) > 4096 || strings.Contains(output, "://") || strings.IndexFunc(output, unicode.IsControl) >= 0 {
 			return usage(fmt.Errorf("--output requires a local filesystem path without controls"))
 		}
-		if path == "media download" {
+		if path == "media download" || path == "media retry" {
 			if strings.TrimSpace(output) == "" {
 				return usage(fmt.Errorf("--output is required with --agent media download"))
 			}
@@ -498,7 +515,7 @@ func agentMeta(flags *rootFlags) out.AgentMeta {
 		detail = "compact"
 	}
 	source := "local"
-	if flags.agentCapability == agentHistoryRecovery || flags.agentCapability == agentOutboundSend || flags.agentCapability == agentChatState || flags.agentCapability == agentMediaDownload {
+	if flags.agentCapability == agentHistoryRecovery || flags.agentCapability == agentOutboundSend || flags.agentCapability == agentChatState || flags.agentCapability == agentMediaDownload || flags.agentCapability == agentMediaRecovery {
 		source = "live"
 	}
 	meta := out.AgentMeta{Source: source, Detail: detail, Completeness: "unknown", Freshness: "unknown"}
