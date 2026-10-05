@@ -82,6 +82,12 @@ func (a *App) ReadDraftIdentities(ctx context.Context, inputs []string) ([]Histo
 }
 
 func (a *App) readLocalIdentities(ctx context.Context, inputs []string, maxInputs int) ([]HistoryIdentity, error) {
+	return a.readLocalIdentitiesPolicy(ctx, inputs, maxInputs, false)
+}
+
+// The chat-state policy rejects malformed public device facts and checks the
+// requested own identity against the map. Existing readers retain their policy.
+func (a *App) readLocalIdentitiesPolicy(ctx context.Context, inputs []string, maxInputs int, strictChatState bool) ([]HistoryIdentity, error) {
 	if len(inputs) > maxInputs {
 		return nil, fmt.Errorf("history evidence accepts at most 200 inputs")
 	}
@@ -132,11 +138,19 @@ func (a *App) readLocalIdentities(ctx context.Context, inputs []string, maxInput
 		}
 		count++
 		account = publicHistoryAccount(raw)
+		if strictChatState && account == "" {
+			_ = rows.Close()
+			return nil, fmt.Errorf("invalid public account identity")
+		}
 		lid, parseErr := ParseHistoryJID(lidText)
 		if parseErr == nil && lid.Server == types.HiddenUserServer && lid.User != "" {
 			ownAlias = lid.ToNonAD().String()
 		} else {
 			ownAlias = ""
+			if strictChatState && lidText != "" {
+				_ = rows.Close()
+				return nil, fmt.Errorf("invalid public account alias")
+			}
 		}
 	}
 	err = rows.Err()
@@ -155,7 +169,9 @@ func (a *App) readLocalIdentities(ctx context.Context, inputs []string, maxInput
 		if account != "" && ownAlias != "" && (jid.String() == account || jid.String() == ownAlias) {
 			result[i].ChatJID = account
 			result[i].AliasJID = ownAlias
-			continue
+			if !strictChatState {
+				continue
+			}
 		}
 		var other string
 		switch jid.Server {
@@ -200,6 +216,12 @@ func (a *App) readLocalIdentities(ctx context.Context, inputs []string, maxInput
 			}
 			result[i].ChatJID = pn.String()
 			result[i].AliasJID = jid.String()
+		}
+		if strictChatState && account != "" && ownAlias != "" {
+			item := result[i]
+			if (item.ChatJID == account || item.AliasJID == ownAlias) && (item.ChatJID != account || item.AliasJID != ownAlias) {
+				return nil, fmt.Errorf("public device and requested identity map contradict")
+			}
 		}
 	}
 	return result, tx.Commit()

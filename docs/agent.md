@@ -1,6 +1,6 @@
 # Agent output contract
 
-Read when: integrating a coding agent with bounded archive queries, explicit history recovery, local drafts, durable outbound dispatch, and stable errors.
+Read when: integrating a coding agent with bounded archive queries, explicit history recovery, local drafts, durable outbound dispatch, explicit unread/archive actions, and stable errors.
 
 `--agent` enables JSON contract **v1**. `--detail compact|full` chooses its public detail level; compact is the default. Flags work before or after the subcommand. `--agent --json` still returns v1. Existing `--json` envelopes, field names, list defaults, tables, and `--full` table behavior remain unchanged. `--detail` without `--agent` is an error; `--full` does not select full agent detail.
 
@@ -19,6 +19,7 @@ wacli --store /path/to/archive --agent doctor
 | `messages show` | One message DTO | Same message additions |
 | `messages context` | `messages` array and `selected_id` | Same message additions |
 | `chats list` / `chats show` | `chats` array / one chat DTO | Archived, pinned, stored mute deadline |
+| `chats mark-unread/archive/unarchive --chat PHONE_OR_JID` | Explicit live action: requested scope, observed public account/target, SDK outcome and local mirror | Same result |
 | `contacts list/search` / `contacts show` | `contacts` array / one contact DTO | System name, tags, metadata update timestamp |
 | `contacts resolve` | `resolutions` array, one per input | Untruncated names |
 | `history coverage` | `coverage` array with local counts/dates/anchor status; opt-in `--evidence` adds independent `recovery_evidence` | Untruncated names; evidence options, anchors and checkpoint measurements |
@@ -34,9 +35,31 @@ Other commands, including mutations outside these explicit actions, downloads, `
 
 All archive queries use the existing read-only opener, validate the archive schema without migration, and work while the writer lock is held. They never initialize a missing archive. Authentication status reads the public session JID and local revocation observation, without loading credentials or opening a WhatsApp client; an existing directory without a session reports unauthenticated. Offline doctor requires a readable current-schema archive; store failures are error envelopes with exit 4. Inspect session state separately with `auth status --agent` even if `wacli.db` is unreadable, or run legacy `doctor --json` (without `--agent` or `--connect`) to retain its diagnostic report, including archive errors. Neither command connects.
 
+## Explicit unread/archive actions
+
+```bash
+wacli --agent --account personal chats mark-unread --chat +15550000001
+wacli --agent --store /path/to/archive chats archive --chat 300@lid
+wacli --agent --account personal chats unarchive --chat 123456-789@g.us
+```
+
+Only `mark-unread`, `archive` and `unarchive` gain this narrow capability. Supply an explicit phone number or DM/group JID; names and `--pick` (including zero) are rejected. `mark-read`, receipts, pin and mute remain unsupported with `--agent`. Read-only flag/env and malformed options fail before opening, connecting or submitting IPC. `meta.source="live"` also applies to parsing, policy and other errors; freshness/completeness remain unknown.
+
+The selected store is resolved once. Standalone execution uses its writable LOCK, authenticated client and existing one-shot persistence handler; it never pairs. A same-store connected owner receives the distinct typed `agent_chat_state` kind through the existing socket, outside the send slot and pacer. These actions serialize through the existing app-state semaphore and recovery, sharing the caller deadline. Independent outbound work can proceed while chat state waits for recovery; no task reserves another thread's work.
+
+After connection and pre-write recovery, a strict readonly public account/map transaction supplies `observation.account_identity` and `observation.target`. The connected client's own PN and any observed own LID must match. Device facts must be valid; target mapping queries and their reverses must succeed consistently. Missing target aliases are allowed: PN-only, LID-only and groups retain their exact identity. No discovery or best-effort resolver selects this target. A known pair provides the canonical PN for the frozen local mirror; the SDK builder still receives the **exact normalized requested JID**, including a requested LID. Builders index that JID directly and do not need outbound's PN-to-LID translation. Account/session/map files and client state are shared and not atomically bound; this observation does not prevent a later external replacement or prove current remote identity/state.
+
+Success `data` contains `request={version,store_ref,requested,action}`, the public `observation`, `outcome="sdk_completed"` and `local_mirror="persisted"`. This means the SDK call returned nil and the command's local mirror persisted; it does not confirm the remote state still has that value. `mark-unread` sets the marker without inventing message counts; archive also unpins, and unarchive does not restore the pin. Local list/show/context reads never mark a chat read. Unread/archive are WhatsApp state, not agent processing status.
+
+Errors carry concrete `error.chat_state={requested,action,outcome,local_mirror}` plus known public `own_pn/own_lid/target_jid/target_pn/target_lid`. Outcomes are `not_dispatched` before invoking the mutating WA method, `uncertain` after that invocation without nil SDK completion, or `sdk_completed` if nil was returned. Mirror knowledge is `unknown`, `persisted` or `unconfirmed`; SDK nil plus persistence failure retains `sdk_completed/unconfirmed`, and stdout failure retains the known result. Pre-write recovery can persist state even for `not_dispatched`. `beforeApply` reserves persistence before `SendAppState` preparation and proves no network frame. The SDK retains its internal conflict retry; the application adds no repeated mutation after uncertainty.
+
+Usage/read-only failures exit 2; unavailable store/identity exits 4; operational, uncertain, mirror or output failures exit 1. No absence of a chat row proves remote not-found. Causes are sanitized. Request/response version, action, store, identity structure, capability and a bounded 16 KiB newline frame are checked per connection; no persisted ID, journal or schema is added. An absent socket before submission leaves the LOCK/unavailable result. Old/untyped owners, EOF, transport loss or mismatched replies after submission yield `uncertain`, without fallback or interpreting raw error text as proof of no effects. Restart an older owner explicitly; do not automatically replay an uncertain action.
+
+Existing recovery debt, late persistence and handler draining before DB/LOCK release are retained. Timeout is not rollback, a definitive failed remote change, or a delivery result. Inspect local `chats show --agent --detail full` and account status, then make an explicit decision using the available observations. Frozen text replies, explicit vCards, document snapshots and outbound receipt observations already use drafts/outbound; no additional layer is introduced here. Live WhatsApp interoperability remains opt-in and was not exercised by fixture validation.
+
 ## History recovery
 
-`--agent history backfill --chat JID` explicitly requests recovery using the existing standalone runner or connected sync owner. It does not authorize any other mutation, connection command, or download. The central command capability remains an explicit allowlist: unsupported, local read, local draft write, history recovery, or outbound dispatch. `--read-only` and `WACLI_READONLY=1` reject this action with `read_only` (exit 2); malformed options and `--events` fail with exit 2 before opening/delegating. Bounds remain count 1–500, up to 100 batches, wait/idle up to five minutes (legacy nonpositive defaults preserved). There is no new executor, replay, journal or automatic retry policy.
+`--agent history backfill --chat JID` explicitly requests recovery using the existing standalone runner or connected sync owner. It does not authorize any other mutation, connection command, or download. The central command capability remains an explicit allowlist: unsupported, local read, local draft write, history recovery, outbound dispatch, or the three explicit unread/archive actions. `--read-only` and `WACLI_READONLY=1` reject this action with `read_only` (exit 2); malformed options and `--events` fail with exit 2 before opening/delegating. Bounds remain count 1–500, up to 100 batches, wait/idle up to five minutes (legacy nonpositive defaults preserved). There is no new executor, replay, journal or automatic retry policy.
 
 `meta.source="live"` describes the action's capability, including parsing, policy and pre-dispatch failures; it does not assert a request reached the primary. Coverage remains `source="local"`. Both freshness and completeness stay `unknown`. Success exposes only the final successful operation observation; partial results on errors are available through retained evidence when persistence succeeded.
 

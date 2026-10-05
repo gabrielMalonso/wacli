@@ -58,20 +58,16 @@ func (a *App) ArchiveChat(ctx context.Context, jid types.JID, archive bool) erro
 	}
 	defer release()
 	chatJID := canonicalJIDString(a.canonicalStoreJID(ctx, jid))
-	pending, err := a.beginLocalAppStateWrite(appstate.WAPatchRegularLow)
-	if err != nil {
-		return err
-	}
-	postSendEvents, err := a.wa.ArchiveChat(ctx, jid, archive, nowUTC(), nil, func() { pending.reserve(a) })
-	if err != nil {
-		return errors.Join(err, a.failLocalAppStateWrite(ctx, &pending, postSendEvents))
-	}
-	if !pending.reserved {
-		return fmt.Errorf("WhatsApp app state send completed without an apply boundary")
-	}
-	return a.completeLocalAppStateWrite(ctx, &pending, postSendEvents, func() error {
-		return a.db.SetChatArchived(chatJID, archive)
-	})
+	_, _, err = a.archiveChatResolved(ctx, jid, chatJID, archive, nil)
+	return err
+}
+
+// Resolved helpers run under beginChatStateWrite. The legacy wrappers retain
+// their resolver; agent actions supply one frozen strict observation instead.
+func (a *App) archiveChatResolved(ctx context.Context, jid types.JID, chatJID string, archive bool, beforeSend func() error) (ChatStateOutcome, ChatStateMirror, error) {
+	return a.applyLocalChatStateWrite(ctx, beforeSend, func(boundary func()) ([]any, error) {
+		return a.wa.ArchiveChat(ctx, jid, archive, nowUTC(), nil, boundary)
+	}, func() error { return a.db.SetChatArchived(chatJID, archive) })
 }
 
 func (a *App) PinChat(ctx context.Context, jid types.JID, pin bool) error {
@@ -128,19 +124,15 @@ func (a *App) MarkChatRead(ctx context.Context, jid types.JID, read bool) error 
 	}
 	defer release()
 	chatJID := canonicalJIDString(a.canonicalStoreJID(ctx, jid))
+	_, _, err = a.markChatReadResolved(ctx, jid, chatJID, read, nil)
+	return err
+}
+
+func (a *App) markChatReadResolved(ctx context.Context, jid types.JID, chatJID string, read bool, beforeSend func() error) (ChatStateOutcome, ChatStateMirror, error) {
 	lastTS, lastKey := a.latestMessageRange(chatJID)
-	pending, err := a.beginLocalAppStateWrite(appstate.WAPatchRegularLow)
-	if err != nil {
-		return err
-	}
-	postSendEvents, err := a.wa.MarkChatAsRead(ctx, jid, read, lastTS, lastKey, func() { pending.reserve(a) })
-	if err != nil {
-		return errors.Join(err, a.failLocalAppStateWrite(ctx, &pending, postSendEvents))
-	}
-	if !pending.reserved {
-		return fmt.Errorf("WhatsApp app state send completed without an apply boundary")
-	}
-	return a.completeLocalAppStateWrite(ctx, &pending, postSendEvents, func() error {
+	return a.applyLocalChatStateWrite(ctx, beforeSend, func(boundary func()) ([]any, error) {
+		return a.wa.MarkChatAsRead(ctx, jid, read, lastTS, lastKey, boundary)
+	}, func() error {
 		if !read {
 			return a.db.SetChatUnread(chatJID, true)
 		}
@@ -150,6 +142,31 @@ func (a *App) MarkChatRead(ctx context.Context, jid types.JID, read bool) error 
 		}
 		return a.db.ClearChatUnreadThrough(chatJID, lastTS, ids)
 	})
+}
+
+func (a *App) applyLocalChatStateWrite(ctx context.Context, beforeSend func() error, send func(func()) ([]any, error), persist func() error) (ChatStateOutcome, ChatStateMirror, error) {
+	pending, err := a.beginLocalAppStateWrite(appstate.WAPatchRegularLow)
+	if err != nil {
+		return ChatStateNotDispatched, ChatStateMirrorUnknown, err
+	}
+	if beforeSend != nil {
+		if err := beforeSend(); err != nil {
+			return ChatStateNotDispatched, ChatStateMirrorUnknown, err
+		}
+	}
+	// Crossing the mutating call is conservative: beforeApply reserves local
+	// persistence before SDK preparation, and does not prove a frame was sent.
+	postSendEvents, err := send(func() { pending.reserve(a) })
+	if err != nil {
+		return ChatStateUncertain, ChatStateMirrorUnknown, errors.Join(err, a.failLocalAppStateWrite(ctx, &pending, postSendEvents))
+	}
+	if !pending.reserved {
+		return ChatStateSDKCompleted, ChatStateMirrorUnconfirmed, fmt.Errorf("WhatsApp app state send completed without an apply boundary")
+	}
+	if err := a.completeLocalAppStateWrite(ctx, &pending, postSendEvents, persist); err != nil {
+		return ChatStateSDKCompleted, ChatStateMirrorUnconfirmed, err
+	}
+	return ChatStateSDKCompleted, ChatStateMirrorPersisted, nil
 }
 
 func (a *App) acquireChatStateSync(ctx context.Context) (func(), error) {

@@ -35,6 +35,7 @@ const (
 var errSendDelegateUnavailable = errors.New("send delegate unavailable")
 
 type sendDelegateRequest struct {
+	AgentChatState       *app.ChatStateRequest    `json:"agent_chat_state,omitempty"`
 	Outbound             *app.OutboundSendRequest `json:"outbound,omitempty"`
 	Draft                *app.DraftWriteRequest   `json:"draft,omitempty"`
 	Backfill             *backfillDelegateOptions `json:"backfill,omitempty"`
@@ -82,6 +83,7 @@ type sendDelegateRequest struct {
 }
 
 type sendDelegateResponse struct {
+	AgentChatState   *agentChatStateReply    `json:"agent_chat_state,omitempty"`
 	Outbound         *outboundDelegateResult `json:"outbound,omitempty"`
 	DraftResult      *draftDelegateResult    `json:"draft_result,omitempty"`
 	DraftFailure     *store.DraftError       `json:"draft_failure,omitempty"`
@@ -134,7 +136,7 @@ func delegateSend(ctx context.Context, flags *rootFlags, req sendDelegateRequest
 		return sendDelegateResponse{}, fmt.Errorf("%w: %v", errSendDelegateUnavailable, err)
 	}
 	defer conn.Close()
-	if req.Kind == historyBackfillKind || req.Kind == draftWriteKind || req.Kind == outboundSendKind {
+	if req.Kind == historyBackfillKind || req.Kind == draftWriteKind || req.Kind == outboundSendKind || req.Kind == agentChatStateKind {
 		// Closing the client transport interrupts its wait, not the owner's
 		// operation: this protocol has no cancellation acknowledgement.
 		stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })
@@ -148,6 +150,30 @@ func delegateSend(ctx context.Context, flags *rootFlags, req sendDelegateRequest
 	}
 	var resp sendDelegateResponse
 	var responseReader io.Reader = conn
+	if req.Kind == agentChatStateKind {
+		// A single bounded newline frame, matching Encoder.Encode. Closing this
+		// connection does not acknowledge cancellation of the owner's action.
+		frame, err := bufio.NewReader(io.LimitReader(conn, agentChatStateMaxFrame+1)).ReadBytes('\n')
+		if err != nil || len(frame) > agentChatStateMaxFrame {
+			return sendDelegateResponse{}, agentChatStateUncertain(req.AgentChatState, err)
+		}
+		decoder := json.NewDecoder(bytes.NewReader(frame))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&resp); err != nil {
+			return sendDelegateResponse{}, agentChatStateUncertain(req.AgentChatState, err)
+		}
+		var extra json.RawMessage
+		if err := decoder.Decode(&extra); err != io.EOF {
+			return sendDelegateResponse{}, agentChatStateUncertain(req.AgentChatState, err)
+		}
+		if req.AgentChatState == nil {
+			return sendDelegateResponse{}, agentChatStateUncertain(nil, nil)
+		}
+		if _, err := validateAgentChatStateDelegate(*req.AgentChatState, resp); err != nil {
+			return sendDelegateResponse{}, err
+		}
+		return resp, nil
+	}
 	if req.Kind == draftWriteKind || req.Kind == outboundSendKind {
 		responseReader = io.LimitReader(conn, 1<<20)
 	}
@@ -293,22 +319,49 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Minute))
 
 	var req sendDelegateRequest
-	// The new canonical envelope starts with its typed outbound field. Bound
-	// its wire decoding while preserving existing legacy decoder semantics.
+	// Typed envelopes start with their payload field. Bound their decoding
+	// while preserving existing legacy decoder semantics.
 	buffered := bufio.NewReader(conn)
 	prefix := []byte(`{"outbound":`)
 	head, _ := buffered.Peek(len(prefix))
 	outboundEnvelope := bytes.Equal(head, prefix)
+	chatStatePrefix := []byte(`{"agent_chat_state":`)
+	chatStateEnvelope := bytes.Equal(head, chatStatePrefix[:len(prefix)])
 	var requestReader io.Reader = buffered
 	if outboundEnvelope {
 		requestReader = io.LimitReader(buffered, 16384)
 	}
+	if chatStateEnvelope {
+		frame, err := bufio.NewReader(io.LimitReader(buffered, agentChatStateMaxFrame+1)).ReadBytes('\n')
+		if err != nil || len(frame) > agentChatStateMaxFrame {
+			_ = json.NewEncoder(conn).Encode(sendDelegateResponse{Error: "invalid bounded agent chat state frame"})
+			return
+		}
+		requestReader = bytes.NewReader(frame)
+	}
 	requestDecoder := json.NewDecoder(requestReader)
-	if outboundEnvelope {
+	if outboundEnvelope || chatStateEnvelope {
 		requestDecoder.DisallowUnknownFields()
 	}
 	if err := requestDecoder.Decode(&req); err != nil {
+		if chatStateEnvelope {
+			_ = json.NewEncoder(conn).Encode(sendDelegateResponse{Error: "invalid agent chat state frame"})
+			return
+		}
 		_ = json.NewEncoder(conn).Encode(sendDelegateResponse{OK: false, Error: err.Error()})
+		return
+	}
+	if chatStateEnvelope {
+		var extra json.RawMessage
+		if err := requestDecoder.Decode(&extra); err != io.EOF {
+			_ = json.NewEncoder(conn).Encode(sendDelegateResponse{Error: "invalid agent chat state frame"})
+			return
+		}
+	}
+	// A typed chat-state payload can never opt into another executor, even
+	// when the envelope names a legacy kind or reorders fields.
+	if (chatStateEnvelope || req.AgentChatState != nil) && req.Kind != agentChatStateKind {
+		_ = json.NewEncoder(conn).Encode(agentChatStateRefusal(req, "invalid_arguments"))
 		return
 	}
 
@@ -368,10 +421,24 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 			return
 		}
 	}
-	if req.Kind == chatStateKind {
+	if req.Kind == agentChatStateKind {
+		if !chatStateEnvelope || !validateAgentChatStateEnvelope(req) {
+			_ = json.NewEncoder(conn).Encode(agentChatStateRefusal(req, "invalid_arguments"))
+			return
+		}
+		if requestCtx.Err() != nil {
+			_ = json.NewEncoder(conn).Encode(agentChatStateRefusal(req, "not_dispatched"))
+			return
+		}
+	}
+	if req.Kind == chatStateKind || req.Kind == agentChatStateKind {
 		// App-state writes are serialized by the app and can wait minutes on
 		// recovery, so they must not hold the send queue.
 		if requestCtx.Err() != nil {
+			if req.Kind == agentChatStateKind {
+				_ = json.NewEncoder(conn).Encode(agentChatStateRefusal(req, "not_dispatched"))
+				return
+			}
 			_ = json.NewEncoder(conn).Encode(sendDelegateResponse{OK: false, Error: "request deadline passed before dispatch; it was not sent"})
 			return
 		}
@@ -444,6 +511,10 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 
 func writeDelegateResult(conn net.Conn, requestCtx context.Context, req sendDelegateRequest, resp sendDelegateResponse, err error) {
 	if err != nil {
+		if req.Kind == agentChatStateKind {
+			_ = json.NewEncoder(conn).Encode(agentChatStateRefusal(req, "chat_state_outcome_uncertain"))
+			return
+		}
 		if req.Kind == outboundSendKind {
 			_ = json.NewEncoder(conn).Encode(outboundRefusal(req, "outcome_uncertain"))
 			return
@@ -480,6 +551,8 @@ func executeDelegatedSend(parent context.Context, a *app.App, req sendDelegateRe
 	defer cancel()
 
 	switch req.Kind {
+	case agentChatStateKind:
+		return executeDelegatedAgentChatState(ctx, a, req)
 	case outboundSendKind:
 		return executeDelegatedOutbound(ctx, a, req)
 	case draftWriteKind:
@@ -858,6 +931,9 @@ func commandTimeout(flags *rootFlags) time.Duration {
 }
 
 func historyTransportError(req sendDelegateRequest, err error) error {
+	if req.Kind == agentChatStateKind {
+		return agentChatStateUncertain(req.AgentChatState, err)
+	}
 	if req.Kind == outboundSendKind {
 		return outboundIPCUncertain(req.Outbound, err)
 	}

@@ -54,14 +54,28 @@ type AgentDraftError struct {
 // AgentError carries a stable public code and a typed cause for exit handling.
 // Recovery is emitted only when an actionable next step is known.
 type AgentError struct {
-	Outbound *AgentOutboundError `json:"outbound,omitempty"`
-	Draft    *AgentDraftError    `json:"draft,omitempty"`
-	History  *AgentHistoryError  `json:"history,omitempty"`
-	Code     string              `json:"code"`
-	Message  string              `json:"message"`
-	Recovery string              `json:"recovery,omitempty"`
-	ExitCode int                 `json:"-"`
-	Cause    error               `json:"-"`
+	ChatState *AgentChatStateError `json:"chat_state,omitempty"`
+	Outbound  *AgentOutboundError  `json:"outbound,omitempty"`
+	Draft     *AgentDraftError     `json:"draft,omitempty"`
+	History   *AgentHistoryError   `json:"history,omitempty"`
+	Code      string               `json:"code"`
+	Message   string               `json:"message"`
+	Recovery  string               `json:"recovery,omitempty"`
+	ExitCode  int                  `json:"-"`
+	Cause     error                `json:"-"`
+}
+
+// Chat-state invocation knowledge is separate from current remote state.
+type AgentChatStateError struct {
+	Requested   string `json:"requested"`
+	Action      string `json:"action"`
+	Outcome     string `json:"outcome"`
+	LocalMirror string `json:"local_mirror"`
+	OwnPN       string `json:"own_pn,omitempty"`
+	OwnLID      string `json:"own_lid,omitempty"`
+	TargetJID   string `json:"target_jid,omitempty"`
+	TargetPN    string `json:"target_pn,omitempty"`
+	TargetLID   string `json:"target_lid,omitempty"`
 }
 
 type AgentOutboundError struct {
