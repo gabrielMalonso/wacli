@@ -152,7 +152,7 @@ func TestAgentContactsPagesCanonicalTiesWALAndLegacy(t *testing.T) {
 func referenceContactSearch(t *testing.T, a *app.App, query string) []store.Contact {
 	t.Helper()
 	ctx := context.Background()
-	resolver, err := contactReadResolver(a)
+	resolver, err := contactReadResolver(context.Background(), a)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,10 @@ func referenceContactSearch(t *testing.T, a *app.App, query string) []store.Cont
 		matched[c.JID] = true
 	}
 	needle := strings.ToLower(query)
-	qjid := resolveContactReadJID(ctx, resolver, query)
+	qjid, err := resolveContactReadJID(ctx, resolver, query)
+	if err != nil {
+		t.Fatal(err)
+	}
 	result := []store.Contact{}
 	for _, d := range display {
 		match := d.contact.JID == qjid || strings.Contains(strings.ToLower(d.contact.JID), needle) || strings.Contains(strings.ToLower(d.contact.Phone), needle)
@@ -231,7 +234,7 @@ func TestContactsStreamingDifferentialIdentityAndMetadata(t *testing.T) {
 	}
 	defer a.Close()
 	ctx := context.Background()
-	resolver, err := contactReadResolver(a)
+	resolver, err := contactReadResolver(context.Background(), a)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,7 +540,7 @@ func TestContactsBinaryFixturePages(t *testing.T) {
 				want = append(want, c.JID)
 			}
 		} else {
-			resolver, err := contactReadResolver(a)
+			resolver, err := contactReadResolver(context.Background(), a)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -562,8 +565,9 @@ func TestContactsBinaryFixturePages(t *testing.T) {
 func TestContactsNullableOwnLIDCLIAndLegacy(t *testing.T) {
 	const ownPN = "15550002009@s.whatsapp.net"
 	const ownLID = "95550002009@lid"
-	for _, mapped := range []bool{false, true} {
-		t.Run(fmt.Sprintf("mapped=%t", mapped), func(t *testing.T) {
+	for _, tc := range []struct{ mapped, nullFirst bool }{{false, false}, {false, true}, {true, false}, {true, true}} {
+		mapped, nullFirst := tc.mapped, tc.nullFirst
+		t.Run(fmt.Sprintf("mapped=%t/nullFirst=%t", mapped, nullFirst), func(t *testing.T) {
 			dir := seedContactReadStore(t, false)
 			db := openSystemImportStore(t, dir)
 			for _, row := range []struct{ jid, name string }{{ownPN, "Valid primary fixture"}, {ownLID, "Valid own fixture"}} {
@@ -571,7 +575,7 @@ func TestContactsNullableOwnLIDCLIAndLegacy(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			for jid, alias := range map[string]string{contactPN: "Nullable PN alias", contactLID: "Nullable LID alias", ownPN: "Valid own alias"} {
+			for jid, alias := range map[string]string{contactPN: "Nullable PN alias", contactLID: "Nullable LID alias", ownPN: "Valid own alias", "15550009999@s.whatsapp.net": "Other identity alias"} {
 				if err := db.SetAlias([]string{jid}, alias); err != nil {
 					t.Fatal(err)
 				}
@@ -589,12 +593,14 @@ func TestContactsNullableOwnLIDCLIAndLegacy(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Keep the valid own pair first for comparison with the unchanged legacy
-			// resolver; the app regression also covers NULL first. A missing own LID
-			// must not suppress the public-map fallback for that phone identity.
-			_, err = session.Exec(`CREATE TABLE whatsmeow_device (jid TEXT PRIMARY KEY,lid TEXT); INSERT INTO whatsmeow_device VALUES ('15550002009:3@s.whatsapp.net','95550002009@lid'),('15550001001:1@s.whatsapp.net',NULL)`)
+			// Absent public fields never hide a valid pair later in the device set.
+			rows := `('15550002009:3@s.whatsapp.net','95550002009@lid'),('15550001001:1@s.whatsapp.net',NULL),(NULL,'95550008888@lid')`
+			if nullFirst {
+				rows = `(NULL,'95550008888@lid'),('15550001001:1@s.whatsapp.net',NULL),('15550002009:3@s.whatsapp.net','95550002009@lid')`
+			}
+			_, err = session.Exec(`CREATE TABLE whatsmeow_device (jid TEXT,lid TEXT); INSERT INTO whatsmeow_device VALUES ` + rows)
 			if err == nil && mapped {
-				_, err = session.Exec(`CREATE TABLE whatsmeow_lid_map (lid TEXT PRIMARY KEY,pn TEXT UNIQUE NOT NULL); INSERT INTO whatsmeow_lid_map VALUES ('900000001','15550001001')`)
+				_, err = session.Exec(`CREATE TABLE whatsmeow_lid_map (lid TEXT PRIMARY KEY,pn TEXT UNIQUE NOT NULL); INSERT INTO whatsmeow_lid_map VALUES ('900000001','15550001001'),('95550002009','15550009999')`)
 			}
 			session.Close()
 			if err != nil {
@@ -606,7 +612,7 @@ func TestContactsNullableOwnLIDCLIAndLegacy(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer a.Close()
-			resolver, err := contactReadResolver(a)
+			resolver, err := contactReadResolver(context.Background(), a)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -671,6 +677,14 @@ func TestContactsNullableOwnLIDCLIAndLegacy(t *testing.T) {
 			for _, jid := range []string{ownPN, ownLID} {
 				if c := runContactsShow(t, dir, jid); c.JID != ownPN || c.Alias != "Valid own alias" {
 					t.Fatalf("valid own show %+v", c)
+				}
+				resolved, err := resolveContactIdentity(context.Background(), resolver, jid)
+				if err != nil || !resolved.Resolved || resolved.JID != ownPN || resolved.LID != ownLID {
+					t.Fatalf("valid own resolve %+v %v", resolved, err)
+				}
+				metadata, err := contactMetadataJIDs(context.Background(), a, jid)
+				if err != nil || !reflect.DeepEqual(metadata, []string{ownPN, ownLID}) {
+					t.Fatalf("valid own metadata %v %v", metadata, err)
 				}
 			}
 			if !reflect.DeepEqual(before, snapshotLocalStore(t, dir)) {
