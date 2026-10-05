@@ -92,9 +92,10 @@ const (
 type AppStateRecoveryOutcome string
 
 const (
-	AppStateRecoveryCompleted AppStateRecoveryOutcome = "completed"
-	AppStateRecoveryFailed    AppStateRecoveryOutcome = "failed"
-	AppStateRecoveryCancelled AppStateRecoveryOutcome = "cancelled"
+	AppStateRecoveryCompleted   AppStateRecoveryOutcome = "completed"
+	AppStateRecoveryFailed      AppStateRecoveryOutcome = "failed"
+	AppStateRecoveryCancelled   AppStateRecoveryOutcome = "cancelled"
+	AppStateRecoveryUnconfirmed AppStateRecoveryOutcome = "unconfirmed"
 )
 
 // Outcomes retain each observed kind, so a later success cannot erase a failure.
@@ -108,8 +109,8 @@ type AppStateRecoveryObservation struct {
 
 var diagnosticAppStateCollections = [...]string{"critical_block", "critical_unblock_low", "regular", "regular_high", "regular_low"}
 var diagnosticAppStatePhases = [...]AppStateRecoveryPhase{appStateRecoveryPrepare, appStateRecoveryFullSync, appStateRecoverySnapshot, appStateRecoveryPersist, appStateRecoveryCheckpoint, appStateRecoveryDelta, appStateRecoveryShutdown}
-var diagnosticAppStateOutcomes = [...]AppStateRecoveryOutcome{AppStateRecoveryCompleted, AppStateRecoveryFailed, AppStateRecoveryCancelled}
-var diagnosticAppStateErrorCodes = [...]string{"cancelled", "deadline_exceeded", "lthash_mismatch", "key_unavailable", "recovery_failed"}
+var diagnosticAppStateOutcomes = [...]AppStateRecoveryOutcome{AppStateRecoveryCompleted, AppStateRecoveryFailed, AppStateRecoveryCancelled, AppStateRecoveryUnconfirmed}
+var diagnosticAppStateErrorCodes = [...]string{"cancelled", "deadline_exceeded", "lthash_mismatch", "key_unavailable", "recovery_failed", "completion_unconfirmed"}
 
 type appStateRecoveryFacts struct {
 	outcomes [len(diagnosticAppStateOutcomes)]bool
@@ -141,6 +142,8 @@ func recordAppStateRecovery(ctx context.Context, collection string, phase AppSta
 			outcome, code = AppStateRecoveryCancelled, "cancelled"
 		case errors.Is(err, context.DeadlineExceeded):
 			code = "deadline_exceeded"
+		case errors.Is(err, wa.ErrAppStateCompletionUnconfirmed):
+			outcome, code = AppStateRecoveryUnconfirmed, "completion_unconfirmed"
 		case errors.Is(err, appstate.ErrMismatchingLTHash):
 			code = "lthash_mismatch"
 		case errors.Is(err, wa.ErrEmptyAppStateKeyShare):

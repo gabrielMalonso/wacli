@@ -18,7 +18,8 @@ import (
 
 func completeRecoveryOnRequest(f *fakeWA) {
 	f.onAppStateRecovery = func(name string) {
-		go f.emit(&events.AppStateSyncComplete{Name: appstate.WAPatchName(name), Version: 81, Recovery: true})
+		f.emit(&events.AppStateSyncComplete{Name: appstate.WAPatchName(name), Version: 81, Recovery: true})
+		f.emitRecoveryResponse()
 	}
 }
 
@@ -28,7 +29,7 @@ func recoveredCollections(f *fakeWA) []string {
 	return append([]string(nil), f.appStateRecoveries...)
 }
 
-func TestKnownEmptyKeyRecoversOneShotWithoutGlobalSignal(t *testing.T) {
+func TestKnownEmptyKeySnapshotDoesNotAuthorizeOneShot(t *testing.T) {
 	a := newTestApp(t)
 	f := newFakeWA()
 	a.wa = f
@@ -45,11 +46,11 @@ func TestKnownEmptyKeyRecoversOneShotWithoutGlobalSignal(t *testing.T) {
 	defer remove()
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	if err := a.ArchiveChat(ctx, jid, true); err != nil {
+	if err := a.ArchiveChat(ctx, jid, true); !errors.Is(err, wa.ErrAppStateCompletionUnconfirmed) {
 		t.Fatal(err)
 	}
 	chat, err := a.db.GetChat(jid.String())
-	if err != nil || !chat.Archived {
+	if err != nil || chat.Archived {
 		t.Fatalf("chat=%+v err=%v", chat, err)
 	}
 	if got := recoveredCollections(f); !slices.Equal(got, []string{"regular_low"}) {

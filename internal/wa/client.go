@@ -389,25 +389,6 @@ func (c *Client) RequestHistorySyncOnDemand(ctx context.Context, lastKnown types
 	return resp.ID, nil
 }
 
-func (c *Client) RequestAppStateRecovery(ctx context.Context, name string) (types.MessageID, error) {
-	c.mu.Lock()
-	cli := c.client
-	c.mu.Unlock()
-	if cli == nil || !cli.IsConnected() {
-		return "", fmt.Errorf("not connected")
-	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "", fmt.Errorf("app state collection name is required")
-	}
-
-	resp, err := cli.SendPeerMessage(ctx, whatsmeow.BuildAppStateRecoveryRequest(appstate.WAPatchName(name)))
-	if err != nil {
-		return "", err
-	}
-	return resp.ID, nil
-}
-
 func (c *Client) FetchAppState(ctx context.Context, name string, fullSync, onlyIfNotSynced bool) error {
 	c.mu.Lock()
 	cli := c.client

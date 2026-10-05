@@ -2309,7 +2309,7 @@ func TestArchiveChatUsesSynchronousFullReplayForMismatch(t *testing.T) {
 	}
 }
 
-func TestArchiveChatWaitsForPrimaryRecoveryAfterFullReplayMismatch(t *testing.T) {
+func TestArchiveChatSnapshotPersistsWithoutAuthorizingMutation(t *testing.T) {
 	a := newTestApp(t)
 	f := newFakeWA()
 	a.wa = f
@@ -2339,6 +2339,7 @@ func TestArchiveChatWaitsForPrimaryRecoveryAfterFullReplayMismatch(t *testing.T)
 				Version:  12,
 				Recovery: true,
 			})
+			f.emitRecoveryResponse()
 		}()
 	}
 
@@ -2363,7 +2364,7 @@ func TestArchiveChatWaitsForPrimaryRecoveryAfterFullReplayMismatch(t *testing.T)
 	close(releaseRecovery)
 	select {
 	case err := <-done:
-		if err != nil {
+		if !errors.Is(err, wa.ErrAppStateCompletionUnconfirmed) {
 			t.Fatalf("ArchiveChat: %v", err)
 		}
 	case <-time.After(time.Second):
@@ -2382,8 +2383,8 @@ func TestArchiveChatWaitsForPrimaryRecoveryAfterFullReplayMismatch(t *testing.T)
 	if len(recoveries) != 1 || recoveries[0] != string(appstate.WAPatchRegularLow) {
 		t.Fatalf("app state recoveries = %v, want [regular_low]", recoveries)
 	}
-	if archiveCalls != 1 {
-		t.Fatalf("archive calls = %d, want 1 after recovery persistence", archiveCalls)
+	if archiveCalls != 0 {
+		t.Fatalf("archive calls = %d, want 0 after unconfirmed recovery", archiveCalls)
 	}
 	if handlers != 0 {
 		t.Fatalf("event handlers after primary recovery = %d, want 0", handlers)
@@ -2510,10 +2511,11 @@ func TestArchiveChatKeepsRecoveryIntentWhenPrimaryRecoveryPersistenceFails(t *te
 			Version:  12,
 			Recovery: true,
 		})
+		f.emitRecoveryResponse()
 	}
 
 	err = a.ArchiveChat(context.Background(), target, true)
-	if err == nil || !strings.Contains(err.Error(), "persist recovered app state regular_low") {
+	if err == nil || !strings.Contains(err.Error(), "persist observed app state regular_low") {
 		t.Fatalf("ArchiveChat error = %v, want recovery persistence failure", err)
 	}
 	f.mu.Lock()

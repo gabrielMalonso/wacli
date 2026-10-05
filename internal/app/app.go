@@ -95,7 +95,7 @@ type WAClient interface {
 	RequestHistorySyncOnDemand(ctx context.Context, lastKnown types.MessageInfo, count int) (types.MessageID, error)
 	FetchAppState(ctx context.Context, name string, fullSync, onlyIfNotSynced bool) error
 	FetchAppStateEvents(ctx context.Context, name string, fullSync, onlyIfNotSynced bool) ([]any, error)
-	RequestAppStateRecovery(ctx context.Context, name string) (types.MessageID, error)
+	RequestAppStateRecoveryObserved(ctx context.Context, name string, onAcknowledged func(types.MessageID)) (wa.AppStateRecoveryExchange, error)
 	Logout(ctx context.Context) error
 	LinkedJID() string
 	LinkedLID() string

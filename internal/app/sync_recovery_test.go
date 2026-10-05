@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/openclaw/wacli/internal/store"
+	"github.com/openclaw/wacli/internal/wa"
 	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/proto/waSyncAction"
 	"go.mau.fi/whatsmeow/types"
@@ -43,8 +44,15 @@ func (f *appStateContextWA) FetchAppStateEvents(ctx context.Context, name string
 	return nil, f.fetchAppState(ctx, name, fullSync, onlyIfNotSynced)
 }
 
-func (f *appStateContextWA) RequestAppStateRecovery(ctx context.Context, name string) (types.MessageID, error) {
-	return f.requestAppStateRecovery(ctx, name)
+func (f *appStateContextWA) RequestAppStateRecoveryObserved(ctx context.Context, name string, onAcknowledged func(types.MessageID)) (wa.AppStateRecoveryExchange, error) {
+	id, err := f.requestAppStateRecovery(ctx, name)
+	if err != nil {
+		return wa.AppStateRecoveryExchange{}, err
+	}
+	if onAcknowledged != nil {
+		onAcknowledged(id)
+	}
+	return wa.AppStateRecoveryExchange{ACKConfirmed: true, ResponseReceived: true}, wa.ErrAppStateCompletionUnconfirmed
 }
 
 func TestAppStateLTHashMismatchRecoveryGetsFreshTimeoutAfterFullSyncExpires(t *testing.T) {
@@ -272,7 +280,7 @@ func TestAppStateLTHashMismatchCapsFullAndSnapshotRequests(t *testing.T) {
 				t.Fatalf("snapshot calls = %d, want %d", got, tc.wantSnapshots)
 			}
 			required, err := a.db.AppStateRecoveryRequired(collection)
-			if err != nil || required != (tc.recoveryError != nil) {
+			if err != nil || required != (tc.fetchError != nil) {
 				t.Fatalf("recovery intent = %v, %v; recovery error %v", required, err, tc.recoveryError)
 			}
 		})

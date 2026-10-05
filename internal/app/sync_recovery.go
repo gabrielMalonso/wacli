@@ -115,7 +115,7 @@ func (a *App) recoverAppStateCollection(ctx context.Context, name string, recove
 	// A full-fetch timeout must not consume the primary recovery budget.
 	recoveryCtx, cancelRecovery := context.WithTimeout(ctx, timeout)
 	defer cancelRecovery()
-	err = a.recoverMismatchingAppState(recoveryCtx, collection, generation, tracker, func(id types.MessageID) {
+	err = a.recoverMismatchingAppState(recoveryCtx, collection, tracker, func(id types.MessageID) {
 		if a.eventsEnabled() {
 			a.emitEvent("app_state_recovery_requested", map[string]any{"name": name, "id": string(id)})
 		} else {
@@ -129,6 +129,10 @@ func (a *App) recoverAppStateCollection(ctx context.Context, name string, recove
 }
 
 func (a *App) warnAppStateRecovery(name string, err error) {
+	if errors.Is(err, wa.ErrAppStateCompletionUnconfirmed) {
+		a.emitWarning("app_state_recovery_unconfirmed", fmt.Sprintf("warning: app state %s recovery completion unconfirmed; replay debt retained", name), map[string]any{"name": name})
+		return
+	}
 	a.emitWarning("app_state_recovery_failed",
 		fmt.Sprintf("warning: app state %s recovery failed: %v", name, err),
 		map[string]any{"name": name, "error": err.Error()})
