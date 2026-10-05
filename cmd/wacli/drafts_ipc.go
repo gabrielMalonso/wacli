@@ -9,10 +9,20 @@ import (
 	"time"
 
 	"github.com/openclaw/wacli/internal/app"
+	"github.com/openclaw/wacli/internal/out"
 	"github.com/openclaw/wacli/internal/store"
 )
 
 const draftWriteKind = "local_draft_write"
+
+// Optional refusal advice; unknown categories retain the correlated base error.
+type draftValidationField string
+
+const draftReplySenderField draftValidationField = "reply.sender"
+
+func draftRequestsQuote(req sendDelegateRequest) bool {
+	return req.Kind == draftWriteKind && req.Draft != nil && (req.Draft.Action == "create" || req.Draft.Action == "update") && req.Draft.Input != nil && req.Draft.Input.ReplyTo != ""
+}
 
 // This echo binds a response to the complete local request; it is not dedupe.
 func draftRequestHash(request app.DraftWriteRequest) string {
@@ -95,6 +105,10 @@ func draftRefusal(req sendDelegateRequest, err error) sendDelegateResponse {
 	if req.Draft != nil {
 		resp.DraftRequestHash = draftRequestHash(*req.Draft)
 	}
+	var validation *store.DraftValidationError
+	if copy.Code == "invalid_arguments" && draftRequestsQuote(req) && errors.As(err, &validation) && validation.Field == "reply.sender" {
+		resp.DraftValidationField = draftReplySenderField
+	}
 	return resp
 }
 func draftIPCFailure(req sendDelegateRequest, resp sendDelegateResponse) error {
@@ -112,6 +126,12 @@ func draftIPCFailure(req sendDelegateRequest, resp sendDelegateResponse) error {
 		if err != nil || len(raw) != sha256.Size || hex.EncodeToString(raw) != failure.Hash {
 			return draftIPCUncertain(req.Draft, nil)
 		}
+	}
+	if failure.Code == "invalid_arguments" && resp.DraftValidationField == draftReplySenderField && draftRequestsQuote(req) {
+		classified := classifyDraftError(&store.DraftValidationError{Field: "reply.sender"})
+		classified.Cause = failure
+		classified.Draft = &out.AgentDraftError{DraftID: failure.DraftID, RevisionID: failure.RevisionID, Hash: failure.Hash}
+		return classified
 	}
 	return failure
 }

@@ -89,8 +89,10 @@ func projectDraft(entry store.DraftEntry, storeRef string, full bool) draftDTO {
 		}
 		d.Recovery = "Inspect document bytes appropriately. Snapshot metadata describes creation, not current availability/integrity or approval."
 	}
-	if len(d.TruncatedFields) > 0 || d.Document != nil && !full {
-		d.Recovery = fmt.Sprintf("Use draft show %s --revision %s --agent --detail full; document bytes require separate inspection. No approval is recorded.", r.ID, revision.ID())
+	if d.Document != nil && !full {
+		d.Recovery = fmt.Sprintf("Use draft show %s --revision %s --agent --detail full; inspect document bytes separately. Metadata describes creation only, not current availability/integrity. No approval is recorded.", r.ID, revision.ID())
+	} else if len(d.TruncatedFields) > 0 {
+		d.Recovery = fmt.Sprintf("Use draft show %s --revision %s --agent --detail full; No approval is recorded.", r.ID, revision.ID())
 	}
 	return d
 }
@@ -104,6 +106,9 @@ func classifyDraftError(err error) *out.AgentError {
 	if !errors.As(err, &failure) {
 		var validation *store.DraftValidationError
 		if errors.As(err, &validation) {
+			if validation.Field == "reply.sender" {
+				return &out.AgentError{Code: "invalid_arguments", Message: "Quoted sender identity is unavailable or incompatible with the observed local account or recipient.", Recovery: "Inspect messages show --chat CHAT_JID --id MESSAGE_ID --agent --detail full locally; select a compatible quote or explicitly recreate without --reply-to.", ExitCode: 2, Cause: err}
+			}
 			code := "invalid_arguments"
 			if validation.Field == "cursor" {
 				code = "invalid_cursor"
@@ -138,6 +143,7 @@ func classifyDraftError(err error) *out.AgentError {
 	case "invalid_arguments":
 		exit = 2
 		message = "Invalid complete local draft input."
+		recovery = "Check complete input; for --reply-to, inspect messages show --chat CHAT_JID --id MESSAGE_ID --agent --detail full locally. Use a compatible quote or explicitly recreate without --reply-to."
 	case "document_unavailable":
 		exit = 4
 		message = "Document preparation failed locally; published or uncertain artifacts are retained."
@@ -182,7 +188,9 @@ func writeDraftEntryTo(writer io.Writer, flags *rootFlags, entry store.DraftEntr
 	var err error
 	if flags.agent {
 		meta := agentMeta(flags)
-		meta.Recovery = d.Recovery
+		if d.Recovery != "" {
+			meta.Recovery = "See data.recovery."
+		}
 		err = out.WriteAgentJSON(w, flags.agentAccount, meta, d)
 	} else if flags.asJSON {
 		err = out.WriteJSON(w, struct {

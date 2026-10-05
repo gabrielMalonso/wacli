@@ -87,6 +87,8 @@ type sendDelegateRequest struct {
 }
 
 type sendDelegateResponse struct {
+	DraftValidationField draftValidationField `json:"draft_validation_field,omitempty"`
+
 	DraftCleanup     *draftCleanupReply      `json:"draft_cleanup,omitempty"`
 	AgentChatState   *agentChatStateReply    `json:"agent_chat_state,omitempty"`
 	Outbound         *outboundDelegateResult `json:"outbound,omitempty"`
