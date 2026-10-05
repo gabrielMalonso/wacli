@@ -1,6 +1,6 @@
 # send
 
-The legacy commands below retain their existing behavior. The separate [outbound action](outbound.md) sends an explicit frozen draft revision/hash/key once through the application. It preserves SDK protocol retries, even after an uncertain result, and offers local show/list queries; it does not use the legacy application retry runner.
+The legacy commands below retain their existing behavior. Immutable static JPEG/PNG images are prepared explicitly with `draft create/update --image PATH` and dispatched through [outbound](outbound.md); `--file` in drafts remains a document regardless of MIME. The separate [outbound action](outbound.md) sends an explicit frozen draft revision/hash/key once through the application. It preserves SDK protocol retries, even after an uncertain result, and offers local show/list queries; it does not use the legacy application retry runner.
 
 Newly accepted outbound contact drafts record searchable local history text as `Contact: NAME (PHONE)`, using the frozen display name and vCard with the same formatting as received cards. Both legacy message reads and `messages show --agent --detail full` expose that text; the stored message type remains `text`. This applies only to new sends after upgrading. Existing name-only history rows are not repaired, and repeating an outbound key retains the original operation without sending or rewriting its history. A secondary history failure retains accepted status with `history_warning`; it does not authorize another send or establish recipient delivery.
 

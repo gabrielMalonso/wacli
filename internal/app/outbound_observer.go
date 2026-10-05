@@ -294,6 +294,8 @@ func outboundEchoKind(msg *waE2E.Message) store.DraftKind {
 		return store.DraftTextKind
 	case m.GetContactMessage() != nil:
 		return store.DraftContactKind
+	case m.GetImageMessage() != nil:
+		return store.DraftImageKind
 	case m.GetDocumentMessage() != nil:
 		return store.DraftDocumentKind
 	default:

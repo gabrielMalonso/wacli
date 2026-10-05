@@ -170,13 +170,13 @@ func (d *DB) checkpointOutbound(ctx context.Context, ch OutboundCheckpoint) (Out
 			allowed = o.Phase == OutboundReserved
 			next.PreparingAt = &at
 		case OutboundUploadPossible:
-			allowed = o.Phase == OutboundPreparing && o.Kind == DraftDocumentKind
+			allowed = o.Phase == OutboundPreparing && o.Kind.HasUpload()
 			next.UploadPossibleAt = &at
 		case OutboundUploadReturned:
 			allowed = o.Phase == OutboundUploadPossible
 			next.UploadReturnedAt = &at
 		case OutboundDispatchPossible:
-			allowed = o.Phase == OutboundPreparing && o.Kind != DraftDocumentKind || o.Phase == OutboundUploadReturned
+			allowed = o.Phase == OutboundPreparing && !o.Kind.HasUpload() || o.Phase == OutboundUploadReturned
 			next.DispatchPossibleAt = &at
 		case OutboundFinalized:
 			allowed = true

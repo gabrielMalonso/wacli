@@ -123,7 +123,7 @@ func draftIPCFailure(req sendDelegateRequest, resp sendDelegateResponse) error {
 		return draftIPCUncertain(req.Draft, nil)
 	}
 	switch failure.Code {
-	case "not_found", "identity_unavailable", "store_unavailable", "document_unavailable", "read_only", "draft_conflict", "invalid_arguments", "local_write_not_dispatched", "local_write_uncertain":
+	case "not_found", "identity_unavailable", "store_unavailable", "document_unavailable", "image_unavailable", "read_only", "draft_conflict", "invalid_arguments", "local_write_not_dispatched", "local_write_uncertain":
 	default:
 		return draftIPCUncertain(req.Draft, nil)
 	}

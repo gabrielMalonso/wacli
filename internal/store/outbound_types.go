@@ -204,7 +204,7 @@ func (o OutboundOperation) validate() error {
 	if err != nil || r != o.Recipient || len(r.JID) > 128 || len(r.PN) > 128 || len(r.LID) > 128 || draftRecipientIsSelf(r, o.Account) {
 		return fmt.Errorf("invalid stored recipient")
 	}
-	if o.Kind != DraftTextKind && o.Kind != DraftDocumentKind && o.Kind != DraftContactKind {
+	if o.Kind != DraftTextKind && !o.Kind.HasUpload() && o.Kind != DraftContactKind {
 		return fmt.Errorf("invalid stored kind")
 	}
 	last := o.CreatedAt
@@ -216,7 +216,7 @@ func (o OutboundOperation) validate() error {
 			last = *at
 		}
 	}
-	if o.UploadPossibleAt != nil && (o.Kind != DraftDocumentKind || o.PreparingAt == nil) || o.UploadReturnedAt != nil && o.UploadPossibleAt == nil || o.DispatchPossibleAt != nil && (o.PreparingAt == nil || o.Kind == DraftDocumentKind && o.UploadReturnedAt == nil) {
+	if o.UploadPossibleAt != nil && (!o.Kind.HasUpload() || o.PreparingAt == nil) || o.UploadReturnedAt != nil && o.UploadPossibleAt == nil || o.DispatchPossibleAt != nil && (o.PreparingAt == nil || o.Kind.HasUpload() && o.UploadReturnedAt == nil) {
 		return fmt.Errorf("invalid stored checkpoint order")
 	}
 	switch o.Phase {

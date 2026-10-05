@@ -32,7 +32,7 @@ func (f *outboundLifecycleFake) Upload(ctx context.Context, data []byte, kind wh
 }
 
 func TestOutboundStandaloneAppClientLifetime(t *testing.T) {
-	for _, kind := range []store.DraftKind{store.DraftTextKind, store.DraftContactKind, store.DraftDocumentKind} {
+	for _, kind := range []store.DraftKind{store.DraftTextKind, store.DraftContactKind, store.DraftDocumentKind, store.DraftImageKind} {
 		t.Run(string(kind), func(t *testing.T) {
 			var client *outboundLifecycleFake
 			t.Cleanup(func() {
@@ -66,11 +66,14 @@ func TestOutboundStandaloneAppClientLifetime(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if kind != store.DraftDocumentKind && !proto.Equal(adapter.sent, want) {
+			if !kind.HasUpload() && !proto.Equal(adapter.sent, want) {
 				t.Fatal("exact payload", adapter.sent, want)
 			}
 			if kind == store.DraftDocumentKind && (adapter.uploads != 1 || string(adapter.bytes) != "same bytes\x00\n" || adapter.sent.GetDocumentMessage().GetFileLength() != uint64(len(adapter.bytes))) {
 				t.Fatal("document buffer/upload", adapter)
+			}
+			if kind == store.DraftImageKind && (adapter.uploads != 1 || adapter.uploadType != whatsmeow.MediaImage || adapter.sent.GetImageMessage().GetCaption() != rev.Payload().Data().Image.Caption) {
+				t.Fatal("standalone image", adapter)
 			}
 			if err := a.OpenWA(); err != nil {
 				t.Fatal(err)

@@ -31,7 +31,11 @@ func draftAppRequest(t *testing.T, a *App, input DraftInput) DraftWriteRequest {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return DraftWriteRequest{Version: 1, Action: "create", DraftID: id, RevisionID: rid, StoreRef: a.StoreDir(), Input: &input}
+	version := 1
+	if input.Image != nil {
+		version = 2
+	}
+	return DraftWriteRequest{Version: version, Action: "create", DraftID: id, RevisionID: rid, StoreRef: a.StoreDir(), Input: &input}
 }
 func draftTextPointer(text string) *string { return &text }
 func draftTestErrorCode(t *testing.T, err error, code string) {

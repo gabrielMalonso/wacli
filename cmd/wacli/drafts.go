@@ -41,7 +41,7 @@ func draftWritable(flags *rootFlags) error {
 
 func newDraftWriteCmd(flags *rootFlags, action string) *cobra.Command {
 	var input app.DraftInput
-	var message, messageFile, contactName, contactPhone, expected string
+	var message, messageFile, imagePath, contactName, contactPhone, expected string
 	cmd := &cobra.Command{Use: action, Short: action + " a local draft revision", Args: cobra.NoArgs}
 	if action == "update" {
 		cmd.Use = "update ID"
@@ -53,15 +53,23 @@ func newDraftWriteCmd(flags *rootFlags, action string) *cobra.Command {
 	cmd.Flags().StringVar(&messageFile, "message-file", "", "UTF-8 text file, or - for stdin (64 KiB maximum)")
 	cmd.Flags().StringArrayVar(&input.Mentions, "mention", nil, "explicit user phone/JID to mention (repeatable)")
 	cmd.Flags().StringVar(&input.ReplyTo, "reply-to", "", "existing local textual message ID in the selected chat")
+	cmd.Flags().StringVar(&imagePath, "image", "", "static JPEG/PNG image to snapshot (100 MiB and 40 million pixels maximum)")
 	cmd.Flags().StringVar(&input.File, "file", "", "local document to snapshot (100 MiB maximum)")
 	cmd.Flags().StringVar(&input.Filename, "filename", "", "document display name (defaults to source basename)")
 	cmd.Flags().StringVar(&input.MIME, "mime", "", "explicit document MIME override")
-	cmd.Flags().StringVar(&input.Caption, "caption", "", "literal document caption")
+	cmd.Flags().StringVar(&input.Caption, "caption", "", "literal document/image caption")
 	cmd.Flags().StringVar(&contactName, "contact-name", "", "explicit contact display name")
 	cmd.Flags().StringVar(&contactPhone, "contact-phone", "", "explicit PN phone for one contact card")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if err := draftWritable(flags); err != nil {
 			return err
+		}
+		if cmd.Flags().Changed("image") {
+			for _, option := range []string{"file", "message", "message-file", "contact-name", "contact-phone", "filename", "mime"} {
+				if cmd.Flags().Changed(option) {
+					return agentUsageError(fmt.Errorf("--image is exclusive of --%s", option))
+				}
+			}
 		}
 		ctx, cancel := withTimeout(context.Background(), flags)
 		defer cancel()
@@ -95,17 +103,32 @@ func newDraftWriteCmd(flags *rootFlags, action string) *cobra.Command {
 		if cmd.Flags().Changed("contact-name") || cmd.Flags().Changed("contact-phone") {
 			input.Contact = &store.DraftContact{DisplayName: contactName, Phone: contactPhone}
 		}
+		if cmd.Flags().Changed("image") {
+			input.Image = &app.DraftImageInput{Path: imagePath}
+		}
 		if err := input.Validate(); err != nil {
 			return classifyDraftError(err)
 		}
-		if input.File != "" {
-			path, err := filepath.Abs(input.File)
+		sourcePath := input.File
+		if input.Image != nil {
+			sourcePath = input.Image.Path
+		}
+		if sourcePath != "" {
+			path, err := filepath.Abs(sourcePath)
 			if err != nil {
 				return classifyDraftError(err)
 			}
-			input.File = path
-			if err := checkOutboundMediaPath(input.File); err != nil {
-				return &out.AgentError{Code: "invalid_arguments", Message: "Document source is unavailable or outside allowed media roots.", ExitCode: 2, Cause: err}
+			if input.Image != nil {
+				input.Image.Path = path
+			} else {
+				input.File = path
+			}
+			if err := checkOutboundMediaPath(path); err != nil {
+				message := "Document source is unavailable or outside allowed media roots."
+				if input.Image != nil {
+					message = "Image source is unavailable or outside allowed media roots."
+				}
+				return &out.AgentError{Code: "invalid_arguments", Message: message, ExitCode: 2, Cause: err}
 			}
 		}
 		if action == "update" {
@@ -130,7 +153,11 @@ func newDraftWriteCmd(flags *rootFlags, action string) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		request := app.DraftWriteRequest{Version: 1, Action: action, DraftID: id, RevisionID: rid, ExpectedRevision: expected, StoreRef: flags.storeDir, AccountName: flags.agentAccount.Name, Input: &input}
+		version := 1
+		if input.Image != nil {
+			version = 2
+		}
+		request := app.DraftWriteRequest{Version: version, Action: action, DraftID: id, RevisionID: rid, ExpectedRevision: expected, StoreRef: flags.storeDir, AccountName: flags.agentAccount.Name, Input: &input}
 		return runDraftWrite(ctx, flags, request)
 	}
 	return cmd

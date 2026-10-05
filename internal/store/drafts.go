@@ -76,6 +76,9 @@ func DraftRevisionSummary(revision DraftRevision) DraftSummary {
 		s.Preview = cut(p.Document.Caption, 128)
 		s.TextBytes = len(p.Document.Caption)
 		s.Filename = cut(p.Document.Filename, 64)
+	case DraftImageKind:
+		s.Preview = cut(p.Image.Caption, 128)
+		s.TextBytes = len(p.Image.Caption)
 	case DraftContactKind:
 		s.Preview = cut(p.Contact.DisplayName, 128)
 		s.TextBytes = len(p.Contact.VCard)

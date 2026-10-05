@@ -1,6 +1,6 @@
 # Retained outbound operations
 
-Read when: inspecting durable local outbound attempts, their frozen draft binding and observed evidence.
+Read when: inspecting durable local outbound attempts, their frozen draft binding and observed evidence, including explicitly prepared static images.
 
 Schema **31** retains operations bound to immutable drafts. `outbound send` explicitly dispatches one revision; `outbound show/list` remain pure local queries. There is no recover/retry/resume/cancel command or additional executor. The App's client-lifetime observer retains correlated SDK receipts and own echoes; the existing Sync/history handler retains history echoes. Without retained facts, delivered/read stay unknown.
 
@@ -52,7 +52,7 @@ A key protects only the retained catalogue. Loss/rollback/restoration/replacemen
 
 `reserved`, `pending`, `incomplete` and record age do not assert running/crashed status or permission to replay. Unmeasured timestamps/error codes are null. `upload_returned` describes an uploader response, never message acceptance. A retained dispatch marker without resolution derives `status=uncertain`, including crash between marker and actual call. Document upload-only uncertainty remains distinguishable by its nullable dispatch marker. Missing markers/facts do not prove no historical activity after catalogue restoration.
 
-CAS permits reserved→preparing; text/contact then dispatch possible; document upload possible→upload returned before dispatch. Finalization is terminal. Accepted requires an ack retained atomically; rejected requires possible dispatch; not-dispatched cannot follow dispatch; uncertain requires possible upload/dispatch. Inserted facts and checkpoints advance generation; exact duplicate facts leave the operation unchanged. SQL uniqueness, binding/CAS/order constraints and immutable triggers protect retained records. No transaction spans network work.
+CAS permits reserved→preparing; text/contact then dispatch possible; document/image upload possible→upload returned before dispatch. Finalization is terminal. Accepted requires an ack retained atomically; rejected requires possible dispatch; not-dispatched cannot follow dispatch; uncertain requires possible upload/dispatch. Inserted facts and checkpoints advance generation; exact duplicate facts leave the operation unchanged. SQL uniqueness, binding/CAS/order constraints and immutable triggers protect retained records. No transaction spans network work.
 
 Facts deduplicate by operation, kind/source, chat, actor/alias/device, protocol timestamp including absence, and sanitized machine code. Protocol timestamps can arrive out of order; observation time remains separate. Claimed aliases must be complementary public PN/LID forms; contradictory assertions are rejected. The adapter must establish public relations before submitting facts: syntax alone proves neither alias ownership nor membership.
 
@@ -109,3 +109,9 @@ Restore protects only retained bindings. Restoring only `wacli.db` may preserve/
 ## Offline validation
 
 Real SQLite/core and UNIX socket fixtures cover bindings, exact revisions, CAS, commit failures, deadlines, output failure, isolation and bounded DTOs. Fake adapters cover typed text/card/document/quote, exact bytes/ID, upload/dispatch boundaries, response contradictions, cancellation and concurrent facts. App+WAFactory fixtures exercise SDK event types, production Sync/native/manual ON_DEMAND history, receipts before/after ACK, retained uncertain/rejected results, echoes, batch limits and callback drain/late copies. The pinned SDK grouped parser is exercised with multiple participants and inherited aliases. Real pinned SDK tests cover ID injection, retry-store failure and payload recovery after local failure; existing retry guards/lifecycle are preserved. These are application invocation and local persistence tests, not counts of transport frames, remote success or real ACK/upload. Only fake Connect is used; no real account or WhatsApp service is accessed. Opt-in `WACLI_OUTBOUND_E2E_BINARY` runs the production binary against a private synthetic UNIX owner and reads receipt/echo fixtures through readonly compact/full queries. Live behavior remains unvalidated.
+
+## Immutable static images
+
+Prepare with `draft create/update --image PATH`, using the same explicit recipient and local textual quote policy as other supported drafts. JPEG/PNG validation, thumbnail freezing, caps, EXIF/transparency limits and compatible-owner requirements are in [drafts](drafts.md). Image operations retain kind `image` and use the existing upload checkpoints with MediaImage. Dispatch revalidates the exact retained bytes before connection/upload and assembles ImageMessage from frozen MIME/dimensions/caption/thumbnail/quote. It never follows the import path, regenerates a thumbnail, dispatches as document or uses legacy sends as fallback.
+
+Accepted image sends record searchable raw caption and `media_type=image`, plus normal media download metadata. A secondary history failure keeps acceptance/ACK/message ID with `history_warning`. Own/live/history image echoes retain their separate correlated fact; echo is not acceptance, delivery or reading. Existing scoped receipt rules, including ignored played receipts, are unchanged. Image snapshots remain ineligible for document byte cleanup.
