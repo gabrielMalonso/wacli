@@ -39,6 +39,7 @@ type agentChatStateWA struct {
 	stateHook      func(context.Context, appstate.PatchInfo, func()) ([]any, error)
 	fetchHook      func(context.Context) ([]any, error)
 	disconnectHook func()
+	chatSettings   map[types.JID]types.LocalChatSettings
 }
 
 func (f *agentChatStateWA) IsAuthed() bool { return true }
@@ -59,6 +60,7 @@ func (f *agentChatStateWA) RemoveEventHandler(id uint32) {
 	f.removed.Add(1)
 }
 func (f *agentChatStateWA) emit(evt any) {
+	f.applyChatSettings(evt)
 	f.mu.Lock()
 	handlers := make([]func(any), 0, len(f.handlers))
 	for _, h := range f.handlers {
@@ -67,6 +69,49 @@ func (f *agentChatStateWA) emit(evt any) {
 	f.mu.Unlock()
 	for _, h := range handlers {
 		h(evt)
+	}
+}
+
+func (f *agentChatStateWA) GetChatSettings(ctx context.Context, jid types.JID) (types.LocalChatSettings, error) {
+	if err := ctx.Err(); err != nil {
+		return types.LocalChatSettings{}, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.chatSettings[jid], nil
+}
+
+func (f *agentChatStateWA) applyChatSettings(evt any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.chatSettings == nil {
+		f.chatSettings = make(map[types.JID]types.LocalChatSettings)
+	}
+	switch v := evt.(type) {
+	case *events.Archive:
+		if v != nil && v.Action != nil {
+			settings := f.chatSettings[v.JID]
+			settings.Found, settings.Archived = true, v.Action.GetArchived()
+			f.chatSettings[v.JID] = settings
+		}
+	case *events.Pin:
+		if v != nil && v.Action != nil {
+			settings := f.chatSettings[v.JID]
+			settings.Found, settings.Pinned = true, v.Action.GetPinned()
+			f.chatSettings[v.JID] = settings
+		}
+	}
+}
+
+func (f *agentChatStateWA) applyChatStatePatch(p appstate.PatchInfo) {
+	for _, mutation := range p.Mutations {
+		jid, _ := types.ParseJID(mutation.Index[1])
+		if action := mutation.Value.GetArchiveChatAction(); action != nil {
+			f.applyChatSettings(&events.Archive{JID: jid, Action: action})
+		}
+		if action := mutation.Value.GetPinAction(); action != nil {
+			f.applyChatSettings(&events.Pin{JID: jid, Action: action})
+		}
 	}
 }
 func (f *agentChatStateWA) Connect(_ context.Context, opts wa.ConnectOptions) error {
@@ -103,9 +148,17 @@ func (f *agentChatStateWA) FetchAppStateEvents(ctx context.Context, _ string, _,
 func (f *agentChatStateWA) patch(ctx context.Context, p appstate.PatchInfo, boundary func()) ([]any, error) {
 	f.states.Add(1)
 	if f.stateHook != nil {
-		return f.stateHook(ctx, p, boundary)
+		events, err := f.stateHook(ctx, p, boundary)
+		if err == nil {
+			f.applyChatStatePatch(p)
+		}
+		for _, evt := range events {
+			f.applyChatSettings(evt)
+		}
+		return events, err
 	}
 	boundary()
+	f.applyChatStatePatch(p)
 	return nil, nil
 }
 func (f *agentChatStateWA) ArchiveChat(ctx context.Context, jid types.JID, archive bool, ts time.Time, key *waCommon.MessageKey, boundary func()) ([]any, error) {

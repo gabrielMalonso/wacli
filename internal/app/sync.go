@@ -87,7 +87,7 @@ type SyncResult struct {
 	MessagesStored int64
 }
 
-func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
+func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, syncErr error) {
 	status := a.beginSyncStatus()
 	defer a.endSyncStatus(status)
 
@@ -121,6 +121,9 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 	if err := a.OpenWA(); err != nil {
 		return SyncResult{}, err
 	}
+	a.waMu.Lock()
+	a.appStateReplayOnClose = true
+	a.waMu.Unlock()
 	if opts.Mode == SyncModeFollow && opts.StaleThreshold > 0 {
 		restoreAutoReconnect, ok := a.wa.SetAutoReconnect(false)
 		if !ok {
@@ -177,7 +180,12 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 
 	ps := &syncPresence{}
 	handlerID, appStateRecoveries := a.addSyncEventHandler(syncCtx, opts, &messagesStored, &lastEvent, disconnected, loggedOut, staleReconnect, enqueueMedia, enqueueWebhook, limits, ps, mediaQ)
-	defer a.wa.RemoveEventHandler(handlerID)
+	removeHandler := true
+	defer func() {
+		if removeHandler {
+			a.wa.RemoveEventHandler(handlerID)
+		}
+	}()
 
 	connectionEpoch.Store(nowUTC().UnixNano())
 	if err := a.connectForSync(syncCtx, opts); err != nil {
@@ -188,9 +196,20 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 	// success path. The websocket stays alive via DetachSocket, so the
 	// send can complete even after the sync context is cancelled.
 	defer func() {
+		cancel()
 		ps.mu.Lock()
 		ps.cleanupStarted = true
 		ps.mu.Unlock()
+		// The detached socket and SDK send callbacks can outlive this handler.
+		// Record debt before removing it, without waiting for unknown callbacks.
+		if err := a.RequireAppStateReplay(context.Background()); err != nil {
+			syncErr = errors.Join(syncErr, err)
+			// Keep coverage until App closes the session store. Disconnect alone
+			// does not drain asynchronous SDK callbacks.
+			removeHandler = false
+			a.wa.Disconnect()
+			return
+		}
 		a.wa.RemoveEventHandler(handlerID)
 		a.sendPresenceBounded(types.PresenceUnavailable)
 	}()

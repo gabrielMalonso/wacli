@@ -4,7 +4,54 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"go.mau.fi/whatsmeow/appstate"
 )
+
+var mirroredAppStateCollections = []appstate.WAPatchName{
+	appstate.WAPatchRegularHigh, appstate.WAPatchRegularLow, appstate.WAPatchRegular,
+}
+
+// RequireAppStateReplay protects connections without an archive persistence
+// handler. It must succeed before connecting; it never imports unrelated rows.
+// Close reaffirms this debt after the session store and known writers close.
+func (a *App) RequireAppStateReplay(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	a.waMu.Lock()
+	defer a.waMu.Unlock()
+	if a.opts.ReadOnly {
+		return fmt.Errorf("read-only mode: command would mark app state recovery")
+	}
+	if a.closed {
+		return fmt.Errorf("application is closed")
+	}
+	names := make([]string, len(mirroredAppStateCollections))
+	for i, name := range mirroredAppStateCollections {
+		names[i] = string(name)
+	}
+	if _, err := a.db.MarkAppStateRecoveryGenerations(names); err != nil {
+		return fmt.Errorf("mark WhatsApp app state replay: %w", err)
+	}
+	a.appStateReplayOnClose = true
+	return nil
+}
+
+func (a *App) restoreAppStateReplay() error {
+	var missing []string
+	for _, name := range mirroredAppStateCollections {
+		required, err := a.db.AppStateRecoveryRequired(string(name))
+		if err != nil {
+			return err
+		}
+		if !required {
+			missing = append(missing, string(name))
+		}
+	}
+	_, err := a.db.MarkAppStateRecoveryGenerations(missing)
+	return err
+}
 
 type appStatePersistenceTask struct {
 	ready         bool

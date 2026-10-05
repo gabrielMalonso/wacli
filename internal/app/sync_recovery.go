@@ -78,6 +78,7 @@ func (a *App) recoverAppStateCollection(ctx context.Context, name string, recove
 	tracker := &appStatePersistenceTracker{}
 	fetchCtx, cancelFetch := context.WithTimeout(ctx, timeout)
 	fetchErr, persistenceErr := a.fetchAndPersistAppState(fetchCtx, collection, true, tracker)
+	fetchErr = errors.Join(fetchErr, fetchCtx.Err())
 	cancelFetch()
 	if persistenceErr != nil {
 		a.warnAppStateRecovery(name, fmt.Errorf("persist full app state replay: %w", persistenceErr))
@@ -132,13 +133,13 @@ func (a *App) syncAppStateDeltas(ctx context.Context, recoveries *sync.Map) {
 			a.recoverAppStateCollection(ctx, name, recoveries, appStateRecoveryStepTimeout)
 		}
 	}
-	for _, name := range []appstate.WAPatchName{appstate.WAPatchRegularHigh, appstate.WAPatchRegularLow, appstate.WAPatchRegular} {
+	for _, name := range mirroredAppStateCollections {
 		if _, recovering := recoveries.Load(string(name)); recovering {
 			continue
 		}
 		fullSync := name == appstate.WAPatchRegular
-		if err := a.wa.FetchAppState(ctx, string(name), fullSync, false); err != nil {
-			if errors.Is(err, wa.ErrEmptyAppStateKeyShare) {
+		if err := a.syncAndPersistAppStateDelta(ctx, name, fullSync); err != nil {
+			if errors.Is(err, wa.ErrEmptyAppStateKeyShare) || errors.Is(err, appstate.ErrMismatchingLTHash) {
 				a.handleAppStateSyncError(ctx, &events.AppStateSyncError{Name: name, FullSync: fullSync, Error: err}, recoveries)
 				continue
 			}
@@ -147,6 +148,31 @@ func (a *App) syncAppStateDeltas(ctx context.Context, recoveries *sync.Map) {
 				map[string]any{"name": string(name), "error": err.Error()})
 		}
 	}
+}
+
+func (a *App) syncAndPersistAppStateDelta(ctx context.Context, name appstate.WAPatchName, fullSync bool) error {
+	release, err := a.acquireChatStateSync(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	generation, required, err := a.db.BeginAppStateRecovery(string(name))
+	if err != nil {
+		return err
+	}
+	tracker := &appStatePersistenceTracker{}
+	if required {
+		ctx, cancel := context.WithTimeout(ctx, appStateRecoveryStepTimeout)
+		defer cancel()
+		return a.replayRequiredAppState(ctx, name, generation, tracker)
+	}
+	// The SDK commits each page before returning its collected events. A later
+	// page error can discard them all, so the intent must precede the fetch.
+	fetchErr, persistenceErr := a.fetchAndPersistAppState(ctx, name, fullSync, tracker)
+	if err := errors.Join(fetchErr, persistenceErr, ctx.Err()); err != nil {
+		return err
+	}
+	return a.clearCompletedAppStateRecovery(name, generation)
 }
 
 func (a *App) warnEmptyAppStateKey(evt *wa.AppStateKeyUnavailable) {

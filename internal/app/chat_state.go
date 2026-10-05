@@ -34,11 +34,24 @@ func (a *App) AddChatStatePersistenceHandler(ctx context.Context) (func(), error
 		return nil, err
 	}
 	waClient := a.WA()
+	a.waMu.Lock()
+	a.appStateReplayOnClose = true
+	lifetimeObserver := a.outboundEvents
+	a.waMu.Unlock()
 	handlerID := waClient.AddEventHandler(func(evt any) {
+		eventCtx := ctx
+		if lifetimeObserver != nil {
+			persistCtx, done, ok := lifetimeObserver.enter(ctx)
+			if !ok {
+				return
+			}
+			defer done()
+			eventCtx = persistCtx
+		}
 		switch v := evt.(type) {
 		case *events.AppState, *events.Star, *events.DeleteForMe,
 			*events.Archive, *events.Pin, *events.Mute, *events.MarkChatAsRead:
-			a.handleAppStatePersistenceEvent(ctx, evt, nil)
+			a.handleAppStatePersistenceEvent(eventCtx, evt, nil)
 		case *wa.AppStateKeyUnavailable:
 			a.warnEmptyAppStateKey(v)
 		}
@@ -67,7 +80,13 @@ func (a *App) ArchiveChat(ctx context.Context, jid types.JID, archive bool) erro
 func (a *App) archiveChatResolved(ctx context.Context, jid types.JID, chatJID string, archive bool, beforeSend func() error) (ChatStateOutcome, ChatStateMirror, error) {
 	return a.applyLocalChatStateWrite(ctx, beforeSend, func(boundary func()) ([]any, error) {
 		return a.wa.ArchiveChat(ctx, jid, archive, nowUTC(), nil, boundary)
-	}, func() error { return a.db.SetChatArchived(chatJID, archive) })
+	}, func() error {
+		settings, err := a.currentChatSettings(context.WithoutCancel(ctx), jid)
+		if err != nil {
+			return err
+		}
+		return a.persistCachedChatFlags(chatJID, settings)
+	})
 }
 
 func (a *App) PinChat(ctx context.Context, jid types.JID, pin bool) error {
@@ -89,7 +108,11 @@ func (a *App) PinChat(ctx context.Context, jid types.JID, pin bool) error {
 		return fmt.Errorf("WhatsApp app state send completed without an apply boundary")
 	}
 	return a.completeLocalAppStateWrite(ctx, &pending, postSendEvents, func() error {
-		return a.db.SetChatPinned(chatJID, pin)
+		settings, err := a.currentChatSettings(context.WithoutCancel(ctx), jid)
+		if err != nil {
+			return err
+		}
+		return a.persistCachedChatFlags(chatJID, settings)
 	})
 }
 
@@ -234,6 +257,9 @@ func (a *App) replayRequiredAppState(ctx context.Context, collection appstate.WA
 			return fmt.Errorf("persist replayed app state %s: %w", collection, persistenceErr)
 		}
 		if fetchErr == nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			return a.clearCompletedAppStateRecovery(collection, markerGeneration)
 		}
 		if errors.Is(fetchErr, appstate.ErrMismatchingLTHash) || errors.Is(fetchErr, wa.ErrEmptyAppStateKeyShare) {
@@ -282,6 +308,9 @@ func (a *App) recoverMismatchingAppState(ctx context.Context, collection appstat
 	}
 	if recoveryErr != nil {
 		return recoveryErr
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return a.clearCompletedAppStateRecovery(collection, markerGeneration)
 }
@@ -492,14 +521,47 @@ func messageKeyFromStore(info store.MessageInfo) *waCommon.MessageKey {
 	return key
 }
 
+func (a *App) currentChatSettings(ctx context.Context, jid types.JID) (types.LocalChatSettings, error) {
+	reader, ok := a.WA().(interface {
+		GetChatSettings(context.Context, types.JID) (types.LocalChatSettings, error)
+	})
+	if !ok {
+		return types.LocalChatSettings{}, fmt.Errorf("WhatsApp chat settings unavailable")
+	}
+	settings, err := reader.GetChatSettings(ctx, jid)
+	if err != nil {
+		return types.LocalChatSettings{}, fmt.Errorf("read WhatsApp chat settings: %w", err)
+	}
+	if !settings.Found {
+		return types.LocalChatSettings{}, fmt.Errorf("WhatsApp chat settings not found")
+	}
+	return settings, nil
+}
+
+func (a *App) persistCachedChatFlags(chatJID string, settings types.LocalChatSettings) error {
+	if err := a.db.SetChatArchived(chatJID, settings.Archived); err != nil {
+		return err
+	}
+	// Archive also unpins in the SDK. Persist both cached flags even when the
+	// corresponding Pin callback has not arrived yet. Unread has another source.
+	return a.db.SetChatPinned(chatJID, settings.Pinned)
+}
+
 func (a *App) handleChatStateEvent(ctx context.Context, evt any) error {
 	switch v := evt.(type) {
 	case *events.Archive:
 		if v == nil || v.JID.IsEmpty() || v.Action == nil {
 			return nil
 		}
-		chat := a.canonicalStoreJID(ctx, v.JID)
-		if err := a.db.SetChatArchived(canonicalJIDString(chat), v.Action.GetArchived()); err != nil {
+		// SendAppState dispatches after advancing the SDK cache and may arrive
+		// after a newer replay. Read the exact event JID before resolving the
+		// archive identity; never apply an old payload or guess an alias.
+		settings, err := a.currentChatSettings(ctx, v.JID)
+		if err == nil {
+			chat := a.canonicalStoreJID(ctx, v.JID)
+			err = a.persistCachedChatFlags(canonicalJIDString(chat), settings)
+		}
+		if err != nil {
 			a.emitChatStateWarning("archive", v.JID, err)
 			return err
 		}
@@ -507,8 +569,12 @@ func (a *App) handleChatStateEvent(ctx context.Context, evt any) error {
 		if v == nil || v.JID.IsEmpty() || v.Action == nil {
 			return nil
 		}
-		chat := a.canonicalStoreJID(ctx, v.JID)
-		if err := a.db.SetChatPinned(canonicalJIDString(chat), v.Action.GetPinned()); err != nil {
+		settings, err := a.currentChatSettings(ctx, v.JID)
+		if err == nil {
+			chat := a.canonicalStoreJID(ctx, v.JID)
+			err = a.persistCachedChatFlags(canonicalJIDString(chat), settings)
+		}
+		if err != nil {
 			a.emitChatStateWarning("pin", v.JID, err)
 			return err
 		}
