@@ -164,11 +164,14 @@ func (a *App) RetryMediaExact(ctx context.Context, opts RetryMediaExactOptions) 
 			return &MediaRetryExactError{Code: exactMediaErrorCode(err, "store_failed")}
 		}
 		at := nowUTC()
-		if err := a.db.MarkMediaDownloaded(info.ChatJID, info.MsgID, opts.Output.Path, at); err != nil {
-			return &MediaRetryExactError{Code: "store_failed"}
+		recorded, err := a.db.MarkMediaDownloadedContext(ctx, info.ChatJID, info.MsgID, opts.Output.Path, at)
+		if recorded {
+			result.Recorded, result.RecordedAt = true, &at
+			result.Status = status
 		}
-		result.Recorded, result.RecordedAt = true, &at
-		result.Status = status
+		if err != nil {
+			return &MediaRetryExactError{Code: exactMediaErrorCode(err, "store_failed")}
+		}
 		if err := ctx.Err(); err != nil {
 			return &MediaRetryExactError{Code: "cancelled"}
 		}
