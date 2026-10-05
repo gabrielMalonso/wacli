@@ -78,7 +78,12 @@ func (a *App) removeHistoryObserver(o *historyObserver) {
 // retains this operation's observer even if a later operation has registered.
 func (a *App) historyEventOptions(opts SyncOptions, evt any) (SyncOptions, func()) {
 	a.historyMu.Lock()
-	o := a.historyObserver
+	// Standalone handlers retain their own observer, including after removal.
+	// They must never capture a subsequent operation's observer.
+	o := opts.historyObserver
+	if o == nil {
+		o = a.historyObserver
+	}
 	if o != nil {
 		captured := o
 		o.mu.Lock()
@@ -114,6 +119,18 @@ func (a *App) historyEventOptions(opts SyncOptions, evt any) (SyncOptions, func(
 	}
 }
 
+func (o *historyObserver) closeIfIdle(idle time.Duration) (time.Duration, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	remaining := idle - time.Since(o.last)
+	if o.inFlight == 0 && remaining <= 0 {
+		// Close admissions and check captured callbacks in one transition.
+		o.active = false
+		return 0, true
+	}
+	return remaining, false
+}
+
 func (o *historyObserver) waitIdle(ctx context.Context, idle time.Duration) error {
 	timer := time.NewTimer(idle)
 	defer timer.Stop()
@@ -122,16 +139,10 @@ func (o *historyObserver) waitIdle(ctx context.Context, idle time.Duration) erro
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-timer.C:
-			o.mu.Lock()
-			remaining := idle - time.Since(o.last)
-			if o.inFlight == 0 && remaining <= 0 {
-				// Closing and checking in-flight callbacks is one transition, so a
-				// successful result cannot race with another observer callback.
-				o.active = false
-				o.mu.Unlock()
+			remaining, closed := o.closeIfIdle(idle)
+			if closed {
 				return ctx.Err()
 			}
-			o.mu.Unlock()
 			if remaining <= 0 {
 				remaining = min(idle, 10*time.Millisecond)
 			}

@@ -201,44 +201,53 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 		if hs == nil || hs.Data == nil || hs.Data.GetSyncType() != waHistorySync.HistorySync_ON_DEMAND {
 			return
 		}
+		mu.Lock()
+		if !windowActive {
+			mu.Unlock()
+			return
+		}
+		responseChat, responseAlias := windowChat, windowAlias
+		mu.Unlock()
+		resp := onDemandResponse{observedAt: nowUTC(), conversations: len(hs.Data.GetConversations())}
 		for _, conv := range hs.Data.GetConversations() {
 			jid, err := types.ParseJID(strings.TrimSpace(conv.GetID()))
 			if err != nil {
 				continue
 			}
-			resp := onDemandResponse{
-				chatJID: strings.TrimSpace(conv.GetID()), observedAt: nowUTC(),
-				conversations: len(hs.Data.GetConversations()),
-				messages:      len(conv.GetMessages()),
-				endType:       conv.GetEndOfHistoryTransferType(),
-			}
-			mu.Lock()
-			if !windowActive {
-				mu.Unlock()
-				return
-			}
 			// Match the immutable window scope, not a resolver whose map or
 			// context may change while persistence/cancellation is in flight.
 			identity := jid.ToNonAD().String()
-			if identity != windowChat && identity != windowAlias {
-				mu.Unlock()
+			if identity != responseChat && identity != responseAlias {
 				continue
 			}
-			observedResponse = resp
-			if resp.endType == waHistorySync.Conversation_COMPLETE_AND_NO_MORE_MESSAGE_REMAIN_ON_PRIMARY {
-				primaryObservedAt = new(resp.observedAt)
-				primaryResponseChat = resp.chatJID
+			resp.messages += len(conv.GetMessages())
+			if resp.chatJID == "" {
+				resp.chatJID = strings.TrimSpace(conv.GetID())
 			}
-			ch := waitCh
-			mu.Unlock()
-			if ch == nil {
-				return
+			if conv.GetEndOfHistoryTransferType() == waHistorySync.Conversation_COMPLETE_AND_NO_MORE_MESSAGE_REMAIN_ON_PRIMARY {
+				resp.endType = waHistorySync.Conversation_COMPLETE_AND_NO_MORE_MESSAGE_REMAIN_ON_PRIMARY
+				resp.chatJID = strings.TrimSpace(conv.GetID())
 			}
+		}
+		if resp.chatJID == "" {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if !windowActive {
+			return
+		}
+		observedResponse = resp
+		if resp.endType == waHistorySync.Conversation_COMPLETE_AND_NO_MORE_MESSAGE_REMAIN_ON_PRIMARY {
+			primaryObservedAt = new(resp.observedAt)
+			primaryResponseChat = resp.chatJID
+		}
+		// One callback is one observation even when both verified identities occur.
+		if waitCh != nil {
 			select {
-			case ch <- resp:
+			case waitCh <- resp:
 			default:
 			}
-			return
 		}
 	}
 	var requestsSent int
@@ -469,14 +478,22 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 		return stop(BackfillStopRequestedBatchLimit, "requested_batch_limit", "Requested batch limit reached (stopping).")
 	}
 	var syncRes SyncResult
+	observer := newHistoryObserver(handleOnDemand, observeStoreError)
 	if runtime == nil {
 		syncRes, err = a.Sync(ctx, SyncOptions{
 			Mode: SyncModeOnce, AllowQR: false, IdleExit: opts.IdleExit,
-			afterHistorySync: handleOnDemand, historyStoreError: observeStoreError,
-			AfterConnect: runRequests,
+			historyObserver: observer, AfterConnect: runRequests,
 		})
+		observer.mu.Lock()
+		if err == nil && observer.active {
+			err = ctx.Err()
+			if err == nil {
+				err = fmt.Errorf("sync stopped before the backfill observation window drained; already persisted messages may remain")
+			}
+		}
+		observer.active = false
+		observer.mu.Unlock()
 	} else {
-		observer := newHistoryObserver(handleOnDemand, observeStoreError)
 		if err := a.registerHistoryObserver(runtime, observer); err != nil {
 			return BackfillResult{}, err
 		}
