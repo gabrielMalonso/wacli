@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -129,14 +130,14 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
 				return err
 			}
 
-			if flags.asJSON {
-				return out.WriteJSON(os.Stdout, map[string]any{
-					"synced":          true,
-					"messages_stored": res.MessagesStored,
-				})
+			// Follow's delegate must stop before App drains its local writers. Keep
+			// the writer LOCK until the post-close snapshot and report are complete.
+			if stopSendDelegate != nil {
+				stopSendDelegate()
+				stopSendDelegate = nil
 			}
-			fmt.Fprintf(os.Stdout, "Messages stored: %d\n", res.MessagesStored)
-			return nil
+			a.Close()
+			return writeSyncResult(os.Stdout, flags.asJSON, res, res.AppStateSnapshot())
 		},
 	}
 
@@ -158,4 +159,20 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
 	cmd.Flags().Int64Var(&storage.maxMessages, "max-messages", 0, "maximum total messages to keep in the local DB before sync stops (0 = unlimited, or WACLI_SYNC_MAX_MESSAGES)")
 	cmd.Flags().StringVar(&storage.maxDBSize, "max-db-size", "", "maximum wacli.db disk usage before sync stops, e.g. 500MB or 2GB (default: WACLI_SYNC_MAX_DB_SIZE or unlimited)")
 	return cmd
+}
+
+func writeSyncResult(w io.Writer, asJSON bool, result appPkg.SyncResult, state appPkg.AppStateDiagnostics) error {
+	if asJSON {
+		return out.WriteJSON(w, struct {
+			Synced         bool                       `json:"synced"`
+			MessagesStored int64                      `json:"messages_stored"`
+			AppState       appPkg.AppStateDiagnostics `json:"app_state"`
+		}{true, result.MessagesStored, state})
+	}
+	fmt.Fprintf(w, "Messages stored: %d\n", result.MessagesStored)
+	tw := newTableWriter(w)
+	writeAppStateRows(tw, state)
+	_ = tw.Flush()
+	writeAppStateHint(w, state)
+	return nil
 }

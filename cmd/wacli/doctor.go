@@ -78,18 +78,19 @@ func (s doctorStoreStats) MarshalJSON() ([]byte, error) {
 }
 
 type doctorReport struct {
-	StoreDir        string            `json:"store_dir"`
-	LockHeld        bool              `json:"lock_held"`
-	LockInfo        string            `json:"lock_info,omitempty"`
-	LockOwnerPID    int               `json:"lock_owner_pid,omitempty"`
-	Authed          bool              `json:"authenticated"`
-	SessionRevoked  bool              `json:"session_revoked"`
-	LinkedJID       string            `json:"linked_jid,omitempty"`
-	Connected       bool              `json:"connected"`
-	ConnectionState string            `json:"connection_state"`
-	FTSEnabled      bool              `json:"fts_enabled"`
-	Store           *doctorStoreStats `json:"store,omitempty"`
-	StoreError      string            `json:"store_error,omitempty"`
+	StoreDir        string                     `json:"store_dir"`
+	LockHeld        bool                       `json:"lock_held"`
+	LockInfo        string                     `json:"lock_info,omitempty"`
+	LockOwnerPID    int                        `json:"lock_owner_pid,omitempty"`
+	Authed          bool                       `json:"authenticated"`
+	SessionRevoked  bool                       `json:"session_revoked"`
+	LinkedJID       string                     `json:"linked_jid,omitempty"`
+	Connected       bool                       `json:"connected"`
+	ConnectionState string                     `json:"connection_state"`
+	FTSEnabled      bool                       `json:"fts_enabled"`
+	Store           *doctorStoreStats          `json:"store,omitempty"`
+	StoreError      string                     `json:"store_error,omitempty"`
+	AppState        appPkg.AppStateDiagnostics `json:"app_state"`
 }
 
 func doctorStoreStatsFromStoreStats(stats store.StoreStats) doctorStoreStats {
@@ -138,7 +139,43 @@ func writeDoctorReport(w io.Writer, rep doctorReport) {
 			fmt.Fprintf(tw, "LAST_ACTIVITY\t%s\n", rep.Store.LastActivityAt)
 		}
 	}
+	writeAppStateRows(tw, rep.AppState)
 	_ = tw.Flush()
+}
+
+func writeAppStateRows(w io.Writer, state appPkg.AppStateDiagnostics) {
+	fmt.Fprintf(w, "APP_STATE_RECONCILIATION\t%s\n", state.Reconciliation)
+	if state.PendingCollections != nil {
+		fmt.Fprintf(w, "APP_STATE_PENDING_COLLECTIONS\t%s\n", sanitize(strings.Join(state.PendingCollections, ", ")))
+	}
+	if state.Error != nil {
+		fmt.Fprintf(w, "APP_STATE_ERROR\t%s\n", state.Error.Code)
+	}
+	if state.RecoveryObservations == nil {
+		fmt.Fprintln(w, "APP_STATE_RECOVERY\tunknown (outcomes not retained)")
+	} else if len(state.RecoveryObservations) == 0 {
+		fmt.Fprintln(w, "APP_STATE_RECOVERY\tnone observed in this run")
+	}
+	for _, observation := range state.RecoveryObservations {
+		outcomes := make([]string, len(observation.Outcomes))
+		for i, outcome := range observation.Outcomes {
+			outcomes[i] = string(outcome)
+		}
+		fmt.Fprintf(w, "APP_STATE_RECOVERY\t%s %s: %s", sanitize(observation.Collection), observation.Phase, strings.Join(outcomes, ", "))
+		if len(observation.ErrorCodes) > 0 {
+			fmt.Fprintf(w, " (%s)", strings.Join(observation.ErrorCodes, ", "))
+		}
+		fmt.Fprintln(w)
+	}
+}
+
+func writeAppStateHint(w io.Writer, state appPkg.AppStateDiagnostics) {
+	switch state.Reconciliation {
+	case appPkg.AppStateReconciliationUnknown:
+		fmt.Fprintln(w, "Tip: check readability and schema compatibility of the selected local archive; app-state debt is unknown.")
+	case appPkg.AppStateReconciliationRequired:
+		fmt.Fprintln(w, "Tip: inspect this sync run's recovery observations for failed/cancelled collections and phases. Debt can also be preventive after normal shutdown; command success does not certify queue integrity or freshness.")
+	}
 }
 
 func newDoctorCmd(flags *rootFlags) *cobra.Command {
@@ -281,6 +318,7 @@ func newDoctorCmd(flags *rootFlags) *cobra.Command {
 				FTSEnabled:      db != nil && db.HasFTS(),
 				Store:           stats,
 				StoreError:      storeErr,
+				AppState:        appPkg.ReadAppStateDiagnostics(db),
 			}
 
 			if flags.asJSON {
@@ -288,13 +326,14 @@ func newDoctorCmd(flags *rootFlags) *cobra.Command {
 			}
 
 			writeDoctorReport(os.Stdout, rep)
+			writeAppStateHint(os.Stdout, rep.AppState)
 
 			if rep.StoreError != "" {
 				fmt.Fprintf(os.Stdout, "\nERROR: store could not be opened: %s\n", sanitize(rep.StoreError))
 				fmt.Fprintln(os.Stdout, "Tip: check that the store directory exists and is not corrupted.")
 			}
 			if rep.LockHeld {
-				fmt.Fprintln(os.Stdout, "\nTip: stop the running `wacli sync` before running write operations.")
+				fmt.Fprintln(os.Stdout, "\nTip: the writer lock is occupied; inspect local state read-only.")
 			}
 			return nil
 		},

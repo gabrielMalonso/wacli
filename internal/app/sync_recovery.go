@@ -64,6 +64,7 @@ func (a *App) recoverAppStateCollection(ctx context.Context, name string, recove
 	release, err := a.acquireChatStateSync(lockCtx)
 	cancelLock()
 	if err != nil {
+		recordAppStateRecovery(ctx, name, appStateRecoveryPrepare, err)
 		a.warnAppStateRecovery(name, err)
 		return
 	}
@@ -71,6 +72,7 @@ func (a *App) recoverAppStateCollection(ctx context.Context, name string, recove
 
 	generation, _, err := a.db.BeginAppStateRecovery(name)
 	if err != nil {
+		recordAppStateRecovery(ctx, name, appStateRecoveryPrepare, err)
 		a.warnAppStateRecovery(name, err)
 		return
 	}
@@ -80,12 +82,16 @@ func (a *App) recoverAppStateCollection(ctx context.Context, name string, recove
 	fetchErr, persistenceErr := a.fetchAndPersistAppState(fetchCtx, collection, true, tracker)
 	fetchErr = errors.Join(fetchErr, fetchCtx.Err())
 	cancelFetch()
+	recordAppStateRecovery(ctx, name, appStateRecoveryFullSync, fetchErr)
 	if persistenceErr != nil {
+		recordAppStateRecovery(ctx, name, appStateRecoveryPersist, persistenceErr)
 		a.warnAppStateRecovery(name, fmt.Errorf("persist full app state replay: %w", persistenceErr))
 		return
 	}
 	if fetchErr == nil {
-		if err := a.clearCompletedAppStateRecovery(collection, generation); err != nil {
+		err := a.clearCompletedAppStateRecovery(collection, generation)
+		recordAppStateRecovery(ctx, name, appStateRecoveryCheckpoint, err)
+		if err != nil {
 			a.warnAppStateRecovery(name, err)
 			return
 		}
@@ -110,6 +116,7 @@ func (a *App) recoverAppStateCollection(ctx context.Context, name string, recove
 			fmt.Fprintf(os.Stderr, "\rRequested app state %s recovery (id %s)\n", name, id)
 		}
 	})
+	recordAppStateRecovery(ctx, name, appStateRecoverySnapshot, err)
 	if err != nil {
 		a.warnAppStateRecovery(name, err)
 	}
@@ -139,6 +146,7 @@ func (a *App) syncAppStateDeltas(ctx context.Context, recoveries *sync.Map) {
 		}
 		fullSync := name == appstate.WAPatchRegular
 		if err := a.syncAndPersistAppStateDelta(ctx, name, fullSync); err != nil {
+			recordAppStateRecovery(ctx, string(name), appStateRecoveryDelta, err)
 			if errors.Is(err, wa.ErrEmptyAppStateKeyShare) || errors.Is(err, appstate.ErrMismatchingLTHash) {
 				a.handleAppStateSyncError(ctx, &events.AppStateSyncError{Name: name, FullSync: fullSync, Error: err}, recoveries)
 				continue

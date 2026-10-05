@@ -144,8 +144,9 @@ type App struct {
 	appStateRecoveryWorkers sync.WaitGroup
 	appStateRecoveryMu      sync.Mutex
 	appStateRecoveryClosing bool
-	appStateReplayOnClose   bool // guarded by waMu; callbacks need not drain at Disconnect
-	appStateUnobserved      bool // guarded by waMu; replay cannot retire coverage debt
+	appStateReplayOnClose   bool                 // guarded by waMu; callbacks need not drain at Disconnect
+	appStateRecoveryOnClose *appStateRecoveryRun // guarded by waMu; closing coverage belongs to the last sync run
+	appStateUnobserved      bool                 // guarded by waMu; replay cannot retire coverage debt
 	manualFetchMu           sync.Mutex
 	manualFetches           map[string]int
 	heartbeatLast           atomic.Int64
@@ -234,6 +235,7 @@ func (a *App) close() {
 	sessionState, sessionHandler := a.sessionState, a.sessionHandler
 	observer := a.outboundEvents
 	replayAppState := a.appStateReplayOnClose
+	recoveryRun := a.appStateRecoveryOnClose
 	a.waMu.Unlock()
 	if observer != nil {
 		observer.closeAdmissions()
@@ -264,6 +266,10 @@ func (a *App) close() {
 		// that ran during cleanup may have cleared the earlier coverage intent.
 		if replayAppState {
 			if err := a.restoreAppStateReplay(); err != nil {
+				ctx := context.WithValue(context.Background(), appStateRecoveryRunKey{}, recoveryRun)
+				for _, collection := range mirroredAppStateCollections {
+					recordAppStateRecovery(ctx, string(collection), appStateRecoveryShutdown, err)
+				}
 				a.emitWarning("app_state_recovery_marker_failed", fmt.Sprintf("warning: preserve app state replay on close: %v", err), nil)
 			}
 		}
