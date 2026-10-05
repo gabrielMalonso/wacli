@@ -198,12 +198,16 @@ func backfillRetryOptions(chat string) BackfillOptions {
 }
 
 func backfillTestResponse(chat, id string, timestamp time.Time) *events.HistorySync {
+	key := &waCommon.MessageKey{RemoteJID: proto.String(chat), FromMe: proto.Bool(false), ID: proto.String(id)}
+	if strings.HasSuffix(chat, "@g.us") {
+		key.Participant = proto.String("15550000001@s.whatsapp.net")
+	}
 	return &events.HistorySync{Data: &waHistorySync.HistorySync{
 		SyncType: waHistorySync.HistorySync_ON_DEMAND.Enum(),
 		Conversations: []*waHistorySync.Conversation{{
 			ID: proto.String(chat),
 			Messages: []*waHistorySync.HistorySyncMsg{{Message: &waWeb.WebMessageInfo{
-				Key:              &waCommon.MessageKey{RemoteJID: proto.String(chat), FromMe: proto.Bool(false), ID: proto.String(id)},
+				Key:              key,
 				MessageTimestamp: proto.Uint64(uint64(timestamp.Unix())),
 				Message:          &waProto.Message{Conversation: proto.String("older text")},
 			}}},
