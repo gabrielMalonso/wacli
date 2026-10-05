@@ -52,11 +52,12 @@ func runAgentAuthStatus(flags *rootFlags) error {
 }
 
 type agentDoctor struct {
-	Auth           agentAuth        `json:"auth"`
-	LockHeld       bool             `json:"lock_held"`
-	FTSEnabled     bool             `json:"fts_enabled"`
-	LastActivityAt *time.Time       `json:"last_activity_at"`
-	Full           *agentDoctorFull `json:"full,omitempty"`
+	Auth           agentAuth               `json:"auth"`
+	LockHeld       bool                    `json:"lock_held"`
+	FTSEnabled     bool                    `json:"fts_enabled"`
+	LastActivityAt *time.Time              `json:"last_activity_at"`
+	Full           *agentDoctorFull        `json:"full,omitempty"`
+	AppState       app.AppStateDiagnostics `json:"app_state"`
 }
 type agentDoctorFull struct {
 	Messages      int64      `json:"messages"`
@@ -80,7 +81,7 @@ func runAgentDoctor(ctx context.Context, flags *rootFlags) error {
 	if err != nil {
 		return agentStoreError(err)
 	}
-	data := agentDoctor{Auth: status, LockHeld: held, FTSEnabled: a.DB().HasFTS(), LastActivityAt: agentTime(app.ReadHeartbeat(a.StoreDir()))}
+	data := agentDoctor{Auth: status, LockHeld: held, FTSEnabled: a.DB().HasFTS(), LastActivityAt: agentTime(app.ReadHeartbeat(a.StoreDir())), AppState: app.ReadAppStateDiagnostics(a.DB())}
 	if flags.detail == "full" {
 		stats, err := a.DB().Stats()
 		if err != nil {
