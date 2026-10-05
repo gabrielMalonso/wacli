@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -162,6 +163,48 @@ func TestHistoryAgentOutputFailureRemainsUncertain(t *testing.T) {
 	var cause *out.AgentError
 	if !errors.As(err, &cause) || cause.Code != "payload_too_large" {
 		t.Fatalf("missing internal output cause: %v", err)
+	}
+}
+
+func TestHistoryAgentBrokenPipeRetainsCorrelation(t *testing.T) {
+	id := "0123456789abcdef0123456789abcdef"
+	res := fixtureHistoryAgentResult(id, "123@g.us")
+	for _, detail := range []string{"compact", "full"} {
+		for _, agent := range []bool{false, true} {
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Close(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = w.Close() })
+			flags := &rootFlags{agent: agent, asJSON: true, agentCapability: agentHistoryRecovery, agentHistoryAttemptID: id, detail: detail}
+			previous := os.Stdout
+			func() {
+				os.Stdout = w
+				defer func() { os.Stdout = previous }()
+				err = writeHistoryBackfillResult(flags, res)
+			}()
+			if !agent {
+				if err != nil {
+					t.Fatalf("legacy pipe behavior changed: %v", err)
+				}
+				continue
+			}
+			if err == nil || commandExitCode(err) != 1 {
+				t.Fatalf("action ignored broken output: %v", err)
+			}
+			stderr := captureRootStderr(t, func() { writeRootError(*flags, err) })
+			envelope := decodeAgentTest(t, stderr)
+			h := envelope.Error.History
+			if envelope.Meta.Source != "live" || envelope.Error.Code != "backfill_outcome_uncertain" || h == nil || h.AttemptID != id || h.Outcome != "uncertain" || h.Phase != "finalizing" || !h.CorrelationConfirmed {
+				t.Fatalf("output failure lost knowledge: %s", stderr)
+			}
+			if err := out.WriteAgentJSON(w, out.AgentAccount{}, agentMeta(flags), struct{}{}); err != nil {
+				t.Fatalf("read pipe behavior changed: %v", err)
+			}
+		}
 	}
 }
 

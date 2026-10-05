@@ -94,7 +94,7 @@ func writeHistoryBackfillResult(flags *rootFlags, res app.BackfillResult) error 
 		MessagesAdded: res.MessagesAdded, StopReason: res.StopReason, Evidence: historyObservation(res.Evidence, current, flags.detail == "full")}
 	meta := agentMeta(flags)
 	meta.Recovery = "Inspect history coverage --chat JID --evidence for retained observations; primary end markers do not certify remote completeness."
-	if err := out.WriteAgentJSON(os.Stdout, flags.agentAccount, meta, data); err != nil {
+	if err := out.WriteAgentActionJSON(os.Stdout, flags.agentAccount, meta, data); err != nil {
 		return &app.BackfillError{History: app.HistoryFailure{AttemptID: res.AttemptID, Phase: store.HistoryFinalizing, Outcome: "uncertain", Code: "backfill_outcome_uncertain", CorrelationConfirmed: true}, Cause: err}
 	}
 	return nil

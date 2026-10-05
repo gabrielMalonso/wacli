@@ -122,7 +122,11 @@ func runAgentTranscription(parent context.Context, flags *rootFlags, path string
 		Input:         agentTranscriptionInput{Path: path, Bytes: result.Input.Bytes, SHA256: result.Input.SHA256},
 		TextTruncated: result.TextTruncated,
 	}
-	if err := out.WriteAgentActionJSON(dst, flags.agentAccount, agentMeta(flags), dto); err != nil {
+	meta := agentMeta(flags)
+	if dto.TextTruncated {
+		meta.Recovery = "Transcript text was truncated. No transcript was stored; obtaining full text requires another explicit adapter execution with --detail full. Do not repeat automatically."
+	}
+	if err := out.WriteAgentActionJSON(dst, flags.agentAccount, meta, dto); err != nil {
 		return &out.AgentError{Code: "output_failed", Message: "Transcription output could not be written; no transcript was stored.", ExitCode: 1}
 	}
 	return nil

@@ -142,7 +142,12 @@ func newContactsShowCmd(flags *rootFlags) *cobra.Command {
 			}
 
 			if flags.agent {
-				return out.WriteAgentJSON(os.Stdout, flags.agentAccount, agentMeta(flags), agentContactDTO(c, flags.detail))
+				d := agentContactDTO(c, flags.detail)
+				meta := agentMeta(flags)
+				if len(d.FieldsTruncated) > 0 {
+					meta.Recovery = agentContactRecovery
+				}
+				return out.WriteAgentJSON(os.Stdout, flags.agentAccount, meta, d)
 			}
 			if flags.asJSON {
 				return out.WriteJSON(os.Stdout, c)

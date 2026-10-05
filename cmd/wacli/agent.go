@@ -526,15 +526,5 @@ func agentMeta(flags *rootFlags) out.AgentMeta {
 	if flags.agentCapability == agentHistoryRecovery || flags.agentCapability == agentOutboundSend || flags.agentCapability == agentChatState || flags.agentCapability == agentMediaDownload || flags.agentCapability == agentMediaRecovery {
 		source = "live"
 	}
-	meta := out.AgentMeta{Source: source, Detail: detail, Completeness: "unknown", Freshness: "unknown"}
-	if flags.agentCapability == agentMediaTranscription {
-		if detail == "compact" {
-			meta.Recovery = "Use --detail full in an explicit media transcribe --file PATH --adapter /absolute/executable --agent invocation. This runs the selected adapter again; transcripts are not stored or automatically recovered."
-		}
-		return meta
-	}
-	if detail == "compact" {
-		meta.Recovery = "Use --detail full; retrieve one message with messages show --chat CHAT_JID --id ID --detail full."
-	}
-	return meta
+	return out.AgentMeta{Source: source, Detail: detail, Completeness: "unknown", Freshness: "unknown"}
 }

@@ -11,6 +11,11 @@ import (
 
 const agentTextRunes = 320
 
+const agentMessageRecovery = "Read truncated fields with messages show --chat CHAT_JID --id ID --agent --detail full in the selected archive."
+const agentChatRecovery = "Read truncated names with chats show --jid JID --agent --detail full in the selected archive."
+const agentContactRecovery = "Read truncated names or aliases with contacts show --jid JID --agent --detail full in the selected archive."
+const agentCoverageRecovery = "Read truncated names with history coverage --chat CHAT_JID --include-blocked --agent --detail full in the selected archive."
+
 // Cut at Unicode code point boundaries; IDs are never passed through this.
 func agentText(text, detail string) (string, bool) {
 	if detail == "full" {
@@ -168,7 +173,11 @@ func writeAgentMessagesWithMeta(flags *rootFlags, msgs []store.Message, meta out
 	data := agentMessages{Messages: make([]agentMessage, 0, len(msgs)), SearchMode: searchMode, SelectedID: selected}
 	data.Order = order
 	for _, m := range msgs {
-		data.Messages = append(data.Messages, agentMessageDTO(m, flags.detail))
+		d := agentMessageDTO(m, flags.detail)
+		if d.TextTruncated || len(d.FieldsTruncated) > 0 {
+			meta.Recovery = agentMessageRecovery
+		}
+		data.Messages = append(data.Messages, d)
 	}
 	return out.WriteAgentJSON(os.Stdout, flags.agentAccount, meta, data)
 }
@@ -208,10 +217,14 @@ type agentChats struct {
 func writeAgentChats(flags *rootFlags, page store.ChatsPage, limit int) error {
 	chats := page.Chats
 	data := agentChats{Chats: make([]agentChat, 0, len(chats))}
-	for _, c := range chats {
-		data.Chats = append(data.Chats, agentChatDTO(c, flags.detail))
-	}
 	meta := agentMeta(flags)
+	for _, c := range chats {
+		d := agentChatDTO(c, flags.detail)
+		if len(d.FieldsTruncated) > 0 {
+			meta.Recovery = agentChatRecovery
+		}
+		data.Chats = append(data.Chats, d)
+	}
 	meta.Limit = limit
 	meta.Page = &out.AgentPage{Returned: len(chats), HasMore: page.HasMore, NextCursor: page.NextCursor}
 	return out.WriteAgentJSON(os.Stdout, flags.agentAccount, meta, data)
@@ -254,10 +267,14 @@ type agentContacts struct {
 func writeAgentContacts(flags *rootFlags, page app.ContactsPage, limit int) error {
 	cs := page.Contacts
 	data := agentContacts{Contacts: make([]agentContact, 0, len(cs))}
-	for _, c := range cs {
-		data.Contacts = append(data.Contacts, agentContactDTO(c, flags.detail))
-	}
 	meta := agentMeta(flags)
+	for _, c := range cs {
+		d := agentContactDTO(c, flags.detail)
+		if len(d.FieldsTruncated) > 0 {
+			meta.Recovery = agentContactRecovery
+		}
+		data.Contacts = append(data.Contacts, d)
+	}
 	meta.Limit = limit
 	meta.Page = &out.AgentPage{Returned: len(cs), HasMore: page.HasMore, NextCursor: page.NextCursor}
 	return out.WriteAgentJSON(os.Stdout, flags.agentAccount, meta, data)
@@ -278,15 +295,16 @@ type agentResolutions struct {
 
 func writeAgentResolutions(flags *rootFlags, rs []contactResolution) error {
 	data := agentResolutions{Resolutions: make([]agentResolution, 0, len(rs))}
+	meta := agentMeta(flags)
 	for _, r := range rs {
 		name, cut := agentText(r.Name, flags.detail)
 		d := agentResolution{Input: r.Input, JID: r.JID, Phone: r.Phone, LID: r.LID, Name: name, Resolved: r.Resolved}
 		if cut {
 			d.FieldsTruncated = []string{"name"}
+			meta.Recovery = "Read truncated names with contacts resolve INPUT --agent --detail full in the selected archive."
 		}
 		data.Resolutions = append(data.Resolutions, d)
 	}
-	meta := agentMeta(flags)
 	meta.Limit = agentMaxResults
 	return out.WriteAgentJSON(os.Stdout, flags.agentAccount, meta, data)
 }
@@ -308,15 +326,16 @@ type agentCoverageData struct {
 
 func writeAgentCoverage(flags *rootFlags, cs []store.HistoryCoverage, limit int) error {
 	data := agentCoverageData{Coverage: make([]agentCoverage, 0, len(cs))}
+	meta := agentMeta(flags)
 	for _, c := range cs {
 		name, cut := agentText(c.Name, flags.detail)
 		d := agentCoverage{ChatJID: c.ChatJID, Kind: c.Kind, Name: name, MessageCount: c.MessageCount, OldestAt: agentTime(c.OldestTS), NewestAt: agentTime(c.NewestTS), Status: c.Status, BlockedReason: c.BlockedReason}
 		if cut {
 			d.FieldsTruncated = []string{"name"}
+			meta.Recovery = agentCoverageRecovery
 		}
 		data.Coverage = append(data.Coverage, d)
 	}
-	meta := agentMeta(flags)
 	meta.Limit = limit
 	return out.WriteAgentJSON(os.Stdout, flags.agentAccount, meta, data)
 }

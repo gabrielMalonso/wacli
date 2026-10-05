@@ -331,7 +331,12 @@ func newMessagesShowCmd(flags *rootFlags) *cobra.Command {
 			m = resolveMessageSenderNames(ctx, a, []store.Message{m})[0]
 
 			if flags.agent {
-				return out.WriteAgentJSON(os.Stdout, flags.agentAccount, agentMeta(flags), agentMessageDTO(m, flags.detail))
+				d := agentMessageDTO(m, flags.detail)
+				meta := agentMeta(flags)
+				if d.TextTruncated || len(d.FieldsTruncated) > 0 {
+					meta.Recovery = agentMessageRecovery
+				}
+				return out.WriteAgentJSON(os.Stdout, flags.agentAccount, meta, d)
 			}
 			if flags.asJSON {
 				return out.WriteJSON(os.Stdout, m)
