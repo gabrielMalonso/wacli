@@ -106,8 +106,11 @@ func classifyDraftError(err error) *out.AgentError {
 	if !errors.As(err, &failure) {
 		var validation *store.DraftValidationError
 		if errors.As(err, &validation) {
-			if validation.Field == "reply.sender" {
+			switch validation.Field {
+			case "reply.sender":
 				return &out.AgentError{Code: "invalid_arguments", Message: "Quoted sender identity is unavailable or incompatible with the observed local account or recipient.", Recovery: "Inspect messages show --chat CHAT_JID --id MESSAGE_ID --agent --detail full locally; select a compatible quote or explicitly recreate without --reply-to.", ExitCode: 2, Cause: err}
+			case "reply.unsupported":
+				return &out.AgentError{Code: "invalid_arguments", Message: "Quoted message content is unsupported for draft replies.", Recovery: "Inspect messages show --chat CHAT_JID --id MESSAGE_ID --agent --detail full locally; select a supported text quote or explicitly prepare complete create/update input without --reply-to.", ExitCode: 2, Cause: err}
 			}
 			code := "invalid_arguments"
 			if validation.Field == "cursor" {

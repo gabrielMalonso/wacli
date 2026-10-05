@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -20,9 +22,16 @@ import (
 )
 
 func TestDraftIPCValidationCategory(t *testing.T) {
+	for _, field := range []draftValidationField{draftReplySenderField, draftReplyUnsupportedField} {
+		t.Run(string(field), func(t *testing.T) { testDraftIPCValidationCategory(t, field) })
+	}
+}
+
+func testDraftIPCValidationCategory(t *testing.T, field draftValidationField) {
+	t.Helper()
 	message := "reply"
 	req := sendDelegateRequest{Kind: draftWriteKind, Draft: &app.DraftWriteRequest{Version: 1, Action: "create", DraftID: strings.Repeat("a", 32), RevisionID: strings.Repeat("b", 32), StoreRef: "/fixture/store", Input: &app.DraftInput{To: "15550000002@s.whatsapp.net", Message: &message, ReplyTo: "quote"}}}
-	typed := &store.DraftValidationError{Field: "reply.sender", Reason: "UNTRUSTED_REASON /private/fixture\n"}
+	typed := &store.DraftValidationError{Field: string(field), Reason: "UNTRUSTED_REASON /private/fixture\n"}
 	emitted := draftRefusal(req, typed)
 	wire, err := json.Marshal(emitted)
 	if err != nil {
@@ -64,6 +73,21 @@ func TestDraftIPCValidationCategory(t *testing.T) {
 		{"category_without_quote", func(q *sendDelegateRequest, _ *sendDelegateResponse) { q.Draft.Input.ReplyTo = "" }, "local_write_uncertain", false},
 		{"category_without_quote_correlated", func(q *sendDelegateRequest, r *sendDelegateResponse) {
 			q.Draft.Input.ReplyTo = ""
+			r.DraftRequestHash = draftRequestHash(*q.Draft)
+		}, "invalid_arguments", false},
+		{"category_update", func(q *sendDelegateRequest, r *sendDelegateResponse) {
+			q.Draft.Action = "update"
+			q.Draft.ExpectedRevision = strings.Repeat("c", 32)
+			r.DraftRequestHash = draftRequestHash(*q.Draft)
+		}, "invalid_arguments", true},
+		{"category_discard", func(q *sendDelegateRequest, r *sendDelegateResponse) {
+			q.Draft.Action = "discard"
+			q.Draft.Input = nil
+			q.Draft.ExpectedRevision = q.Draft.RevisionID
+			r.DraftRequestHash = draftRequestHash(*q.Draft)
+		}, "invalid_arguments", false},
+		{"category_without_input", func(q *sendDelegateRequest, r *sendDelegateResponse) {
+			q.Draft.Input = nil
 			r.DraftRequestHash = draftRequestHash(*q.Draft)
 		}, "invalid_arguments", false},
 		{"category_other_operation", func(q *sendDelegateRequest, r *sendDelegateResponse) { q.Kind = "other-local-fixture-operation" }, "invalid_arguments", false},
@@ -108,7 +132,7 @@ func TestDraftIPCValidationCategory(t *testing.T) {
 			if failure.Code != tc.code {
 				t.Fatalf("code=%s want=%s", failure.Code, tc.code)
 			}
-			specific := strings.HasPrefix(failure.Message, "Quoted sender identity")
+			specific := failure.Message == classifyDraftError(&store.DraftValidationError{Field: string(field)}).Message
 			if specific != tc.targeted {
 				t.Fatal("categorical hint escaped its allowed scope")
 			}
@@ -132,14 +156,14 @@ func TestDraftIPCValidationCategory(t *testing.T) {
 			t.Logf("%s code=%s specific=%v public_bytes=%d", tc.name, failure.Code, specific, output.Len())
 		})
 	}
-	for _, field := range []string{"reply", "recipient", "reply.sender.extra"} {
+	for _, field := range []string{"reply", "recipient", "reply.sender.extra", "reply.unsupported.extra"} {
 		emitted := draftRefusal(req, &store.DraftValidationError{Field: field, Reason: "untrusted"})
 		if emitted.DraftValidationField != "" {
 			t.Fatal("non-allowlisted field emitted")
 		}
 	}
 	// A malformed new field is rejected by the normal typed JSON decoder.
-	malformed := bytes.Replace(wire, []byte(`"reply.sender"`), []byte(`123`), 1)
+	malformed := bytes.Replace(wire, []byte(fmt.Sprintf("%q", field)), []byte(`123`), 1)
 	var newClient sendDelegateResponse
 	if err = json.Unmarshal(malformed, &newClient); err == nil {
 		t.Fatal("malformed categorical type accepted")
@@ -149,7 +173,7 @@ func TestDraftIPCValidationCategory(t *testing.T) {
 	}
 	// The advisory field has no role in success correlation or payload validation.
 	entry := draftOutputFixture(t, store.DraftTextKind, "reply", nil)
-	success := sendDelegateResponse{OK: true, DraftResult: projectDraftDelegate(*req.Draft, entry), DraftValidationField: draftReplySenderField}
+	success := sendDelegateResponse{OK: true, DraftResult: projectDraftDelegate(*req.Draft, entry), DraftValidationField: field}
 	if _, err := validateDraftDelegateResult(*req.Draft, success.DraftResult); err != nil {
 		t.Fatal("success validation changed")
 	}
@@ -160,6 +184,13 @@ func TestDraftIPCValidationCategory(t *testing.T) {
 }
 
 func TestDraftIPCValidationCategoryEmissionIsNarrow(t *testing.T) {
+	for _, field := range []draftValidationField{draftReplySenderField, draftReplyUnsupportedField} {
+		t.Run(string(field), func(t *testing.T) { testDraftIPCValidationCategoryEmission(t, field) })
+	}
+}
+
+func testDraftIPCValidationCategoryEmission(t *testing.T, field draftValidationField) {
+	t.Helper()
 	message := "reply"
 	base := app.DraftWriteRequest{Version: 1, Action: "create", DraftID: strings.Repeat("a", 32), RevisionID: strings.Repeat("b", 32), StoreRef: "/fixture/store", Input: &app.DraftInput{To: "15550000002@s.whatsapp.net", Message: &message, ReplyTo: "quote"}}
 	cases := []struct {
@@ -169,13 +200,13 @@ func TestDraftIPCValidationCategoryEmissionIsNarrow(t *testing.T) {
 		code   string
 		want   bool
 	}{
-		{"create_quote", func(*app.DraftWriteRequest) {}, "reply.sender", "invalid_arguments", true},
-		{"update_quote", func(q *app.DraftWriteRequest) { q.Action = "update"; q.ExpectedRevision = strings.Repeat("c", 32) }, "reply.sender", "invalid_arguments", true},
-		{"no_quote", func(q *app.DraftWriteRequest) { q.Input.ReplyTo = "" }, "reply.sender", "invalid_arguments", false},
-		{"no_input", func(q *app.DraftWriteRequest) { q.Input = nil }, "reply.sender", "invalid_arguments", false},
-		{"discard", func(q *app.DraftWriteRequest) { q.Action = "discard" }, "reply.sender", "invalid_arguments", false},
+		{"create_quote", func(*app.DraftWriteRequest) {}, string(field), "invalid_arguments", true},
+		{"update_quote", func(q *app.DraftWriteRequest) { q.Action = "update"; q.ExpectedRevision = strings.Repeat("c", 32) }, string(field), "invalid_arguments", true},
+		{"no_quote", func(q *app.DraftWriteRequest) { q.Input.ReplyTo = "" }, string(field), "invalid_arguments", false},
+		{"no_input", func(q *app.DraftWriteRequest) { q.Input = nil }, string(field), "invalid_arguments", false},
+		{"discard", func(q *app.DraftWriteRequest) { q.Action = "discard" }, string(field), "invalid_arguments", false},
 		{"other_validation", func(*app.DraftWriteRequest) {}, "reply", "invalid_arguments", false},
-		{"other_base_error", func(*app.DraftWriteRequest) {}, "reply.sender", "store_unavailable", false},
+		{"other_base_error", func(*app.DraftWriteRequest) {}, string(field), "store_unavailable", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -186,7 +217,7 @@ func TestDraftIPCValidationCategoryEmissionIsNarrow(t *testing.T) {
 			validation := &store.DraftValidationError{Field: tc.field, Reason: "SECRET_OWNER_REASON"}
 			err := store.DraftFailure(tc.code, q.DraftID, q.RevisionID, "", fmt.Errorf("SECRET_OWNER_WRAPPER: %w", validation))
 			response := draftRefusal(sendDelegateRequest{Kind: draftWriteKind, Draft: &q}, err)
-			if (response.DraftValidationField == draftReplySenderField) != tc.want {
+			if (response.DraftValidationField == field) != tc.want {
 				t.Fatal("category emitted outside its allowlist/scope")
 			}
 			if response.DraftFailure.Code != tc.code {
@@ -200,6 +231,12 @@ func TestDraftIPCValidationCategoryEmissionIsNarrow(t *testing.T) {
 				t.Fatal("raw cause or reason crossed the wire")
 			}
 		})
+	}
+	for _, req := range []sendDelegateRequest{{Kind: "other", Draft: &base}, {Kind: draftWriteKind}} {
+		response := draftRefusal(req, &store.DraftValidationError{Field: string(field), Reason: "SECRET_OWNER_REASON"})
+		if response.DraftValidationField != "" {
+			t.Fatal("category emitted for another kind or missing draft")
+		}
 	}
 }
 
@@ -280,6 +317,113 @@ func TestDraftIPCQuoteGuidanceThroughFakeOwnerHandler(t *testing.T) {
 			}
 			if success.Meta.Recovery != "See data.recovery." || strings.Count(stdout, dto.Recovery) != 1 || strings.Contains(dto.Recovery, "document bytes") || strings.Count(stdout, "\n") != 1 {
 				t.Fatal("handler success lost canonical minified guidance")
+			}
+		})
+	}
+}
+
+func TestDraftUnsupportedQuoteGuidanceStandaloneAndOwner(t *testing.T) {
+	t.Setenv("WACLI_READONLY", "0")
+	for _, mode := range []string{"standalone", "owner", "old_owner", "unknown_category"} {
+		t.Run(mode, func(t *testing.T) {
+			dir, a := draftOwnerFixture(t, false)
+			const quoteID = "PDF_ID"
+			if err := a.DB().UpsertMessage(store.UpsertMessageParams{ChatJID: localReadLID, MsgID: quoteID, SenderJID: localReadLID, Text: "PRIVATE_PDF_CAPTION", MediaCaption: "PRIVATE_PDF_CAPTION", MediaType: "document", MimeType: "application/pdf", Timestamp: time.Unix(1, 0)}); err != nil {
+				t.Fatal(err)
+			}
+			sessionBefore, err := os.ReadFile(filepath.Join(dir, "session.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var calls atomic.Int64
+			if mode != "standalone" {
+				lk, err := lock.Acquire(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer lk.Release()
+				stop, err := startSendDelegateServerForStore(t.Context(), dir, sendSpacing{}, func(ctx context.Context, req sendDelegateRequest) (sendDelegateResponse, error) {
+					calls.Add(1)
+					if req.Kind != draftWriteKind {
+						return sendDelegateResponse{}, errors.New("fixture rejects non-draft dispatch")
+					}
+					response, err := executeDelegatedSend(ctx, a, req)
+					if response.DraftFailure != nil && response.DraftFailure.Code == "invalid_arguments" {
+						if response.DraftValidationField != draftReplyUnsupportedField {
+							t.Error("handler failed to categorize unsupported quote")
+						}
+						if mode == "old_owner" {
+							response.DraftValidationField = ""
+						} else if mode == "unknown_category" {
+							response.DraftValidationField = "UNKNOWN_PRIVATE_TOKEN"
+						}
+					}
+					return response, err
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer stop()
+			}
+			run := func(args ...string) (string, string, error) {
+				return runAgentTest(t, append([]string{"--agent", "--store", dir, "--timeout", "2s", "draft"}, args...)...)
+			}
+			stdout, stderr, err := run("create", "--to", localReadPN, "--message", "seed", "--reply-to", "m1")
+			if err != nil || stderr != "" {
+				t.Fatal("supported text quote failed", err)
+			}
+			var seed draftDTO
+			if err := json.Unmarshal(decodeAgentTest(t, stdout).Data, &seed); err != nil {
+				t.Fatal(err)
+			}
+			if seed.Reply == nil || seed.Reply.Text != "fixture message" {
+				t.Fatal("supported quote was not frozen")
+			}
+			for _, action := range []string{"create", "update"} {
+				args := []string{action}
+				if action == "update" {
+					args = append(args, seed.ID, "--if-revision", seed.RevisionID)
+				}
+				args = append(args, "--to", localReadPN, "--reply-to", quoteID, "--message", "reply")
+				stdout, stderr, err := run(args...)
+				if err == nil || stdout != "" || commandExitCode(err) != 2 {
+					t.Fatal("unsupported quote refusal/exit changed")
+				}
+				failure := decodeAgentTest(t, stderr)
+				if failure.Error.Code != "invalid_arguments" || failure.Meta.Source != "local" || failure.Meta.Completeness != "unknown" || failure.Meta.Freshness != "unknown" || strings.Count(stderr, "\n") != 1 {
+					t.Fatal("refusal code, certainty or framing changed")
+				}
+				specific := failure.Error.Message == "Quoted message content is unsupported for draft replies."
+				if specific != (mode == "standalone" || mode == "owner") {
+					t.Fatal("category lost or unknown category interpreted")
+				}
+				if !specific && failure.Error.Message != "Invalid complete local draft input." {
+					t.Fatal("older/unknown owner lost base guidance")
+				}
+				if mode != "standalone" && (failure.Error.Draft == nil || failure.Error.Draft.DraftID == "" || failure.Error.Draft.RevisionID == "") {
+					t.Fatal("owner refusal lost correlation")
+				}
+				if mode != "standalone" && action == "update" && failure.Error.Draft.DraftID != seed.ID {
+					t.Fatal("update refusal lost draft correlation")
+				}
+				if strings.Contains(stderr, "PRIVATE_PDF_CAPTION") || strings.Contains(stderr, "draft_validation_field") || strings.Contains(stderr, "UNKNOWN_PRIVATE_TOKEN") || strings.Contains(failure.Error.Recovery, "draft show") || strings.Contains(failure.Error.Recovery, "replay") || !strings.Contains(failure.Error.Recovery, "messages show") || !strings.Contains(failure.Error.Recovery, "without --reply-to") {
+					t.Fatal("guidance leaked private data or suggests inappropriate recovery")
+				}
+			}
+			page, err := a.DB().ListDrafts(t.Context(), dir, true, 20, "")
+			if err != nil || len(page.Items) != 1 {
+				t.Fatal("rejected quote created a draft", err)
+			}
+			retained, err := a.DB().ReadDraft(t.Context(), seed.ID, "")
+			if err != nil || retained.Revision.ID() != seed.RevisionID || retained.Number != 1 || retained.Revision.Payload().Hash() != seed.Hash {
+				t.Fatal("rejected update changed the revision", err)
+			}
+			sessionAfter, err := os.ReadFile(filepath.Join(dir, "session.db"))
+			if err != nil || sha256.Sum256(sessionAfter) != sha256.Sum256(sessionBefore) {
+				t.Fatal("synthetic session changed", err)
+			}
+			if mode != "standalone" && calls.Load() != 3 {
+				t.Fatal("unexpected owner dispatch count")
 			}
 		})
 	}

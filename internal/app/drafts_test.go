@@ -215,6 +215,95 @@ func TestDraftQuoteUnavailableAndUnknownSender(t *testing.T) {
 	}
 }
 
+func TestDraftQuoteDiagnosticPrecedence(t *testing.T) {
+	const peer = "15550000002@s.whatsapp.net"
+	const alias = "90002@lid"
+	for _, tc := range []struct {
+		name  string
+		quote store.UpsertMessageParams
+		other *store.UpsertMessageParams
+		field string
+		purge bool
+	}{
+		{name: "PDF with caption and author", quote: store.UpsertMessageParams{MediaType: "document", MimeType: "application/pdf", Text: "caption", MediaCaption: "caption", SenderJID: alias}, field: "reply.unsupported"},
+		{name: "PDF without text", quote: store.UpsertMessageParams{MediaType: "document", SenderJID: alias}, field: "reply.unsupported"},
+		{name: "PDF without author", quote: store.UpsertMessageParams{MediaType: "document", Text: "caption"}, field: "reply.unsupported"},
+		{name: "PDF with malformed author", quote: store.UpsertMessageParams{MediaType: "document", Text: "caption", SenderJID: "invalid@s.whatsapp.net"}, field: "reply.unsupported"},
+		{name: "PDF with incompatible author", quote: store.UpsertMessageParams{MediaType: "document", Text: "caption", SenderJID: "15550000003@s.whatsapp.net"}, field: "reply.unsupported"},
+		{name: "reaction", quote: store.UpsertMessageParams{ReactionToID: "target", Text: "reaction", SenderJID: alias}, field: "reply.unsupported"},
+		{name: "buttons", quote: store.UpsertMessageParams{Buttons: []store.Button{{ID: "button", DisplayText: "label"}}, Text: "button text", SenderJID: alias}, field: "reply.unsupported"},
+		{name: "revoked PDF", quote: store.UpsertMessageParams{Revoked: true, MediaType: "document", Text: "retained", SenderJID: alias}, field: "reply"},
+		{name: "deleted PDF", quote: store.UpsertMessageParams{DeletedForMe: true, MediaType: "document", Text: "retained", SenderJID: alias}, field: "reply"},
+		{name: "purged PDF", quote: store.UpsertMessageParams{Revoked: true, MediaType: "document", Text: "retained", SenderJID: alias}, field: "reply", purge: true},
+		{name: "unavailable alias before unsupported", quote: store.UpsertMessageParams{Revoked: true, Text: "retained", SenderJID: alias}, other: &store.UpsertMessageParams{MediaType: "document", Text: "caption", SenderJID: alias}, field: "reply"},
+		{name: "malformed author alias before unsupported", quote: store.UpsertMessageParams{Text: "text", SenderJID: "invalid@s.whatsapp.net"}, other: &store.UpsertMessageParams{MediaType: "document", Text: "caption", SenderJID: alias}, field: "reply.unsupported"},
+		{name: "malformed author alias before unavailable", quote: store.UpsertMessageParams{Text: "text", SenderJID: "invalid@s.whatsapp.net"}, other: &store.UpsertMessageParams{DeletedForMe: true, Text: "retained", SenderJID: alias}, field: "reply"},
+		{name: "text with malformed author", quote: store.UpsertMessageParams{Text: "text", SenderJID: "invalid@s.whatsapp.net"}, field: "recipient"},
+	} {
+		orders := []string{"PN first"}
+		if tc.other != nil {
+			orders = append(orders, "LID first")
+		}
+		for _, order := range orders {
+			t.Run(tc.name+"/"+order, func(t *testing.T) {
+				a := draftAppFixture(t)
+				ctx := t.Context()
+				seed, err := a.WriteLocalDraft(ctx, draftAppRequest(t, a, DraftInput{To: peer, Message: draftTextPointer("seed")}), os.Open)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for i, chat := range []string{peer, alias} {
+					if i == 1 && tc.other == nil {
+						break
+					}
+					if err := a.DB().UpsertChat(chat, "dm", "fixture", time.Unix(1, 0)); err != nil {
+						t.Fatal(err)
+					}
+					params := tc.quote
+					if tc.other != nil && (i == 1) == (order == "PN first") {
+						params = *tc.other
+					}
+					params.ChatJID, params.MsgID, params.Timestamp = chat, "quote", time.Unix(1, 0)
+					if err := a.DB().UpsertMessage(params); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if tc.purge {
+					if err := a.DB().PurgeMessage(peer, "quote"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for _, action := range []string{"create", "update"} {
+					req := draftAppRequest(t, a, DraftInput{To: peer, File: "UNOPENED_FIXTURE_DOCUMENT", ReplyTo: "quote"})
+					if action == "update" {
+						req.Action, req.DraftID, req.ExpectedRevision = action, seed.Record.ID, seed.Revision.ID()
+					}
+					opens := 0
+					_, err := a.WriteLocalDraft(ctx, req, func(string) (*os.File, error) { opens++; return nil, errors.New("must not open") })
+					var validation *store.DraftValidationError
+					if !errors.As(err, &validation) || validation.Field != tc.field || opens != 0 {
+						t.Fatalf("%s: wrong quote category or source opened: %v, opens=%d", action, err, opens)
+					}
+					if tc.field == "reply" && validation.Reason != "quote must have available text and known sender" {
+						t.Fatal("unavailable refusal changed")
+					}
+				}
+				page, err := a.DB().ListDrafts(ctx, a.StoreDir(), true, 20, "")
+				if err != nil || len(page.Items) != 1 {
+					t.Fatal("rejected quote committed a draft", err)
+				}
+				retained, err := a.DB().ReadDraft(ctx, seed.Record.ID, "")
+				if err != nil || retained.Revision.ID() != seed.Revision.ID() || retained.Number != 1 || retained.Revision.Payload().Hash() != seed.Revision.Payload().Hash() {
+					t.Fatal("rejected quote changed a revision", err)
+				}
+				if _, err := os.Stat(filepath.Join(a.StoreDir(), store.DraftMediaDirectory)); !os.IsNotExist(err) || a.wa != nil {
+					t.Fatal("quote refusal opened media or WA", err)
+				}
+			})
+		}
+	}
+}
+
 func TestDraftRejectsIncompatibleDMQuoteBeforeSnapshotOrCommit(t *testing.T) {
 	for _, sender := range []string{"15550000003@s.whatsapp.net", "15550000001@s.whatsapp.net", "90001@lid"} {
 		t.Run(sender, func(t *testing.T) {

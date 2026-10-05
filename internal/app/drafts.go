@@ -209,8 +209,19 @@ func (a *App) WriteLocalDraft(ctx context.Context, request DraftWriteRequest, op
 		if len(quoted) == 0 {
 			return store.DraftEntry{}, store.DraftFailure("not_found", request.DraftID, request.RevisionID, "", nil)
 		}
+		// Unavailable content in either alias takes precedence over its type.
+		unsupported := false
 		for _, q := range quoted {
-			if q.Unavailable || q.Unsupported || q.Text == "" || q.SenderJID == "" {
+			if q.Unavailable {
+				return store.DraftEntry{}, &store.DraftValidationError{Field: "reply", Reason: "quote must have available text and known sender"}
+			}
+			unsupported = unsupported || q.Unsupported
+		}
+		if unsupported {
+			return store.DraftEntry{}, &store.DraftValidationError{Field: "reply.unsupported", Reason: "quoted content is not supported for draft replies"}
+		}
+		for _, q := range quoted {
+			if q.Text == "" || q.SenderJID == "" {
 				return store.DraftEntry{}, &store.DraftValidationError{Field: "reply", Reason: "quote must have available text and known sender"}
 			}
 			jid, err := store.NormalizeDraftTarget(q.SenderJID)

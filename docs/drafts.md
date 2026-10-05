@@ -36,6 +36,8 @@ Choose exactly one variant:
 
 Text/document may use `--reply-to MESSAGE_ID` for an existing local textual message in this exact chat or its verified alias. The revision freezes chat+real ID, sender identity, `from_me` and actual text. Missing/unknown sender, unavailable/purged/revoked/deleted text, unsupported media/buttons/reactions and divergent records with the same ID in verified aliases are rejected. Incoming DM quotes must match the peer through shared observed PN/LID facts; contradictory pairs or an observed own sender with `from_me=false` are rejected. Outgoing quotes must match own identity. Group quotes allow any valid user sender without claiming membership. Unmapped distinct identities cannot prove peer equality. All checks precede snapshot/commit. No arbitrary quote input or remote lookup exists. Later message edits do not replace the frozen quote.
 
+Unsupported quote content (media, buttons or reactions) uses fixed local guidance with `invalid_arguments` (exit 2), even when a caption and sender are present. Inspect the local message with `messages show --chat CHAT_JID --id MESSAGE_ID --agent --detail full`; choose a supported text quote or explicitly prepare complete create/update input without `--reply-to`. No quote is removed automatically. Unavailable/revoked/deleted/purged content in either verified alias takes precedence and keeps the existing generic refusal; unsupported guidance makes no claim about sender validity.
+
 CLI limits are 64 KiB per field, 256 KiB canonical payload (including JSON escaping), 200 mentions, and 100 MiB per file. Escaped vCard and quote fields also obey limits. These are CLI quotas, not verified WhatsApp limits. Effective defaults explicitly disable link preview, ephemeral mode/expiration and self targeting.
 
 The payload hash is SHA-256 over the UTF-8 prefix `wacli-draft-payload-v1`, one NUL byte, then deterministic canonical struct JSON with effective defaults, identity, canonical recipient, content, mentions and frozen quote. Revision IDs, timestamps, requested-input spelling and review/display metadata are outside this hash. Internal input rejects ambiguous unions, unknown/duplicate fields, malformed UTF-8, noncanonical encoding and nonfinite values. Hash equality neither authorizes sending nor proves a person read the preview.
@@ -43,6 +45,12 @@ The payload hash is SHA-256 over the UTF-8 prefix `wacli-draft-payload-v1`, one 
 ## Preview and document bytes
 
 Agent output preserves contract v1 and `source=local`, unknown freshness/completeness, and compact/full envelope caps (1 MiB / 8 MiB). Legacy `--json` includes the selected account and draft; `--full` selects full draft detail without agent mode. Compact cuts selected content/name fields at 512 Unicode code points and reports `truncated_fields`; identifiers, mentions, mappings, defaults and digest/size stay complete. Compact can suffice when all relevant fields are present; use full to recover truncated fields needed for review. Compact is not guaranteed to encode fewer bytes than full: truncation markers and recovery guidance can outweigh the omitted text near the cutoff. No read/approved state is recorded.
+
+When long text already requires complete review, request full detail directly to avoid a second query:
+
+```bash
+wacli --account personal draft create --to 15550000002@s.whatsapp.net --message-file ./long-text.txt --agent --detail full
+```
 
 For a single draft revision, `data.recovery` is the canonical complete guidance in agent output. When guidance is present, `meta.recovery` contains only `See data.recovery.`; neither field is emitted for untruncated text/contact revisions. Text/contact truncation guidance requests the exact full revision without document advice. Document guidance always requires separate byte inspection; compact also directs full recovery for the expected snapshot path and any truncated fields. Legacy JSON keeps complete guidance in `data.draft.recovery`, and human output keeps it in the displayed draft's `recovery`. List retains its separate summary-only guidance in `meta.recovery`.
 
