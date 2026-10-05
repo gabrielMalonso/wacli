@@ -46,7 +46,7 @@ func newContactsResolveCmd(flags *rootFlags) *cobra.Command {
 			}
 			defer closeApp(a, lk)
 
-			resolver, err := contactReadResolver(a)
+			resolver, err := contactReadResolver(ctx, a)
 			if err != nil {
 				return err
 			}
@@ -55,7 +55,11 @@ func newContactsResolveCmd(flags *rootFlags) *cobra.Command {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				results = append(results, resolveContactIdentity(ctx, resolver, arg))
+				result, err := resolveContactIdentity(ctx, resolver, arg)
+				if err != nil {
+					return err
+				}
+				results = append(results, result)
 			}
 			if err := ctx.Err(); err != nil {
 				return err
@@ -69,41 +73,49 @@ func newContactsResolveCmd(flags *rootFlags) *cobra.Command {
 	return cmd
 }
 
-func resolveContactIdentity(ctx context.Context, resolver app.LocalResolver, raw string) contactResolution {
+func resolveContactIdentity(ctx context.Context, resolver app.ContactResolver, raw string) (contactResolution, error) {
 	res := contactResolution{Input: raw}
 	if strings.Count(raw, "@") > 1 {
 		res.Error = fmt.Sprintf("invalid user JID %q: expected one @ separator", raw)
-		return res
+		return res, nil
 	}
 	jid, err := wa.ParseUserOrJID(raw)
 	if err != nil {
 		res.Error = err.Error()
-		return res
+		return res, nil
 	}
 	jid = jid.ToNonAD()
 	if (jid.Server == types.HiddenUserServer || jid.Server == types.DefaultUserServer) && (jid.User == "" || strings.IndexFunc(jid.User, func(r rune) bool { return r < '0' || r > '9' }) >= 0) {
 		res.Error = fmt.Sprintf("invalid user JID %q: expected a numeric user", raw)
-		return res
+		return res, nil
 	}
 	var pn, lid types.JID
 	switch jid.Server {
 	case types.HiddenUserServer:
 		lid = jid
 		if resolver != nil {
-			if mapped := resolver.ResolveLIDToPN(ctx, jid); mapped.Server == types.DefaultUserServer && mapped.User != "" {
+			mapped, err := resolver.ResolveLIDToPN(ctx, jid)
+			if err != nil {
+				return contactResolution{}, &localIdentityError{err}
+			}
+			if mapped.Server == types.DefaultUserServer && mapped.User != "" {
 				pn = mapped.ToNonAD()
 			}
 		}
 	case types.DefaultUserServer:
 		pn = jid
 		if resolver != nil {
-			if mapped := resolver.ResolvePNToLID(ctx, jid); mapped.Server == types.HiddenUserServer && mapped.User != "" {
+			mapped, err := resolver.ResolvePNToLID(ctx, jid)
+			if err != nil {
+				return contactResolution{}, &localIdentityError{err}
+			}
+			if mapped.Server == types.HiddenUserServer && mapped.User != "" {
 				lid = mapped.ToNonAD()
 			}
 		}
 	default:
 		res.Error = fmt.Sprintf("%s is not a user JID; groups and channels have no phone/LID pair", jid)
-		return res
+		return res, nil
 	}
 
 	if !lid.IsEmpty() {
@@ -120,7 +132,7 @@ func resolveContactIdentity(ctx context.Context, resolver app.LocalResolver, raw
 			res.Name = name
 		}
 	}
-	return res
+	return res, nil
 }
 
 func writeContactResolutions(w io.Writer, asJSON, fullOutput bool, results []contactResolution) error {

@@ -18,20 +18,20 @@ type fakeIdentityResolver struct {
 	names   map[types.JID]string
 }
 
-func (f fakeIdentityResolver) ResolveLIDToPN(_ context.Context, jid types.JID) types.JID {
+func (f fakeIdentityResolver) ResolveLIDToPN(_ context.Context, jid types.JID) (types.JID, error) {
 	if pn, ok := f.lidToPN[jid]; ok {
-		return pn
+		return pn, nil
 	}
-	return jid
+	return jid, nil
 }
 
-func (f fakeIdentityResolver) ResolvePNToLID(_ context.Context, jid types.JID) types.JID {
+func (f fakeIdentityResolver) ResolvePNToLID(_ context.Context, jid types.JID) (types.JID, error) {
 	for lid, pn := range f.lidToPN {
 		if pn == jid {
-			return lid
+			return lid, nil
 		}
 	}
-	return jid
+	return jid, nil
 }
 
 func (f fakeIdentityResolver) ResolveChatName(_ context.Context, jid types.JID, _ string) string {
@@ -65,9 +65,9 @@ func TestResolveContactIdentity(t *testing.T) {
 		{"group", "123456789@g.us", contactResolution{Error: "123456789@g.us is not a user JID; groups and channels have no phone/LID pair"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := resolveContactIdentity(context.Background(), resolver, tc.input)
+			got, err := resolveContactIdentity(context.Background(), resolver, tc.input)
 			tc.want.Input = tc.input
-			if got != tc.want {
+			if err != nil || got != tc.want {
 				t.Fatalf("resolve(%q) = %+v, want %+v", tc.input, got, tc.want)
 			}
 		})
@@ -75,15 +75,15 @@ func TestResolveContactIdentity(t *testing.T) {
 }
 
 func TestResolveContactIdentityWithoutSession(t *testing.T) {
-	got := resolveContactIdentity(context.Background(), nil, "100000000001@lid")
-	if got.Resolved || got.LID != "100000000001@lid" || got.JID != "" {
+	got, err := resolveContactIdentity(context.Background(), nil, "100000000001@lid")
+	if err != nil || got.Resolved || got.LID != "100000000001@lid" || got.JID != "" {
 		t.Fatalf("without a session store = %+v, want an unresolved LID", got)
 	}
 }
 
 func TestResolveContactIdentityRejectsGarbage(t *testing.T) {
-	got := resolveContactIdentity(context.Background(), fakeIdentityResolver{}, "not a number")
-	if got.Resolved || got.Error == "" {
+	got, err := resolveContactIdentity(context.Background(), fakeIdentityResolver{}, "not a number")
+	if err != nil || got.Resolved || got.Error == "" {
 		t.Fatalf("garbage input = %+v, want an error entry", got)
 	}
 }
@@ -179,8 +179,8 @@ func TestContactsResolveDoesNotCreateStore(t *testing.T) {
 
 func TestResolveContactIdentityRejectsMalformedUserJIDs(t *testing.T) {
 	for _, raw := range []string{"@lid", "@s.whatsapp.net", "abc@lid", "abc@s.whatsapp.net", "123@lid@lid"} {
-		got := resolveContactIdentity(context.Background(), nil, raw)
-		if got.Error == "" || got.Resolved {
+		got, err := resolveContactIdentity(context.Background(), nil, raw)
+		if err != nil || got.Error == "" || got.Resolved {
 			t.Errorf("resolve(%q) = %+v", raw, got)
 		}
 	}
