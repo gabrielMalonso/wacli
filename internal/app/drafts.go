@@ -221,7 +221,7 @@ func (a *App) WriteLocalDraft(ctx context.Context, request DraftWriteRequest, op
 			return store.DraftEntry{}, &store.DraftValidationError{Field: "reply.unsupported", Reason: "quoted content is not supported for draft replies"}
 		}
 		for _, q := range quoted {
-			if q.Text == "" || q.SenderJID == "" {
+			if strings.TrimSpace(q.Text) == "" || q.SenderJID == "" {
 				return store.DraftEntry{}, &store.DraftValidationError{Field: "reply", Reason: "quote must have available text and known sender"}
 			}
 			jid, err := store.NormalizeDraftTarget(q.SenderJID)

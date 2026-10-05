@@ -3,6 +3,7 @@
 package store
 
 import (
+	"bytes"
 	"path/filepath"
 	"testing"
 	"time"
@@ -224,4 +225,76 @@ func TestFTSInjectionPrevented(t *testing.T) {
 			t.Errorf("expected m1 for 'hello world', got %v", ms)
 		}
 	})
+}
+
+func TestFTSRawWhitespaceLifecycle(t *testing.T) {
+	db := openTestDB(t)
+	if !db.HasFTS() {
+		t.Fatal("expected FTS5")
+	}
+	chat := "15550000002@s.whatsapp.net"
+	raw := " \t\u00a0ação🙂\r\n"
+	caption := "\ncaption\t "
+	if err := db.UpsertChat(chat, "dm", "fixture", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMessage(UpsertMessageParams{ChatJID: chat, MsgID: "raw", Timestamp: time.Now(), Text: raw, MediaCaption: caption}); err != nil {
+		t.Fatal(err)
+	}
+	matches, err := db.SearchMessages(SearchMessagesParams{Query: "ação🙂", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatal("raw text was not searchable")
+	}
+	if !bytes.Equal([]byte(raw), []byte(matches[0].Text)) || !bytes.Equal([]byte(caption), []byte(matches[0].MediaCaption)) {
+		t.Error("FTS search lost raw whitespace")
+	}
+	var text, storedCaption string
+	if err := db.sql.QueryRow(`SELECT text,media_caption FROM messages_fts WHERE rowid=?`, matches[0].rowID).Scan(&text, &storedCaption); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal([]byte(raw), []byte(text)) || !bytes.Equal([]byte(caption), []byte(storedCaption)) {
+		t.Error("FTS index lost raw whitespace")
+	}
+	edited := "\tupdated🙂\u00a0\r\n"
+	if err := db.UpdateMessageText(chat, "raw", edited); err != nil {
+		t.Fatal(err)
+	}
+	matches, err = db.SearchMessages(SearchMessagesParams{Query: "updated🙂", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatal("edited raw text was not searchable")
+	}
+	if !bytes.Equal([]byte(edited), []byte(matches[0].Text)) {
+		t.Error("FTS edit lost raw whitespace")
+	}
+	if err := db.sql.QueryRow(`SELECT text,media_caption FROM messages_fts WHERE rowid=?`, matches[0].rowID).Scan(&text, &storedCaption); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal([]byte(edited), []byte(text)) || storedCaption != "" {
+		t.Error("FTS edit did not preserve raw text and clear caption")
+	}
+	if err := db.MarkMessageRevoked(chat, "raw"); err != nil {
+		t.Fatal(err)
+	}
+	if countRows(t, db.sql, "SELECT count(*) FROM messages_fts") != 0 {
+		t.Error("tombstone remained searchable")
+	}
+	if err := db.PurgeMessage(chat, "raw"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMessage(UpsertMessageParams{ChatJID: chat, MsgID: "raw", Timestamp: time.Now().Add(time.Second), Text: raw, MediaCaption: caption}); err != nil {
+		t.Fatal(err)
+	}
+	purged, err := db.GetMessage(chat, "raw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if purged.Text != "" || purged.MediaCaption != "" || purged.PayloadPurgedAt == nil || countRows(t, db.sql, "SELECT count(*) FROM messages_fts") != 0 {
+		t.Error("purged payload resurrected")
+	}
 }

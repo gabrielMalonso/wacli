@@ -96,7 +96,7 @@ func (d *DB) UpsertMessage(p UpsertMessageParams) error {
 		SenderName:      nullString(p.SenderName),
 		Ts:              unix(p.Timestamp),
 		FromMe:          boolToInt64(p.FromMe),
-		Text:            nullString(p.Text),
+		Text:            nullStringIfEmpty(p.Text),
 		DisplayText:     nullString(p.DisplayText),
 		QuotedMsgID:     nullString(p.QuotedMsgID),
 		QuotedSenderJid: nullString(p.QuotedSenderJID),
@@ -105,7 +105,7 @@ func (d *DB) UpsertMessage(p UpsertMessageParams) error {
 		ReactionToID:    nullString(p.ReactionToID),
 		ReactionEmoji:   nullString(p.ReactionEmoji),
 		MediaType:       nullString(p.MediaType),
-		MediaCaption:    nullString(p.MediaCaption),
+		MediaCaption:    nullStringIfEmpty(p.MediaCaption),
 		Filename:        nullString(p.Filename),
 		MimeType:        nullString(p.MimeType),
 		DirectPath:      nullString(p.DirectPath),
@@ -251,7 +251,7 @@ func (d *DB) MessageLocalMediaPaths(chatJID, msgID string) ([]string, error) {
 
 func (d *DB) UpdateMessageText(chatJID, msgID, text string) error {
 	n, err := d.q.UpdateMessageText(storeCtx(), storedb.UpdateMessageTextParams{
-		Text:        nullString(text),
+		Text:        nullStringIfEmpty(text),
 		DisplayText: nullString(text),
 		ChatJid:     strings.TrimSpace(chatJID),
 		MsgID:       strings.TrimSpace(msgID),

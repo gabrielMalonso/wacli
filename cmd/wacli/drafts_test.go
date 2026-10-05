@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openclaw/wacli/internal/app"
 	"github.com/openclaw/wacli/internal/lock"
 	"github.com/openclaw/wacli/internal/out"
 	"github.com/openclaw/wacli/internal/store"
@@ -320,5 +321,80 @@ func TestDraftPersistedCorruptionUsesStoreBoundaryForShowAndDiscard(t *testing.T
 	var preserved *store.DraftValidationError
 	if !errors.As(err, &preserved) || classifyDraftError(err).ExitCode != 4 {
 		t.Fatal("lost store provenance", err)
+	}
+}
+
+func TestDraftCreateStoreLockedGuidance(t *testing.T) {
+	t.Setenv("WACLI_READONLY", "0")
+	dir := seedLocalReadStore(t)
+	lk, err := lock.Acquire(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lk.Release()
+	stdout, stderr, err := runAgentTest(t, "--agent", "--store", dir, "--timeout", "1s", "--lock-wait", "0", "draft", "create", "--to", localReadPN, "--message", "synthetic card")
+	var classified *out.AgentError
+	if !errors.As(err, &classified) || commandExitCode(err) != 4 || stdout != "" || !lock.IsLocked(classified.Cause) {
+		t.Fatal("LOCK code/exit/cause changed", err)
+	}
+	env := decodeAgentTest(t, stderr)
+	if env.Error.Code != "store_locked" || env.Error.Draft != nil || env.Error.Outbound != nil || env.Meta.Source != "local" || env.Account.StoreRef == nil || *env.Account.StoreRef != dir {
+		t.Fatal("LOCK correlation/source changed")
+	}
+	if !strings.Contains(env.Error.Message, "locked") || !strings.Contains(env.Error.Recovery, "writer to finish") || !strings.Contains(env.Error.Recovery, "explicitly") || strings.Contains(env.Error.Recovery, "media roots") {
+		t.Error("missing specific LOCK guidance")
+	}
+	db, err := store.OpenReadOnly(filepath.Join(dir, "wacli.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := db.ListDrafts(t.Context(), dir, true, 10, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 0 {
+		t.Fatal("this fixture created a draft while locked")
+	}
+	if err := lk.Release(); err != nil {
+		t.Fatal(err)
+	}
+	// A new explicit request succeeds after release; the failed action was not retried.
+	dto, stderr, err := draftCLI(t, dir, "create", "--to", localReadPN, "--message", "synthetic card")
+	if err != nil || dto.ID == "" {
+		t.Fatal("explicit preparation after release", err, stderr)
+	}
+}
+
+func TestDraftErrorLockPrecedenceAndUncertainty(t *testing.T) {
+	id, rid, hash := strings.Repeat("a", 32), strings.Repeat("b", 32), strings.Repeat("c", 64)
+	uncertain := store.DraftFailure("local_write_uncertain", id, rid, hash, lock.ErrLocked)
+	for _, tc := range []struct {
+		name  string
+		cause error
+		code  string
+		exit  int
+	}{
+		{"lock", lock.ErrLocked, "store_locked", 4},
+		{"snapshot before lock", &app.DraftSnapshotError{Stage: "publish", Cause: lock.ErrLocked}, "document_unavailable", 4},
+		{"uncertain before lock", uncertain, "local_write_uncertain", 1},
+		{"readonly before lock", store.DraftFailure("read_only", id, rid, hash, lock.ErrLocked), "read_only", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyDraftError(tc.cause)
+			if got.Code != tc.code || got.ExitCode != tc.exit || got.Cause != tc.cause {
+				t.Fatal("classification/cause changed")
+			}
+			if tc.cause == uncertain {
+				if got.Draft == nil || got.Draft.DraftID != id || got.Draft.RevisionID != rid || got.Draft.Hash != hash || !strings.Contains(got.Message, "uncertain") || !strings.Contains(got.Message, "do not replay automatically") {
+					t.Fatal("uncertainty/correlation lost")
+				}
+			}
+			if tc.code == "document_unavailable" && strings.Contains(got.Recovery, "writer to finish") {
+				t.Error("snapshot failure received LOCK guidance")
+			}
+		})
 	}
 }

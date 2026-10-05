@@ -126,7 +126,13 @@ func classifyDraftError(err error) *out.AgentError {
 		if errors.As(err, &snapshot) {
 			code = "document_unavailable"
 		}
-		return &out.AgentError{Code: code, Message: "Selected local draft archive, identity or document is unavailable.", Recovery: "Inspect the selected local store and media roots without connecting; retained snapshots may remain after preparation failures.", ExitCode: 4, Cause: err}
+		message := "Selected local draft archive, identity or document is unavailable."
+		recovery := "Inspect the selected local store and media roots without connecting; retained snapshots may remain after preparation failures."
+		if code == "store_locked" {
+			message = "Selected local store is locked by a writer."
+			recovery = "Wait for the current writer to finish; inspect drafts and the intended result before explicitly requesting the action again."
+		}
+		return &out.AgentError{Code: code, Message: message, Recovery: recovery, ExitCode: 4, Cause: err}
 	}
 	exit := 1
 	message := "Local draft write has an uncertain result; do not replay automatically."

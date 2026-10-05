@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -610,5 +611,72 @@ func TestAgentSelectionStaysWithResolvedAccount(t *testing.T) {
 	}
 	if opened != first || flags.agentAccount.StoreRef == nil || *flags.agentAccount.StoreRef != opened {
 		t.Fatalf("selection changed between envelope and opener: first=%s opened=%s", first, opened)
+	}
+}
+
+func TestAgentMessageRawWhitespaceAndLegacyJSON(t *testing.T) {
+	dir := seedLocalReadStore(t)
+	db, err := store.Open(filepath.Join(dir, "wacli.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := "\t\u00a0ação🙂\r\n"
+	caption := "\ncaption\t "
+	if err := db.UpsertMessage(store.UpsertMessageParams{ChatJID: localReadLID, MsgID: "raw", Timestamp: time.Now(), Text: raw, MediaCaption: caption, MediaType: "document", DisplayText: " Sent document "}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	lk, err := lock.Acquire(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lk.Release()
+	before := snapshotLocalStore(t, dir)
+	args := []string{"--store", dir, "--read-only", "messages", "show", "--chat", localReadLID, "--id", "raw"}
+	for _, detail := range []string{"full", "compact"} {
+		stdout, stderr, err := runAgentTest(t, append(args, "--agent", "--detail", detail)...)
+		if err != nil {
+			t.Fatal(err, stderr)
+		}
+		env := decodeAgentTest(t, stdout)
+		var dto agentMessage
+		if err := json.Unmarshal(env.Data, &dto); err != nil {
+			t.Fatal(err)
+		}
+		if dto.Text != "Sent document" || dto.TextTruncated {
+			t.Error("presentation changed")
+		}
+		if detail == "full" {
+			if dto.Full == nil {
+				t.Fatal("full content missing")
+			}
+			if !bytes.Equal([]byte(raw), []byte(dto.Full.Content)) || !bytes.Equal([]byte(caption), []byte(dto.Full.Caption)) {
+				t.Error("full content/caption lost raw whitespace")
+			}
+		} else if dto.Full != nil {
+			t.Error("compact output gained raw fields")
+		}
+	}
+	stdout, stderr, err := runAgentTest(t, append(args, "--json")...)
+	if err != nil {
+		t.Fatal(err, stderr)
+	}
+	var legacy struct {
+		Success bool
+		Data    store.Message
+	}
+	if err := json.Unmarshal([]byte(stdout), &legacy); err != nil || !legacy.Success {
+		t.Fatal("invalid legacy envelope", err)
+	}
+	if !bytes.Equal([]byte(raw), []byte(legacy.Data.Text)) || !bytes.Equal([]byte(caption), []byte(legacy.Data.MediaCaption)) {
+		t.Error("legacy JSON lost raw whitespace")
+	}
+	if messageText(legacy.Data) != "Sent document" || messageRawText(legacy.Data) != strings.TrimSpace(raw) {
+		t.Error("human presentation changed")
+	}
+	if !reflect.DeepEqual(before, snapshotLocalStore(t, dir)) {
+		t.Error("read under writer LOCK changed archive")
 	}
 }

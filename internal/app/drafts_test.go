@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -328,6 +329,52 @@ func TestDraftRejectsIncompatibleDMQuoteBeforeSnapshotOrCommit(t *testing.T) {
 			page, err := a.DB().ListDrafts(context.Background(), a.StoreDir(), true, 20, "")
 			if err != nil || len(page.Items) != 0 {
 				t.Fatal("draft committed", err)
+			}
+		})
+	}
+}
+
+func TestDraftQuoteRawWhitespaceAndAliasDivergence(t *testing.T) {
+	for _, scenario := range []string{"valid", "whitespace only", "edge divergence"} {
+		t.Run(scenario, func(t *testing.T) {
+			a := draftAppFixture(t)
+			raw := "\t\u00a0quoted🙂\r\n"
+			if scenario == "whitespace only" {
+				raw = " \t\u00a0"
+			}
+			for _, chat := range []string{"15550000002@s.whatsapp.net", "90002@lid"} {
+				if err := a.DB().UpsertChat(chat, "dm", "fixture", time.Unix(1, 0)); err != nil {
+					t.Fatal(err)
+				}
+				text := raw
+				if scenario == "edge divergence" && chat == "90002@lid" {
+					text = strings.TrimSpace(raw)
+				}
+				if err := a.DB().UpsertMessage(store.UpsertMessageParams{ChatJID: chat, MsgID: "quoted", SenderJID: "90002@lid", Text: text, Timestamp: time.Unix(1, 0)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			req := draftAppRequest(t, a, DraftInput{To: "90002@lid", Message: draftTextPointer("reply"), ReplyTo: "quoted"})
+			entry, err := a.WriteLocalDraft(t.Context(), req, os.Open)
+			if scenario != "valid" {
+				var validation *store.DraftValidationError
+				if !errors.As(err, &validation) || validation.Field != "reply" {
+					t.Fatal("unsupported empty/divergent quote accepted", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal([]byte(raw), []byte(entry.Revision.Payload().Data().Reply.Text)) {
+				t.Error("valid quote lost raw whitespace")
+			}
+			retained, err := a.DB().ReadDraft(t.Context(), req.DraftID, req.RevisionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(entry.Revision.Payload().CanonicalJSON(), retained.Revision.Payload().CanonicalJSON()) || entry.Revision.Payload().Hash() != retained.Revision.Payload().Hash() {
+				t.Error("frozen quote payload/hash changed")
 			}
 		})
 	}
