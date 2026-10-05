@@ -8,6 +8,8 @@ Read when: sending text, files, stickers, locations, polls, status broadcasts, q
 
 When `sync --follow` is already running for the same store, send commands delegate the send to that running process instead of opening a second WhatsApp session. This keeps scripts usable while continuous sync owns the store lock.
 
+All owner IPC requests share a **4 MiB inclusive input limit**, applied before buffering or JSON decoding regardless of field order or whitespace. It counts encoded bytes through the first JSON value, including leading whitespace; a following newline or trailing values are not part of that count. Transport reads, including read-ahead, consume at most 4 MiB plus one overflow-detection byte per connection. Oversized or incomplete requests never reach an executor. Legacy requests that previously accepted arbitrarily large envelopes now receive a bounded refusal. This bounds input consumption, not process RSS or authorization. Existing smaller typed limits, validation, and each family's acceptance of unknown/duplicate fields, trailing values and newline framing remain unchanged; no universal newline, EOF wait or half-close is required. File requests carry paths and metadata, not document bytes. Result correlation, uncertainty, application replay restrictions and SDK retry behavior are unchanged.
+
 ## Commands
 
 ```bash

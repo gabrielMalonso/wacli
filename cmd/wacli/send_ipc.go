@@ -26,6 +26,9 @@ const (
 	sendDelegateVersion       = 1
 	sendDelegateSocketName    = ".send.sock"
 	sendDelegateResponseGrace = 5 * time.Second
+	// Count bytes through the first JSON value, including leading whitespace.
+	// One extra byte detects overflow; trailing bytes keep their existing semantics.
+	sendDelegateMaxRequestBytes = 4 << 20
 	// sendDelegateReplyMargin is reserved before the caller's deadline so a
 	// refusal can reach the caller before it gives up on the connection. An
 	// explicit "not sent" is only useful if it arrives.
@@ -343,9 +346,10 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Minute))
 
 	var req sendDelegateRequest
-	// Typed envelopes start with their payload field. Bound their decoding
-	// while preserving existing legacy decoder semantics.
-	buffered := bufio.NewReader(conn)
+	// Bound input before read-ahead, retaining smaller typed limits and each
+	// family's existing field and framing semantics within this common budget.
+	input := &io.LimitedReader{R: conn, N: sendDelegateMaxRequestBytes + 1}
+	buffered := bufio.NewReader(input)
 	prefix := []byte(`{"outbound":`)
 	head, _ := buffered.Peek(len(prefix))
 	outboundEnvelope := bytes.Equal(head, prefix)
@@ -379,7 +383,11 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 	if outboundEnvelope || chatStateEnvelope || cleanupEnvelope {
 		requestDecoder.DisallowUnknownFields()
 	}
-	if err := requestDecoder.Decode(&req); err != nil {
+	decodeErr := requestDecoder.Decode(&req)
+	if requestDecoder.InputOffset() > sendDelegateMaxRequestBytes || decodeErr != nil && requestDecoder.InputOffset() == 0 && input.N == 0 {
+		decodeErr = fmt.Errorf("send delegate request exceeds 4 MiB input limit")
+	}
+	if err := decodeErr; err != nil {
 		if chatStateEnvelope {
 			_ = json.NewEncoder(conn).Encode(sendDelegateResponse{Error: "invalid agent chat state frame"})
 			return
