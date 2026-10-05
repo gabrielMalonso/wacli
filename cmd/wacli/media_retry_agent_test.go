@@ -162,7 +162,9 @@ func TestAgentMediaRetryOwnerLockNeverTouchesIPCOrWA(t *testing.T) {
 	}()
 	output := filepath.Join(t.TempDir(), "nested", "file")
 	stdout, stderr, err := runAgentTest(t, append(mediaFixtureArgs(dir, "retry"), "--output", output)...)
-	if err == nil || stdout != "" || decodeAgentTest(t, stderr).Error.Code != "store_locked" {
+	env := decodeAgentTest(t, stderr)
+	var typed *out.AgentError
+	if err == nil || stdout != "" || !errors.As(err, &typed) || typed.ExitCode != 4 || commandExitCode(err) != 4 || env.Error.Code != "store_locked" || env.Meta.Source != "live" || env.Error.Media == nil || env.Error.Media.FilePublication != "not_written" || env.Error.Media.Recorded {
 		t.Fatalf("%v %s %s", err, stdout, stderr)
 	}
 	_ = listener.Close()
@@ -410,7 +412,7 @@ func TestAgentMediaRetryProductionBinary(t *testing.T) {
 		exit       int
 	}{
 		{"readonly", "read_only", 2}, {"bulk", "invalid_arguments", 2}, {"missing", "store_unavailable", 4},
-		{"old", "store_unavailable", 4}, {"owner_lock", "store_locked", 1}, {"cache", "", 0},
+		{"old", "store_unavailable", 4}, {"owner_lock", "store_locked", 4}, {"cache", "", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir, data := seedAgentRetry(t, tc.name == "cache")
@@ -459,6 +461,9 @@ func TestAgentMediaRetryProductionBinary(t *testing.T) {
 				env := decodeAgentTest(t, stderr.String())
 				if stdout.Len() != 0 || env.Error.Code != tc.code || env.Meta.Source != "live" {
 					t.Fatalf("%s %s", stdout.String(), stderr.String())
+				}
+				if tc.name == "owner_lock" && (env.Error.Media == nil || env.Error.Media.FilePublication != "not_written" || env.Error.Media.Recorded) {
+					t.Fatalf("LOCK refusal lost effect knowledge: %s", stderr.String())
 				}
 				if tc.name != "missing" && !reflect.DeepEqual(before, snapshotLocalStore(t, dir)) {
 					t.Fatal("binary failure modified store")

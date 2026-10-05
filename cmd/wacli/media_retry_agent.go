@@ -222,7 +222,7 @@ func classifyMediaRetryCommandError(err error) *out.AgentError {
 	case "store_failed", "session_unavailable", "not_authenticated":
 		exit = 4
 	case "store_locked":
-		message = "Selected archive has an active writer; exact media recovery cannot run alongside it."
+		message, exit = "Selected archive has an active writer; exact media recovery cannot run alongside it.", 4
 	}
 	return &out.AgentError{Code: code, Message: message, ExitCode: exit, Cause: err}
 }
