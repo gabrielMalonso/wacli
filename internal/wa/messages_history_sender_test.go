@@ -1,6 +1,7 @@
 package wa
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -38,6 +39,34 @@ func TestParseHistoryMessageAuthorAssertions(t *testing.T) {
 				t.Fatalf("parsed: %+v", pm)
 			}
 		})
+	}
+}
+
+func TestParseHistoryMessageAuthorMetadataStaysInternal(t *testing.T) {
+	const peer = "15550000002@s.whatsapp.net"
+	pm := ParseHistoryMessage(peer, &waWeb.WebMessageInfo{
+		Key:     &waCommon.MessageKey{FromMe: proto.Bool(false), Participant: proto.String("15550000001@s.whatsapp.net")},
+		Message: &waE2E.Message{DeviceSentMessage: &waE2E.DeviceSentMessage{DestinationJID: proto.String(peer), Message: &waE2E.Message{Conversation: proto.String("synthetic")}}},
+	})
+	pm.SenderCanonical = true
+	if len(pm.SenderAssertions) == 0 || !pm.DeviceSent {
+		t.Fatal("fixture lost internal metadata")
+	}
+	raw, err := json.Marshal(pm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"SenderAssertions", "DeviceSent", "SenderCanonical"} {
+		if _, leaked := payload[key]; leaked {
+			t.Fatalf("legacy webhook would expose %s", key)
+		}
+	}
+	if string(payload["FromMe"]) != "true" || string(payload["Text"]) != `"synthetic"` {
+		t.Fatal("public content changed")
 	}
 }
 

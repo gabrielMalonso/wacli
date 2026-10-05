@@ -42,7 +42,8 @@ func (a *App) historySenderAccount(ctx context.Context) historySenderAccount {
 			continue
 		}
 		jid, err := historyUserJID(field.raw)
-		if err != nil || jid.Server != field.server || (field.server == types.DefaultUserServer && store.ValidateOutboundAccount(jid.String()) != nil) {
+		_, normalizedErr := store.NormalizeDraftTarget(jid.String())
+		if err != nil || jid.Server != field.server || normalizedErr != nil {
 			account.err = fmt.Errorf("invalid public history account")
 			return account
 		}

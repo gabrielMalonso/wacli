@@ -146,6 +146,7 @@ func TestHistorySenderImportMatrix(t *testing.T) {
 		{name: "own PN absent", chat: historyPeerLID, fromMe: true, configure: func(f *historySenderWA) { f.pn = "" }},
 		{name: "own LID absent", chat: historyPeerLID, fromMe: true, wantSender: historyOwnPN, configure: func(f *historySenderWA) { f.lid = "" }},
 		{name: "invalid own", chat: historyPeerPN, fromMe: true, refused: true, configure: func(f *historySenderWA) { f.pn = "@s.whatsapp.net" }},
+		{name: "invalid own LID", chat: historyPeerPN, fromMe: true, refused: true, configure: func(f *historySenderWA) { f.lid = "not-a-number@lid" }},
 		{name: "contradictory own map", chat: historyPeerPN, fromMe: true, refused: true, configure: func(f *historySenderWA) {
 			l, _ := types.ParseJID(historyOwnLID)
 			p, _ := types.ParseJID(historyPeerPN)

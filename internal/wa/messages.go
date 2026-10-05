@@ -77,11 +77,11 @@ type ParsedMessage struct {
 	SenderJID string
 	// SenderAssertions retains explicit authors through extraction so history
 	// imports can check them against public account facts after normalization.
-	SenderAssertions []string
-	DeviceSent       bool
+	SenderAssertions []string `json:"-"`
+	DeviceSent       bool     `json:"-"`
 	// SenderCanonical means the importer already checked any PN/LID conversion.
 	// Persistence must preserve it instead of doing another best-effort lookup.
-	SenderCanonical  bool
+	SenderCanonical  bool `json:"-"`
 	Timestamp        time.Time
 	FromMe           bool
 	Text             string
