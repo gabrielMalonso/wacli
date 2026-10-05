@@ -259,7 +259,7 @@ func TestHistorySyncStoresPollVoteBeforeCreation(t *testing.T) {
 	a.wa = f
 
 	chat := types.JID{User: "555", Server: types.DefaultUserServer}
-	voter := types.JID{User: "777", Server: types.DefaultUserServer}
+	voter := chat // An incoming DM vote is authored by its peer.
 	pollMsgID := "POLL-HIST-ORDER"
 	created := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
 	f.decryptPollVoteFunc = func(_ *events.Message) (*waE2E.PollVoteMessage, error) {

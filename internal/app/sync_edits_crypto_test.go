@@ -32,6 +32,9 @@ type cryptoEditWA struct {
 	client *whatsmeow.Client
 }
 
+func (f *cryptoEditWA) LinkedJID() string { return f.client.Store.GetJID().ToNonAD().String() }
+func (f *cryptoEditWA) LinkedLID() string { return f.client.Store.GetLID().ToNonAD().String() }
+
 func (f *cryptoEditWA) DecryptSecretEncryptedMessage(ctx context.Context, evt *events.Message) (*waE2E.Message, error) {
 	return f.client.DecryptSecretEncryptedMessage(ctx, evt)
 }

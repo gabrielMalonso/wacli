@@ -465,7 +465,10 @@ func (a *App) storeParsedMessage(ctx context.Context, pm wa.ParsedMessage) error
 	senderJID := pm.SenderJID
 	if pm.SenderJID != "" {
 		if jid, err := types.ParseJID(pm.SenderJID); err == nil {
-			contactJID := a.canonicalStoreJID(ctx, jid)
+			contactJID := jid
+			if !pm.SenderCanonical {
+				contactJID = a.canonicalStoreJID(ctx, jid)
+			}
 			senderJID = contactJID.String()
 			if info, err := a.wa.GetContact(ctx, contactJID); err == nil {
 				if name := wa.BestContactName(info); name != "" {

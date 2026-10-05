@@ -711,6 +711,7 @@ func (a *App) handleHistorySync(ctx context.Context, opts SyncOptions, v *events
 	defer unhandledWarnings.flush(a)
 	a.emitOrPrint("history_sync", map[string]any{"conversations": len(v.Data.Conversations)}, "\nProcessing history sync (%d conversations)...\n", len(v.Data.Conversations))
 	a.storeHistoryCallLogRecords(ctx, v, lastEvent)
+	account := a.historySenderAccount(ctx)
 	for _, conv := range v.Data.Conversations {
 		lastEvent.Store(nowUTC().UnixNano())
 		chatID := strings.TrimSpace(conv.GetID())
@@ -728,6 +729,7 @@ func (a *App) handleHistorySync(ctx context.Context, opts SyncOptions, v *events
 				opts.outboundHistory.historyEcho(chatID, m.Message)
 			}
 			pm := wa.ParseHistoryMessage(chatID, m.Message)
+			assertions := pm.SenderAssertions
 			if pm.ID == "" || pm.Chat.IsEmpty() {
 				continue
 			}
@@ -767,10 +769,35 @@ func (a *App) handleHistorySync(ctx context.Context, opts SyncOptions, v *events
 			}
 			storedPM := pm
 			storedPM.UnhandledPayload = ""
-			if err := a.storeParsedMessageForSync(ctx, storedPM, limits...); err == nil {
+			// Poll/secret-edit normalization may replace pm. Keep the original
+			// explicit authors and check the final result before persistence.
+			assertions = append(assertions, pm.SenderAssertions...)
+			if pm.SenderJID != "" {
+				assertions = append(assertions, pm.SenderJID)
+			}
+			sender, storeErr := a.historyMessageSender(ctx, account, pm, assertions)
+			if !pm.Revoked && !pm.DeviceSent && pm.FromMe != m.Message.GetKey().GetFromMe() {
+				storeErr = fmt.Errorf("history edit changed author direction")
+			}
+			storedPM.SenderJID = sender
+			storedPM.SenderCanonical = true
+			if pm.Call != nil {
+				call := *pm.Call
+				call.SenderJID = sender
+				storedPM.Call = &call
+			}
+			if storeErr == nil {
+				storeErr = a.retainHistoryMessageSender(ctx, storedPM)
+			}
+			if storeErr == nil {
+				storeErr = a.storeParsedMessageForSync(ctx, storedPM, limits...)
+			} else {
+				a.emitWarning("history_author_unavailable", "history message was not imported because its author could not be verified", map[string]any{"message_id": pm.ID})
+			}
+			if err := storeErr; err == nil {
 				unhandledWarnings.observe(a, pm)
 				a.emitSyncProgress(messagesStored.Add(1))
-				if pm.Poll != nil || pm.PollAdd != nil || pm.PollVote != nil {
+				if sender != "" && (pm.Poll != nil || pm.PollAdd != nil || pm.PollVote != nil) {
 					pendingPolls = append(pendingPolls, historyPollSideEffect{pm: pm, evt: pollEvt, hist: m.Message})
 				}
 			} else {
@@ -782,7 +809,7 @@ func (a *App) handleHistorySync(ctx context.Context, opts SyncOptions, v *events
 					return
 				}
 			}
-			if opts.DownloadMedia && pm.Media != nil && pm.ID != "" {
+			if storeErr == nil && opts.DownloadMedia && pm.Media != nil && pm.ID != "" {
 				enqueueMedia(canonicalJIDString(a.canonicalStoreJID(ctx, pm.Chat)), pm.ID)
 			}
 		}

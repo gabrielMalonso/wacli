@@ -19,6 +19,30 @@ wacli history backfill --chat JID [--count 50] [--requests N] [--wait 1m] [--idl
 - `blocked` / `no_local_anchor` chats have no local message yet; run `wacli sync` first.
 - `history fill --dry-run` lists matching ready chats that would be selected for a future multi-chat fill workflow. It does not connect to WhatsApp or write state.
 
+## Imported authors and retained history
+
+Newly imported own messages use the observed local account's public PN, never
+the DM recipient as a sender fallback. Without that account identity, the sender
+remains unknown. Incoming groups without an author also remain unknown. Explicit
+participants and original self authors must agree with the final message author;
+PN/LID equivalence needs a coherent local observation. Conflicts or identity lookup
+errors refuse that message's import. Content, stars, edits and SDK crypto identities
+retain their existing handling, and draft quotes still require a known, compatible
+sender.
+
+An unknown-author replay cannot replace an existing row with a retained sender:
+the whole row is preserved, without certifying its old attribution. A replay with
+proven authorship may update eligible rows under the existing upsert rules; newer
+content, edits, tombstones and purge protections remain unchanged. Divergent
+PN/LID quote records continue to be refused.
+
+This correction does not repair all previously imported senders. Existing records
+remain pending separate review, including protected rows and restored archives.
+`from_me` with sender equal to chat is only a candidate for review, not proof of
+the original account. Replay requires an available source, proven historical
+account/aliases, and explicitly authorized chats/IDs/windows. No migration, broad
+scan, automatic repair, or changes to frozen draft revisions are performed.
+
 ## Limits
 
 - `--count` defaults to 50 and must be at most 500.

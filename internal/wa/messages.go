@@ -72,9 +72,16 @@ type PollAddOptionRef struct {
 }
 
 type ParsedMessage struct {
-	Chat             types.JID
-	ID               string
-	SenderJID        string
+	Chat      types.JID
+	ID        string
+	SenderJID string
+	// SenderAssertions retains explicit authors through extraction so history
+	// imports can check them against public account facts after normalization.
+	SenderAssertions []string
+	DeviceSent       bool
+	// SenderCanonical means the importer already checked any PN/LID conversion.
+	// Persistence must preserve it instead of doing another best-effort lookup.
+	SenderCanonical  bool
 	Timestamp        time.Time
 	FromMe           bool
 	Text             string
@@ -145,13 +152,34 @@ func ParseHistoryMessage(chatJID string, hist *waProto.WebMessageInfo) ParsedMes
 	if sender == "" {
 		sender = strings.TrimSpace(hist.GetKey().GetParticipant())
 	}
-	if sender == "" {
-		sender = strings.TrimSpace(hist.GetKey().GetRemoteJID())
+	for _, author := range []string{hist.GetParticipant(), hist.GetKey().GetParticipant()} {
+		if author = strings.TrimSpace(author); author != "" {
+			pm.SenderAssertions = append(pm.SenderAssertions, author)
+		}
+	}
+	if sender == "" && !pm.FromMe && (chat.Server == types.DefaultUserServer || chat.Server == types.HiddenUserServer) {
+		sender = chat.String()
 	}
 	pm.SenderJID = sender
 
 	if hist.GetMessage() != nil {
 		markUnhandledPayload(extractWAProto(hist.GetMessage(), &pm), &pm)
+	}
+	// FromMe may change while unwrapping device-sent messages or protocol keys.
+	// Explicit authors remain assertions; only the importer's account can prove
+	// an own sender. A remote DM/group JID never supplies that proof.
+	if pm.FromMe {
+		pm.SenderJID = ""
+		if !pm.Revoked {
+			if author := strings.TrimSpace(hist.GetOriginalSelfAuthorUserJIDString()); author != "" {
+				pm.SenderAssertions = append(pm.SenderAssertions, author)
+			}
+		}
+	} else if pm.Revoked && len(pm.SenderAssertions) == 0 {
+		pm.SenderJID = ""
+		if pm.Chat.Server == types.DefaultUserServer || pm.Chat.Server == types.HiddenUserServer {
+			pm.SenderJID = pm.Chat.String()
+		}
 	}
 	return pm
 }
@@ -276,6 +304,7 @@ func applyDeviceSentDestination(destination string, pm *ParsedMessage) {
 		return
 	}
 	pm.FromMe = true
+	pm.DeviceSent = true
 	if chat, err := types.ParseJID(strings.TrimSpace(destination)); err == nil && !chat.IsEmpty() {
 		pm.Chat = chat
 	}
@@ -296,6 +325,9 @@ func extractProtocolMutation(m *waProto.Message, pm *ParsedMessage) (*waProto.Me
 		if key == nil {
 			return nil, false
 		}
+		// A revoke can target another author's message. Its key identifies the
+		// target; envelope authors must not be confused with the target author.
+		pm.SenderAssertions = nil
 		applyProtocolKey(key, pm)
 		pm.Text = ""
 		pm.Media = nil
@@ -319,6 +351,7 @@ func applyProtocolKey(key *waProto.MessageKey, pm *ParsedMessage) {
 		}
 	}
 	if participant := strings.TrimSpace(key.GetParticipant()); participant != "" {
+		pm.SenderAssertions = append(pm.SenderAssertions, participant)
 		pm.SenderJID = participant
 	}
 	if key.FromMe != nil {
