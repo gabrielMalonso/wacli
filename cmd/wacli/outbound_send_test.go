@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net"
@@ -51,6 +52,67 @@ func TestOutboundSendPreflightZeroStoreEffects(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatal("env guard store effect", err)
+	}
+}
+
+func TestOutboundSendUnavailableArchiveRetainsExit(t *testing.T) {
+	for _, state := range []string{"absent", "incompatible", "corrupt"} {
+		t.Run(state, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "archive")
+			if state == "incompatible" {
+				db, err := store.Open(filepath.Join(dir, "wacli.db"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := db.Close(); err != nil {
+					t.Fatal(err)
+				}
+				fixture, err := sql.Open("sqlite3", filepath.Join(dir, "wacli.db"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer fixture.Close()
+				if _, err := fixture.Exec("UPDATE schema_migrations SET version=-version WHERE version=(SELECT MAX(version) FROM schema_migrations)"); err != nil {
+					t.Fatal(err)
+				}
+				if err := fixture.Close(); err != nil {
+					t.Fatal(err)
+				}
+			} else if state == "corrupt" {
+				if err := os.Mkdir(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "wacli.db"), []byte("SYNTHETIC_CORRUPT_ARCHIVE"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			args := []string{"--agent", "--store", dir, "outbound", "send", strings.Repeat("a", 32), "--revision", strings.Repeat("b", 32), "--expect-hash", strings.Repeat("c", 64), "--key", "fixture"}
+			stdout, stderr, err := runAgentTest(t, args...)
+			envelope := decodeAgentTest(t, stderr)
+			if stdout != "" || commandExitCode(err) != 4 || envelope.Error.Code != "store_unavailable" || envelope.Meta.Source != "live" {
+				t.Fatal(stdout, stderr, err)
+			}
+			o := envelope.Error.Outbound
+			if o == nil || o.Phase != "preflight" || o.AttemptResult != "not_dispatched" || o.KnownResult != "not_dispatched" || o.Persistence != "unconfirmed" {
+				t.Fatal("changed preflight knowledge", stderr)
+			}
+			for _, name := range []string{"LOCK", "session.db"} {
+				if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+					t.Fatal("preflight effect", name, err)
+				}
+			}
+			if state == "absent" {
+				if _, err := os.Stat(dir); !os.IsNotExist(err) {
+					t.Fatal("preflight initialized archive", err)
+				}
+			}
+		})
+	}
+	cause := errors.New("SYNTHETIC_INTERNAL_CAUSE")
+	original := &out.AgentError{Code: "store_unavailable", Message: "unavailable", ExitCode: 4, Cause: cause}
+	classified := classifyOutboundActionError(original, nil)
+	if classified.ExitCode != 4 || classified.Code != original.Code || !errors.Is(classified, cause) {
+		t.Fatalf("typed preflight changed: %+v", classified)
 	}
 }
 
