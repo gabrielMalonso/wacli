@@ -41,3 +41,18 @@ WACLI_CONTACT_QUERY_PLAN=1 go test ./internal/app -run '^TestContactReadQueryPla
 ```
 
 These diagnostics are opt-in and never appear in CLI responses. The standard plain/FTS tests cover differential identity/metadata matching, >2 static pages, source ties, unavailable/corrupt mappings, semantic scope checks before matching, live changes, cancellation/connection closure and public-column-only reads. `TestContactsBinaryFixturePages` can also run against an explicitly supplied plain/FTS CLI via `WACLI_CONTACT_E2E_BIN`, using only synthetic stores.
+
+## Reusing streaming Scan destinations
+
+A subsequent contact-reader change moves the `rows.Scan` destinations outside the row loop and resets the complete `store.Contact` before every scan. Rows with zero or negative timestamps must keep their zero `UpdatedAt`, independently of the preceding row. The query, UDFs, canonical merge, retained heap, full textual cursor keys and live-read semantics are unchanged.
+
+Synthetic measurements on October 5, 2026 used the same toolchain/CPU and `seedContactBenchmark` fixture described above: 10k/100k identities, 15k/150k raw rows, page 20 and 21 retained candidate slots. Each current/candidate pair read the same App/fixture once (`benchtime=1x`); a second run reversed their order. Search used `Fixture`. A test-only copy of the original reader differed only in Scan destination placement and reset. Full differential comparisons covered every returned contact field, `has_more` and the exact next-cursor string across complete paginations, including PN/LID/AD sources, hidden-name/alias matching and zero/negative timestamps.
+
+| Identities | Operation | Cumulative Go allocation, original → reused (run 1) | Original → reused (reverse-order run) |
+| --- | --- | --- | --- |
+| 10,000 | list | 37.82 → 35.17 MB | 37.80 → 35.17 MB |
+| 10,000 | search | 37.80 → 35.16 MB | 37.79 → 35.15 MB |
+| 100,000 | list | 377.63 → 351.23 MB | 377.61 → 351.23 MB |
+| 100,000 | search | 377.42 → 351.02 MB | 377.39 → 351.01 MB |
+
+The reduction was approximately 7% in cumulative Go allocation, or about 60k/600k fewer allocations per page. MB here are decimal `B/op`; these are not retained heap or RSS measurements. Timings were mixed: for 100k list, original → reused was 3.364 → 3.086 s in run 1 and 2.929 → 3.236 s in reverse order. No stable latency improvement or RSS reduction was demonstrated. Every page still scans/materializes/sorts in SQLite and allocates cumulatively O(N); no new schema, cache, catalog or persistent mapping generation is introduced.

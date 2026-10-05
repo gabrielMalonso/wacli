@@ -114,14 +114,16 @@ func (a *App) ReadContacts(ctx context.Context, p ContactReadOptions) (ContactsP
 			result.retain(c, capacity)
 		}
 	}
+	var c store.Contact
+	var preferred, alternate string
+	var primary, rawMatch bool
+	var updated int64
 	for rows.Next() {
 		if err := ctx.Err(); err != nil {
 			return ContactsPage{}, err
 		}
-		var c store.Contact
-		var preferred, alternate string
-		var primary, rawMatch bool
-		var updated int64
+		// Reuse Scan destinations, but never carry fields from the previous row.
+		c = store.Contact{}
 		if err := rows.Scan(&c.JID, &c.Phone, &c.Alias, &c.SystemName, &c.Name, &updated, &primary, &preferred, &alternate, &rawMatch); err != nil {
 			return ContactsPage{}, err
 		}

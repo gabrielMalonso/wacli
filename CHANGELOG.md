@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Contacts: reuse streaming Scan destinations with a complete contact reset per row, preserving zero timestamps, canonical results and cursor keys. Synthetic list/search measurements showed approximately 7% less cumulative Go allocation; no stable latency improvement or RSS reduction is claimed. SQLite scan/materialization/sort and cumulative O(N) allocation remain.
+
 - Contacts: preserve own-device PN/LID precedence when earlier device rows have nullable public fields. Make `show`, `resolve`, and alias/tag target selection fail on incompatible identity schemas and actual SQL/read errors while retaining unknown pairs for missing tables, pre-LID device schemas, and nullable mappings. Keep other consumers' best-effort resolver interfaces and session opening policy unchanged.
 
 - AppState: reconcile archive/pin from the exact SDK ChatSettings cache at ordered persistence, retaining uncertainty and unread boundaries. Protect standalone media connections, sync shutdown and incremental fetches with existing durable recovery generations; retain debt on partial pages, cancellation or persistence failure without replaying user mutations. Graceful shutdown can require full collection reads at next startup. Validate delayed callbacks, lifecycle gaps and offline media reuse with synthetic fixed-SDK fixtures.
