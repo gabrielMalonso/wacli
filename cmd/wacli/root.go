@@ -87,7 +87,7 @@ func execute(args []string) error {
 	rootCmd.PersistentFlags().StringVar(&flags.storeDir, "store", "", "store directory (default: $WACLI_STORE_DIR, XDG state dir on Linux, or ~/.wacli)")
 	rootCmd.PersistentFlags().StringVar(&flags.account, "account", "", "named account from config.yaml")
 	rootCmd.PersistentFlags().BoolVar(&flags.asJSON, "json", false, "output JSON instead of human-readable text")
-	rootCmd.PersistentFlags().BoolVar(&flags.agent, "agent", false, "output the versioned agent JSON contract (queries, media status/download/retry, drafts, history recovery, outbound dispatch and explicit unread/archive state)")
+	rootCmd.PersistentFlags().BoolVar(&flags.agent, "agent", false, "output the versioned agent JSON contract (queries, media status/download/retry/transcribe, drafts, history recovery, outbound dispatch and explicit unread/archive state)")
 	rootCmd.PersistentFlags().StringVar(&flags.cursor, "cursor", "", "resume agent list or temporal search pagination")
 	rootCmd.PersistentFlags().StringVar(&flags.detail, "detail", "compact", "agent detail: compact|full (requires --agent)")
 	rootCmd.PersistentFlags().BoolVar(&flags.fullOutput, "full", false, "disable truncation in table output")
@@ -175,6 +175,8 @@ func execute(args []string) error {
 				err = classifyChatStateAgentError(err, flags.agentChatStateRequest)
 			} else if flags.agentCapability == agentMediaRecovery {
 				err = classifyMediaRetryCommandError(err)
+			} else if flags.agentCapability == agentMediaTranscription {
+				err = classifyTranscriptionCommandError(err)
 			} else if flags.agentCapability == agentMediaDownload || flags.agentCapability == agentMediaRead {
 				err = classifyMediaCommandError(err)
 			} else {
@@ -203,6 +205,8 @@ func writeRootError(flags rootFlags, err error) {
 			typed = classifyChatStateAgentError(err, flags.agentChatStateRequest)
 		} else if flags.agentCapability == agentMediaRecovery {
 			typed = classifyMediaRetryCommandError(err)
+		} else if flags.agentCapability == agentMediaTranscription {
+			typed = classifyTranscriptionCommandError(err)
 		} else if flags.agentCapability == agentMediaDownload || flags.agentCapability == agentMediaRead {
 			typed = classifyMediaCommandError(err)
 		}

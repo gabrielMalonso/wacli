@@ -1,8 +1,9 @@
 # media
 
-Read when: downloading media from a synced message.
+Read when: downloading media from a synced message or explicitly transcribing a local file.
 
 `wacli media` downloads media referenced by messages already stored in `wacli.db`.
+Complementary `media transcribe` processes an explicit local file through a caller-selected executable; it does not require a message or archive.
 
 ## Commands
 
@@ -13,6 +14,7 @@ wacli media retry [--chat JID] [--before YYYY-MM-DD] [--limit N] [--batch N] [--
 wacli --agent media status --chat JID --id MSG_ID [--verify] [--output PATH]
 wacli --agent media download --chat JID --id MSG_ID --output PATH
 wacli --agent media retry --chat JID --id MSG_ID --output PATH [--wait DUR]
+wacli media transcribe --file PATH --adapter /absolute/executable [--expect-sha256 HEX] [--mime-type MIME] --agent
 ```
 
 ## download
@@ -83,6 +85,37 @@ Results use `downloaded|cached|existing|no_response|unavailable|unknown`, `retry
 Roots, descriptor rechecks, actual copied-byte digest, 0600 output and atomic no-replace link publication reuse PR17 without a legacy clobber writer or rename fallback. An existing mismatch or concurrent destination wins safely; select a different output. File and DB effects are independent: a DB failure or changed metadata after publication preserves `written/recorded=false` and measured output evidence. Cancellation or broken stdout after recording preserves the known persisted result. Typed `error.media` carries this knowledge on stderr without keys, ciphertext hashes, direct paths, URLs, SQL or raw causes. Temporary cleanup before publication does not roll back an already published file; ambiguous publication remains unknown. No journal, cleanup daemon or application replay is introduced. Inspect available observations and decide explicitly before another operation; uncertainty never authorizes automatic repetition.
 
 Validation uses synthetic archives, App/WAFactory fakes and local HTTP/crypto fixtures only. Live WhatsApp interoperability, CDN longevity and future file stability are unvalidated. The bounded downloader still buffers ciphertext/plaintext/CBC copies as described above.
+
+## Explicit local transcription
+
+```bash
+wacli --store /path/to/selected-identity media transcribe --file ./audio.ogg --adapter /absolute/executable --agent
+wacli media transcribe --file ./audio --adapter /absolute/executable --mime-type audio/ogg --expect-sha256 LOWERCASE_SHA256 --agent --detail full --read-only
+```
+
+There is no default transcription provider. An omitted/empty `--adapter` returns `adapter_not_configured` (exit 2); wacli does not discover, install, download, substitute or retry an adapter. Transcription is an explicit complementary command, never an automatic download step. It needs `--agent` and accepts no positional arguments. Global timeout defaults to 300 seconds and must be positive and at most 300 seconds, covering reading and execution.
+
+The input must be a regular local file of at most 25 MiB. The command reuses agent roots/descriptor confinement: configured `WACLI_MEDIA_ROOTS` symlink boundaries resolve once, links beneath the boundary are refused, and selected-store control paths/hardlinks are excluded. Missing stores are not created. Selected account/store is envelope identity only; account selection can read its registry, while the command opens no archive, session, credentials, LOCK or owner IPC and makes no WhatsApp connection. Control-file identities are compared using filesystem metadata without reading their contents. Readonly flag/env is supported because wacli does not write the archive; it does not sandbox the selected executable.
+
+The input is opened once, read in bounded chunks with context checks and a 25 MiB cap, and rechecked for detectable path/descriptor identity, size and modification changes. Kernel filesystem calls are not an arbitrary-filesystem interruption guarantee. A private in-memory copy is hashed and passed on stdin: `input.bytes` and `input.sha256` describe **those same observed bytes**. Optional `--expect-sha256` requires canonical lowercase SHA-256 and mismatch prevents execution. No later path reopen supplies the adapter. These checks do not promise an immutable audio file or an atomic snapshot against an authorized concurrent writer. Memory includes the bounded read buffer and private input copy, plus capped streams/JSON; 25 MiB is an input limit, not a total process RSS limit.
+
+`--mime-type` is validated and bounded to 256 bytes. When omitted, MIME is detected locally from the same observed bytes using standard content sniffing, never the filename, stored message text or an external service. Unrecognized `application/octet-stream` requires an explicit MIME flag. An explicit MIME is a caller declaration, not a guarantee that the file contains supported speech. The selected adapter receives the MIME literally as one argv value.
+
+The executable contract is provider-neutral:
+
+```text
+argv: --protocol wacli-transcribe-v1 --mime-type MIME
+stdin: exact observed file bytes, followed by EOF
+stdout: {"schema_version":1,"text":"...","language":"pt-BR"}
+```
+
+The executable path must be absolute, regular and executable (on Windows, a native `.exe`). Wacli starts it directly through `exec.CommandContext`, without a shell, command template or extra user argv. File paths, URLs, keys and binary/base64 are not put in argv or the result envelope. `input.path` is the caller's explicit requested input-path exception. `language` is optional in adapter stdout and bounded to 64 UTF-8 bytes. The single JSON object must have version 1 and a present string `text`; missing/null/wrong-type text, null/wrong-type language, unknown fields, duplicate keys, malformed/raw-invalid-UTF-8 JSON and trailing values fail. Total stdout is capped during reading at 256 KiB and decoded text at 128 KiB. Empty or whitespace-only text returns status `empty`: it establishes neither successful speech recognition nor silence. Nonempty text returns `completed`, describing adapter protocol completion, not accuracy.
+
+Stderr is privately bounded to 8 KiB while excess is drained; raw stdout/stderr, signals, argv and private causes never appear in errors. Nonzero exit, start/pipe failure, timeout/cancellation or invalid/oversized output fail without storing a transcript. Oversized stdout terminates the direct adapter; context cancellation and a 250 ms `WaitDelay` bound pipe waits, including inherited pipes. This does not promise termination of arbitrary descendants. **The selected executable is not a sandbox:** it can make its own network requests, read other files, use inherited environment credentials, write files or launch processes. `source=local` describes this capability's local input/processing path, not a guarantee of no network or external writes. Adapter effects are not rolled back by failure, cancellation or lost output. Wacli itself sends no input/MIME/transcript to a service.
+
+Agent data is explicit `text`, nullable `language`, `status`, `input={path,bytes,sha256}` and `text_truncated`. Compact text has at most 320 Unicode code points; full retains the bounded text. Existing whole-envelope caps remain 1 MiB compact / 8 MiB full. Full retrieval requires a new explicit invocation, which executes the adapter again; no transcript, journal, automatic recovery or replay exists. Broken stdout returns `output_failed` (exit 1) and never implies rollback.
+
+Usage/configuration errors (including absent adapter) exit 2; missing input is `input_not_found` (exit 3); account/store-selection failures keep `store_unavailable` (exit 4). Operational errors exit 1: `path_not_allowed`, `input_unreadable`, `input_too_large`, `hash_mismatch`, `adapter_failed`, `transcription_timeout`, `cancelled`, `adapter_output_invalid`, or `output_failed`. Messages are fixed and sanitized, including parse errors. Validation uses synthetic local stubs only; no real STT quality, private audio or remote provider has been validated. Private/live audio with a remote provider requires separate authorization.
 
 ## backfill
 
