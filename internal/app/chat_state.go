@@ -405,6 +405,13 @@ func (a *App) ownsManualAppStateFetch(collection appstate.WAPatchName) bool {
 }
 
 func (a *App) clearCompletedAppStateRecovery(collection appstate.WAPatchName, markerGeneration int64) error {
+	a.waMu.Lock()
+	defer a.waMu.Unlock()
+	// A read can finish after Sync removed coverage, while the detached SDK
+	// socket still advances state. Keep debt until a covered later startup.
+	if a.appStateUnobserved {
+		return nil
+	}
 	cleared, err := a.db.ClearAppStateRecoveryGeneration(string(collection), markerGeneration)
 	if err != nil {
 		return fmt.Errorf("clear WhatsApp app state recovery for %s: %w", collection, err)

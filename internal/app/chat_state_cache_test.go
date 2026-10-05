@@ -212,6 +212,24 @@ func TestIncrementalReplayCancellationKeepsExistingDebt(t *testing.T) {
 	}
 }
 
+func TestAppStateReplayCannotClearUnobservedConnectionDebt(t *testing.T) {
+	a := newTestApp(t)
+	f := newFakeWA()
+	a.wa = f
+	if err := a.RequireAppStateReplay(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// An already admitted read may start after handler retirement. Its complete
+	// replay cannot cover later cursor advances on this unobserved connection.
+	if err := a.syncAndPersistAppStateDelta(t.Context(), appstate.WAPatchRegularLow, false); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := a.db.AppStateRecoveryCollections()
+	if err != nil || len(pending) != 3 {
+		t.Fatal(pending, err)
+	}
+}
+
 func TestAppStateReplayPreparationGuardsAndCloseRestoration(t *testing.T) {
 	for _, mode := range []string{"cancelled", "readonly", "marker_failure", "cleared_during_cleanup"} {
 		t.Run(mode, func(t *testing.T) {

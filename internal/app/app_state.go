@@ -35,6 +35,7 @@ func (a *App) RequireAppStateReplay(ctx context.Context) error {
 		return fmt.Errorf("mark WhatsApp app state replay: %w", err)
 	}
 	a.appStateReplayOnClose = true
+	a.appStateUnobserved = true
 	return nil
 }
 

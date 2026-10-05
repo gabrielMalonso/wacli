@@ -145,6 +145,7 @@ type App struct {
 	appStateRecoveryMu      sync.Mutex
 	appStateRecoveryClosing bool
 	appStateReplayOnClose   bool // guarded by waMu; callbacks need not drain at Disconnect
+	appStateUnobserved      bool // guarded by waMu; replay cannot retire coverage debt
 	manualFetchMu           sync.Mutex
 	manualFetches           map[string]int
 	heartbeatLast           atomic.Int64
