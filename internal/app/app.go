@@ -311,6 +311,14 @@ func (a *App) LocalResolver() (LocalResolver, error) {
 
 // ReadOnlyResolver reads session identities without opening or upgrading a client store.
 func (a *App) ReadOnlyResolver() (LocalResolver, error) {
+	resolver, err := a.readOnlySessionResolver()
+	if err != nil {
+		return nil, err
+	}
+	return resolver, nil
+}
+
+func (a *App) readOnlySessionResolver() (*readOnlySessionResolver, error) {
 	a.waMu.Lock()
 	defer a.waMu.Unlock()
 	if a.sessionResolver != nil {

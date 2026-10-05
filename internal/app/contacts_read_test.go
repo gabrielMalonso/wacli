@@ -487,3 +487,33 @@ func TestContactReadsDeviceWithoutOwnPair(t *testing.T) {
 		}
 	}
 }
+
+func TestContactReadScanResetsZeroAndNegativeTimestamps(t *testing.T) {
+	a, dir := newContactPageFixture(t)
+	fixtureSQL(t, filepath.Join(dir, "wacli.db"), `INSERT INTO contacts (jid,full_name,updated_at) VALUES ('19999999@s.whatsapp.net','A zero timestamp',0),('29999999@s.whatsapp.net','Z negative timestamp',-1)`)
+	p := ContactReadOptions{Operation: ContactList, Limit: 1, Paginate: true}
+	var contacts []store.Contact
+	for {
+		page, err := a.ReadContacts(context.Background(), p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		contacts = append(contacts, page.Contacts...)
+		if page.NextCursor == nil {
+			break
+		}
+		p.Cursor = *page.NextCursor
+	}
+	if len(contacts) != 8 {
+		t.Fatalf("page count %d", len(contacts))
+	}
+	for _, c := range contacts {
+		if c.JID == "19999999@s.whatsapp.net" || c.JID == "29999999@s.whatsapp.net" {
+			if !c.UpdatedAt.IsZero() {
+				t.Fatalf("row retained previous timestamp %+v", c)
+			}
+		} else if c.UpdatedAt.IsZero() {
+			t.Fatalf("row lost timestamp %+v", c)
+		}
+	}
+}

@@ -344,7 +344,11 @@ func validateAgentCommand(cmd *cobra.Command, args []string, flags *rootFlags) e
 			return usage(fmt.Errorf("contacts resolve accepts at most %d inputs/results", agentMaxResults))
 		}
 		for _, arg := range args {
-			if r := resolveContactIdentity(cmd.Context(), nil, arg); r.Error != "" {
+			r, err := resolveContactIdentity(cmd.Context(), nil, arg)
+			if err != nil {
+				return usage(err)
+			}
+			if r.Error != "" {
 				return usage(errors.New(r.Error))
 			}
 		}

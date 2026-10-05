@@ -114,14 +114,16 @@ func (a *App) ReadContacts(ctx context.Context, p ContactReadOptions) (ContactsP
 			result.retain(c, capacity)
 		}
 	}
+	var c store.Contact
+	var preferred, alternate string
+	var primary, rawMatch bool
+	var updated int64
 	for rows.Next() {
 		if err := ctx.Err(); err != nil {
 			return ContactsPage{}, err
 		}
-		var c store.Contact
-		var preferred, alternate string
-		var primary, rawMatch bool
-		var updated int64
+		// Reuse Scan destinations, but never carry fields from the previous row.
+		c = store.Contact{}
 		if err := rows.Scan(&c.JID, &c.Phone, &c.Alias, &c.SystemName, &c.Name, &updated, &primary, &preferred, &alternate, &rawMatch); err != nil {
 			return ContactsPage{}, err
 		}
@@ -243,10 +245,15 @@ func contactJIDNormal(raw string) string {
 }
 
 func inspectContactIdentitySources(ctx context.Context, tx *sql.Tx) (contactIdentitySources, error) {
+	return inspectContactIdentitySourcesInSchema(ctx, tx, "identity")
+}
+
+// schema is selected internally (main or identity), never supplied by a caller.
+func inspectContactIdentitySourcesInSchema(ctx context.Context, tx *sql.Tx, schema string) (contactIdentitySources, error) {
 	var result contactIdentitySources
 	for _, table := range []string{"whatsmeow_lid_map", "whatsmeow_device"} {
 		var exists bool
-		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM identity.sqlite_schema WHERE type='table' AND name=?)", table).Scan(&exists); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM "+schema+".sqlite_schema WHERE type='table' AND name=?)", table).Scan(&exists); err != nil {
 			return result, err
 		}
 		if !exists {
@@ -254,7 +261,7 @@ func inspectContactIdentitySources(ctx context.Context, tx *sql.Tx) (contactIden
 		}
 		// Table names are the two constants above, not caller input. Only schema
 		// metadata is inspected; device data reads select jid/lid explicitly.
-		rows, err := tx.QueryContext(ctx, "PRAGMA identity.table_info("+table+")")
+		rows, err := tx.QueryContext(ctx, "PRAGMA "+schema+".table_info("+table+")")
 		if err != nil {
 			return result, err
 		}
