@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Local reads: propagate message chat-filter stat errors other than session absence and readonly session-opening failures instead of silently returning empty matches. Expose offline doctor auth-source failures through legacy `store_error` while preserving diagnostic exit 0, existing bool fields, known auth/JID data on archive-only failures, and normal session absence; agent errors remain sanitized with exit 4 and no auth data. Keep optional display-name decoration and identity queries unchanged.
+
 - Readonly SQLite: use normal `mode=ro`/`query_only` for archives, public-session identity resolution, auth status and offline doctor without inferring immutability from absent sidecars. Permit required WAL/SHM bookkeeping even on clean WAL files; report opener permission failures without fallback. Preserve missing-file/directory no-create, schema checks, permissions and SQL readonly behavior; document live-read snapshot limits and validate with synthetic WAL/DELETE fixtures.
 
 - Maintenance/compatibility: reject anomalous readonly migration ledgers with unsupported interval bounds even when maximum/count match. Count selected chats once in `store cleanup --dry-run`, reuse text counts and propagate counting errors before output, retaining selection, tombstones, zero counts and JSON/text formats. Destructive cleanup is unchanged.

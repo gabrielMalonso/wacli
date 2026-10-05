@@ -26,12 +26,20 @@ stored data or file permissions. They work alongside a writer such as
 
 Persisted phone/JID/LID mappings resolve identities for display and lookup without
 opening a writable WhatsApp client or rewriting historical rows. Missing mappings
-leave the original identity unresolved. No refresh happens during a local query.
+leave the original identity unresolved. A missing session also leaves a message
+chat filter literal, but session stat errors other than absence and readonly
+opening failures stop the query instead of returning an empty success. Optional
+best-effort display-name decoration is unchanged. No refresh happens during a
+local query.
 
 A missing `wacli.db` produces an actionable error without creating its directory
 or database. `auth status` instead reports unauthenticated when its session is
-absent; `doctor` reports missing/incompatible stores in `store_error` and retains
-its diagnostic JSON shape. Read-only archive access requires the current schema
+absent; legacy offline `doctor` reports archive or auth-source failures in
+`store_error` and retains its diagnostic JSON shape and exit 0. If the auth source
+fails, its existing `authenticated=false` is a placeholder, not proof of
+logout or lost authentication; no `linked_jid` is inferred. Known auth/JID observations remain
+available if only the archive fails. Agent doctor instead returns its sanitized
+error with exit 4 and no auth data. Read-only archive access requires the current schema
 version: older or unversioned stores need an **explicit writable upgrade** (for
 example, `auth` or `sync`); a newer schema needs a compatible newer wacli binary.
 Local queries never perform that upgrade automatically. These writable commands

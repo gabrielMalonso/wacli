@@ -214,7 +214,13 @@ func newDoctorCmd(flags *rootFlags) *cobra.Command {
 			var connected bool
 			var linkedJID string
 			if !connect {
-				if roAuthed, roLinkedJID, err := readOnlyAuthStatus(storeDir); err == nil {
+				roAuthed, roLinkedJID, err := readOnlyAuthStatus(storeDir)
+				if err != nil {
+					if storeErr != "" {
+						storeErr += "; "
+					}
+					storeErr += fmt.Errorf("read authentication source: %w", err).Error()
+				} else {
 					authed = roAuthed
 					linkedJID = roLinkedJID
 				}
