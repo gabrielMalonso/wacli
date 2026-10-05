@@ -135,8 +135,8 @@ func execute(args []string) error {
 	}
 	if intent.cursorSet && !intent.help {
 		c, _, findErr := rootCmd.Find(args)
-		if !intent.agent || findErr != nil || (c.CommandPath() != "wacli messages list" && c.CommandPath() != "wacli messages search" && c.CommandPath() != "wacli chats list" && c.CommandPath() != "wacli contacts list" && c.CommandPath() != "wacli contacts search" && c.CommandPath() != "wacli draft list" && c.CommandPath() != "wacli outbound list" && c.CommandPath() != "wacli outbound show") {
-			err := agentUsageError(fmt.Errorf("--cursor requires --agent messages list, --agent messages search --sort time, --agent chats list or --agent contacts list/search or --agent draft list or --agent outbound list/show"))
+		if !intent.agent || findErr != nil || (c.CommandPath() != "wacli messages list" && c.CommandPath() != "wacli messages search" && c.CommandPath() != "wacli chats list" && c.CommandPath() != "wacli contacts list" && c.CommandPath() != "wacli contacts search" && c.CommandPath() != "wacli draft list" && c.CommandPath() != "wacli draft cleanup preview" && c.CommandPath() != "wacli outbound list" && c.CommandPath() != "wacli outbound show") {
+			err := agentUsageError(fmt.Errorf("--cursor requires --agent messages list, --agent messages search --sort time, --agent chats list or --agent contacts list/search or --agent draft list/cleanup preview or --agent outbound list/show"))
 			writeRootError(flags, err)
 			return err
 		}
@@ -204,6 +204,15 @@ func writeRootError(flags rootFlags, err error) {
 		}
 		_ = out.WriteAgentError(os.Stderr, flags.agentAccount, meta, typed)
 		return
+	}
+	var cleanup *out.AgentError
+	if errors.As(err, &cleanup) && cleanup.Cleanup != nil {
+		if flags.asJSON {
+			_ = out.WriteDraftCleanupError(os.Stderr, cleanup)
+			return
+		}
+		c := cleanup.Cleanup
+		err = fmt.Errorf("%s [%s; draft=%s revision=%s hash=%s effect=%s outcome=%s directory_sync=%s]", cleanup.Message, cleanup.Code, c.DraftID, c.RevisionID, c.Hash, c.Effect, c.Outcome, c.DirectorySync)
 	}
 	if flags.events {
 		_ = out.NewEventWriter(os.Stderr, true).Emit("error", map[string]any{"message": err.Error()})

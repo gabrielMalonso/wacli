@@ -35,6 +35,7 @@ const (
 var errSendDelegateUnavailable = errors.New("send delegate unavailable")
 
 type sendDelegateRequest struct {
+	DraftCleanup         *app.DraftCleanupRequest `json:"draft_cleanup,omitempty"`
 	AgentChatState       *app.ChatStateRequest    `json:"agent_chat_state,omitempty"`
 	Outbound             *app.OutboundSendRequest `json:"outbound,omitempty"`
 	Draft                *app.DraftWriteRequest   `json:"draft,omitempty"`
@@ -83,6 +84,7 @@ type sendDelegateRequest struct {
 }
 
 type sendDelegateResponse struct {
+	DraftCleanup     *draftCleanupReply      `json:"draft_cleanup,omitempty"`
 	AgentChatState   *agentChatStateReply    `json:"agent_chat_state,omitempty"`
 	Outbound         *outboundDelegateResult `json:"outbound,omitempty"`
 	DraftResult      *draftDelegateResult    `json:"draft_result,omitempty"`
@@ -136,7 +138,7 @@ func delegateSend(ctx context.Context, flags *rootFlags, req sendDelegateRequest
 		return sendDelegateResponse{}, fmt.Errorf("%w: %v", errSendDelegateUnavailable, err)
 	}
 	defer conn.Close()
-	if req.Kind == historyBackfillKind || req.Kind == draftWriteKind || req.Kind == outboundSendKind || req.Kind == agentChatStateKind {
+	if req.Kind == historyBackfillKind || req.Kind == draftWriteKind || req.Kind == outboundSendKind || req.Kind == agentChatStateKind || req.Kind == draftCleanupKind {
 		// Closing the client transport interrupts its wait, not the owner's
 		// operation: this protocol has no cancellation acknowledgement.
 		stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })
@@ -150,6 +152,28 @@ func delegateSend(ctx context.Context, flags *rootFlags, req sendDelegateRequest
 	}
 	var resp sendDelegateResponse
 	var responseReader io.Reader = conn
+	if req.Kind == draftCleanupKind {
+		frame, err := bufio.NewReader(io.LimitReader(conn, draftCleanupMaxFrame+1)).ReadBytes('\n')
+		if err != nil || len(frame) > draftCleanupMaxFrame {
+			return sendDelegateResponse{}, draftCleanupIPCUncertain(req.DraftCleanup, err)
+		}
+		decoder := json.NewDecoder(bytes.NewReader(frame))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&resp); err != nil {
+			return sendDelegateResponse{}, draftCleanupIPCUncertain(req.DraftCleanup, err)
+		}
+		var extra json.RawMessage
+		if err := decoder.Decode(&extra); err != io.EOF || req.DraftCleanup == nil {
+			return sendDelegateResponse{}, draftCleanupIPCUncertain(req.DraftCleanup, err)
+		}
+		// Require a canonical frame, rejecting duplicate keys as well as extras.
+		canonical, err := json.Marshal(resp)
+		if err != nil || !bytes.Equal(bytes.TrimSuffix(frame, []byte("\n")), canonical) {
+			return sendDelegateResponse{}, draftCleanupIPCUncertain(req.DraftCleanup, err)
+		}
+		_, err = validateDraftCleanupDelegate(*req.DraftCleanup, resp)
+		return resp, err
+	}
 	if req.Kind == agentChatStateKind {
 		// A single bounded newline frame, matching Encoder.Encode. Closing this
 		// connection does not acknowledge cancellation of the owner's action.
@@ -325,11 +349,23 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 	prefix := []byte(`{"outbound":`)
 	head, _ := buffered.Peek(len(prefix))
 	outboundEnvelope := bytes.Equal(head, prefix)
+	cleanupPrefix := []byte(`{"draft_cleanup":`)
+	cleanupEnvelope := bytes.Equal(head, cleanupPrefix[:len(prefix)])
+	var cleanupFrame []byte
 	chatStatePrefix := []byte(`{"agent_chat_state":`)
 	chatStateEnvelope := bytes.Equal(head, chatStatePrefix[:len(prefix)])
 	var requestReader io.Reader = buffered
 	if outboundEnvelope {
 		requestReader = io.LimitReader(buffered, 16384)
+	}
+	if cleanupEnvelope {
+		frame, err := bufio.NewReader(io.LimitReader(buffered, draftCleanupMaxFrame+1)).ReadBytes('\n')
+		if err != nil || len(frame) > draftCleanupMaxFrame {
+			_ = json.NewEncoder(conn).Encode(sendDelegateResponse{Error: "invalid bounded cleanup frame"})
+			return
+		}
+		cleanupFrame = frame
+		requestReader = bytes.NewReader(frame)
 	}
 	if chatStateEnvelope {
 		frame, err := bufio.NewReader(io.LimitReader(buffered, agentChatStateMaxFrame+1)).ReadBytes('\n')
@@ -340,7 +376,7 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 		requestReader = bytes.NewReader(frame)
 	}
 	requestDecoder := json.NewDecoder(requestReader)
-	if outboundEnvelope || chatStateEnvelope {
+	if outboundEnvelope || chatStateEnvelope || cleanupEnvelope {
 		requestDecoder.DisallowUnknownFields()
 	}
 	if err := requestDecoder.Decode(&req); err != nil {
@@ -355,6 +391,13 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 		var extra json.RawMessage
 		if err := requestDecoder.Decode(&extra); err != io.EOF {
 			_ = json.NewEncoder(conn).Encode(sendDelegateResponse{Error: "invalid agent chat state frame"})
+			return
+		}
+	}
+	if cleanupEnvelope || req.DraftCleanup != nil || req.Kind == draftCleanupKind {
+		canonical, err := json.Marshal(req)
+		if !cleanupEnvelope || !validateDraftCleanupEnvelope(req) || err != nil || !bytes.Equal(bytes.TrimSuffix(cleanupFrame, []byte("\n")), canonical) {
+			_ = json.NewEncoder(conn).Encode(draftCleanupRefusal(req, store.DraftCleanupInvalidArguments))
 			return
 		}
 	}
@@ -458,6 +501,9 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 		if req.Kind == outboundSendKind {
 			resp = outboundRefusal(req, "not_dispatched")
 		}
+		if req.Kind == draftCleanupKind {
+			resp = draftCleanupRefusal(req, store.DraftCleanupCanceled)
+		}
 		if req.Kind == draftWriteKind {
 			resp = draftRefusal(req, store.DraftFailure("local_write_not_dispatched", "", "", "", nil))
 		}
@@ -483,7 +529,7 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 
 	// Space this send from the previous one while serialized. Bound the wait by
 	// the same deadline. Disabled spacing leaves the path untouched.
-	if req.Kind != historyBackfillKind && req.Kind != draftWriteKind && req.Kind != outboundSendKind && pacer.enabled() {
+	if req.Kind != historyBackfillKind && req.Kind != draftWriteKind && req.Kind != draftCleanupKind && req.Kind != outboundSendKind && pacer.enabled() {
 		if !pacer.wait(requestCtx) {
 			refuse()
 			return
@@ -500,7 +546,7 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 		requestCtx = context.WithValue(requestCtx, outboundPacerKey{}, pacer)
 	}
 	resp, err := execute(requestCtx, req)
-	if req.Kind != historyBackfillKind && req.Kind != draftWriteKind && req.Kind != outboundSendKind && pacer.enabled() {
+	if req.Kind != historyBackfillKind && req.Kind != draftWriteKind && req.Kind != draftCleanupKind && req.Kind != outboundSendKind && pacer.enabled() {
 		// Record completion, not handler entry: recipient resolution, media
 		// preparation, and the actual wire send all happen inside execute.
 		// Starting the gap here prevents a slow operation from consuming it.
@@ -511,6 +557,15 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 
 func writeDelegateResult(conn net.Conn, requestCtx context.Context, req sendDelegateRequest, resp sendDelegateResponse, err error) {
 	if err != nil {
+		if req.Kind == draftCleanupKind {
+			failure := draftCleanupIPCUncertain(req.DraftCleanup, err)
+			if req.DraftCleanup != nil {
+				resp = sendDelegateResponse{DraftCleanup: &draftCleanupReply{Capability: draftCleanupKind, RequestHash: draftCleanupRequestHash(*req.DraftCleanup), Result: failure.Result, Failure: failure.Failure}}
+			}
+			_ = json.NewEncoder(conn).Encode(resp)
+			return
+		}
+
 		if req.Kind == agentChatStateKind {
 			_ = json.NewEncoder(conn).Encode(agentChatStateRefusal(req, "chat_state_outcome_uncertain"))
 			return
@@ -551,6 +606,8 @@ func executeDelegatedSend(parent context.Context, a *app.App, req sendDelegateRe
 	defer cancel()
 
 	switch req.Kind {
+	case draftCleanupKind:
+		return executeDelegatedDraftCleanup(ctx, a, req)
 	case agentChatStateKind:
 		return executeDelegatedAgentChatState(ctx, a, req)
 	case outboundSendKind:
@@ -931,6 +988,9 @@ func commandTimeout(flags *rootFlags) time.Duration {
 }
 
 func historyTransportError(req sendDelegateRequest, err error) error {
+	if req.Kind == draftCleanupKind {
+		return draftCleanupIPCUncertain(req.DraftCleanup, err)
+	}
 	if req.Kind == agentChatStateKind {
 		return agentChatStateUncertain(req.AgentChatState, err)
 	}
