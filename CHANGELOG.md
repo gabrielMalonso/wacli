@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Drafts: keep mutable update/discard timestamps nondecreasing across backward clock adjustments, preserve retained creation/update times and return the persisted values. Guard discard against concurrent record changes so eligible documents remain inspectable by cleanup; retain immutable revision timestamps/hashes. No migration or automatic repair of earlier inconsistent records.
+
 - Contacts: reuse streaming Scan destinations with a complete contact reset per row, preserving zero timestamps, canonical results and cursor keys. Synthetic list/search measurements showed approximately 7% less cumulative Go allocation; no stable latency improvement or RSS reduction is claimed. SQLite scan/materialization/sort and cumulative O(N) allocation remain.
 
 - Contacts: preserve own-device PN/LID precedence when earlier device rows have nullable public fields. Make `show`, `resolve`, and alias/tag target selection fail on incompatible identity schemas and actual SQL/read errors while retaining unknown pairs for missing tables, pre-LID device schemas, and nullable mappings. Keep other consumers' best-effort resolver interfaces and session opening policy unchanged.
