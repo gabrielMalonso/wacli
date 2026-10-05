@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Draft quotes: distinguish unsupported media/buttons/reactions with fixed local inspection and supported-text guidance, including through the existing private allowlisted owner category. Keep unavailable alias content first, sender checks, old owner/client compatibility, correlation and `invalid_arguments` exit 2; no media quote support or automatic quote removal. Document requesting full detail directly when long text needs complete review.
+
 - App-state recovery: separate server ACK and correlated primary-device response from unconfirmable SDK snapshot completion. Retain replay debt and refuse dependent chat-state mutations after snapshot alone, even if applied; preserve real event persistence/draining on sync and standalone error/cancellation paths. Report transient sanitized exchange facts and `unconfirmed` observations without extra retries, budget/reset changes or a claim to resolve remote LTHash failures.
 
 - Outbound contacts: persist searchable names and vCard phone numbers for newly accepted contact drafts using the received-card text formatter. Preserve `type=text`, legacy reads, frozen wire payloads, retained-key idempotency and accepted results with secondary history warnings. Existing name-only history is not repaired or replayed.

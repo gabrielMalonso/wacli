@@ -247,6 +247,26 @@ func TestDraftReplySenderGuidanceIsFixed(t *testing.T) {
 	}
 }
 
+func TestDraftReplyUnsupportedGuidanceIsFixed(t *testing.T) {
+	for _, reason := range []string{"quoted content is not supported for draft replies", "", "UNTRUSTED_REASON /private/path\n"} {
+		cause := &store.DraftValidationError{Field: "reply.unsupported", Reason: reason}
+		failure := classifyDraftError(fmt.Errorf("wrapped: %w", cause))
+		if failure.Code != "invalid_arguments" || failure.ExitCode != 2 || !errors.Is(failure, cause) {
+			t.Fatal("typed validation handling changed")
+		}
+		if failure.Message != "Quoted message content is unsupported for draft replies." || failure.Recovery != "Inspect messages show --chat CHAT_JID --id MESSAGE_ID --agent --detail full locally; select a supported text quote or explicitly prepare complete create/update input without --reply-to." {
+			t.Fatal("unsupported content guidance is not fixed")
+		}
+		var output bytes.Buffer
+		if err := out.WriteAgentError(&output, out.AgentAccount{}, out.AgentMeta{Source: "local", Detail: "compact"}, failure); err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(output.Bytes(), []byte("UNTRUSTED_REASON")) || bytes.Contains(output.Bytes(), []byte("reply.unsupported")) {
+			t.Fatal("private reason or category echoed publicly")
+		}
+	}
+}
+
 func TestDraftGenericOwnerInputGuidance(t *testing.T) {
 	message := "reply"
 	req := sendDelegateRequest{Kind: draftWriteKind, Draft: &app.DraftWriteRequest{Version: 1, Action: "create", DraftID: strings.Repeat("a", 32), RevisionID: strings.Repeat("b", 32), StoreRef: "/fixture/store", Input: &app.DraftInput{To: "15550000002@s.whatsapp.net", Message: &message, ReplyTo: "quote"}}}

@@ -18,7 +18,10 @@ const draftWriteKind = "local_draft_write"
 // Optional refusal advice; unknown categories retain the correlated base error.
 type draftValidationField string
 
-const draftReplySenderField draftValidationField = "reply.sender"
+const (
+	draftReplySenderField      draftValidationField = "reply.sender"
+	draftReplyUnsupportedField draftValidationField = "reply.unsupported"
+)
 
 func draftRequestsQuote(req sendDelegateRequest) bool {
 	return req.Kind == draftWriteKind && req.Draft != nil && (req.Draft.Action == "create" || req.Draft.Action == "update") && req.Draft.Input != nil && req.Draft.Input.ReplyTo != ""
@@ -106,8 +109,11 @@ func draftRefusal(req sendDelegateRequest, err error) sendDelegateResponse {
 		resp.DraftRequestHash = draftRequestHash(*req.Draft)
 	}
 	var validation *store.DraftValidationError
-	if copy.Code == "invalid_arguments" && draftRequestsQuote(req) && errors.As(err, &validation) && validation.Field == "reply.sender" {
-		resp.DraftValidationField = draftReplySenderField
+	if copy.Code == "invalid_arguments" && draftRequestsQuote(req) && errors.As(err, &validation) {
+		switch validation.Field {
+		case string(draftReplySenderField), string(draftReplyUnsupportedField):
+			resp.DraftValidationField = draftValidationField(validation.Field)
+		}
 	}
 	return resp
 }
@@ -127,11 +133,14 @@ func draftIPCFailure(req sendDelegateRequest, resp sendDelegateResponse) error {
 			return draftIPCUncertain(req.Draft, nil)
 		}
 	}
-	if failure.Code == "invalid_arguments" && resp.DraftValidationField == draftReplySenderField && draftRequestsQuote(req) {
-		classified := classifyDraftError(&store.DraftValidationError{Field: "reply.sender"})
-		classified.Cause = failure
-		classified.Draft = &out.AgentDraftError{DraftID: failure.DraftID, RevisionID: failure.RevisionID, Hash: failure.Hash}
-		return classified
+	if failure.Code == "invalid_arguments" && draftRequestsQuote(req) {
+		switch resp.DraftValidationField {
+		case draftReplySenderField, draftReplyUnsupportedField:
+			classified := classifyDraftError(&store.DraftValidationError{Field: string(resp.DraftValidationField)})
+			classified.Cause = failure
+			classified.Draft = &out.AgentDraftError{DraftID: failure.DraftID, RevisionID: failure.RevisionID, Hash: failure.Hash}
+			return classified
+		}
 	}
 	return failure
 }
