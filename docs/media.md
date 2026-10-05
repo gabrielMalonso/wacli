@@ -61,6 +61,8 @@ Existing destinations are never overwritten by agent download. Different, unveri
 
 The existing direct crypto path buffers ciphertext, plaintext and a CBC copy; peak memory can be several times the 100 MiB file cap. The bounded copy buffer is 32 KiB, not the downloader's total memory limit. Agent deadlines must be positive and at most five minutes. URLs, direct paths, media keys, ciphertext hashes, HTTP bodies and raw internal causes never appear in its DTO/errors. Compact/full differ in filename truncation; binary content is never included in the envelope. See [agent contract](agent.md#media-observations-and-explicit-output).
 
+Standalone writable media commands record recovery debt for mirrored AppState collections before connecting, because the SDK can advance session state without the sync persistence handler. A later sync replays these collections before incremental fetches. Exact retry does not import unrelated chats or run historical identity migration. Verified cache/destination reuse in exact agent retry stays offline and adds no recovery debt.
+
 ## Exact agent retry
 
 ```bash

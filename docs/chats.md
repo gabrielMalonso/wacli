@@ -4,6 +4,8 @@ Read when: listing known chats, filtering chat state, archiving/pinning/muting/m
 
 `wacli chats` reads chat rows from `wacli.db`. It can use session-backed PN/LID mappings to make historical `@lid` chat rows display as phone-number chats when possible. State commands normally send WhatsApp app-state patches through the authenticated session and update the local index after WhatsApp accepts the change. Explicit receipt mode uses the independent network receipt path described below.
 
+Archive and pin persistence reads the SDK's public local ChatSettings cache for the exact observed JID at its ordered persistence turn. This also preserves the SDK's unpin on archive, even if a callback arrives after a newer replay. Missing settings or a cache read error leave recovery debt instead of guessing a value or another identity. The cache is not a fresh remote-state guarantee; unread remains driven by its separate events and read boundaries. Recovery reads state and never repeats a user's mutation.
+
 ## Commands
 
 ```bash

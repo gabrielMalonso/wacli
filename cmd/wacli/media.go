@@ -77,6 +77,9 @@ func newMediaRetryCmd(flags *rootFlags) *cobra.Command {
 			if err := a.EnsureAuthed(ctx); err != nil {
 				return err
 			}
+			if err := a.RequireAppStateReplay(ctx); err != nil {
+				return err
+			}
 			if err := a.Connect(ctx, false, nil); err != nil {
 				return err
 			}
@@ -166,6 +169,9 @@ func newMediaBackfillCmd(flags *rootFlags) *cobra.Command {
 			defer closeApp(a, lk)
 
 			if err := a.EnsureAuthed(ctx); err != nil {
+				return err
+			}
+			if err := a.RequireAppStateReplay(ctx); err != nil {
 				return err
 			}
 			if err := a.Connect(ctx, false, nil); err != nil {
@@ -308,6 +314,9 @@ func newMediaDownloadCmd(flags *rootFlags) *cobra.Command {
 				return nil
 			}
 
+			if err := a.RequireAppStateReplay(ctx); err != nil {
+				return err
+			}
 			if err := a.Connect(ctx, false, nil); err != nil {
 				return err
 			}

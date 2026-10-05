@@ -166,6 +166,12 @@ func runAgentMediaRetryWith(cmd *cobra.Command, flags *rootFlags, chat, id, outp
 		if !a.WA().IsAuthed() {
 			return &app.MediaRetryExactError{Code: "not_authenticated"}
 		}
+		if err := a.RequireAppStateReplay(ctx); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return &app.MediaRetryExactError{Code: "store_failed"}
+		}
 		if err := a.Connect(ctx, false, nil); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()

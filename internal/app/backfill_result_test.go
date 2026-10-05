@@ -217,7 +217,8 @@ func TestBackfillUnreliableCountingWindowFails(t *testing.T) {
 func TestBackfillReadErrorsAfterResponseAndIdle(t *testing.T) {
 	for _, tc := range []struct{ event, want string }{
 		{"backfill_response", "read oldest backfill message after response"},
-		{"idle_exit", "count backfill conversation after sync"},
+		// Sync must now persist coverage debt before returning to the count.
+		{"idle_exit", "mark WhatsApp app state replay"},
 	} {
 		t.Run(tc.event, func(t *testing.T) {
 			a, f, chat, base := newBackfillRetryTest(t, "anchor")

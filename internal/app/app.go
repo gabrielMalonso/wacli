@@ -144,6 +144,8 @@ type App struct {
 	appStateRecoveryWorkers sync.WaitGroup
 	appStateRecoveryMu      sync.Mutex
 	appStateRecoveryClosing bool
+	appStateReplayOnClose   bool // guarded by waMu; callbacks need not drain at Disconnect
+	appStateUnobserved      bool // guarded by waMu; replay cannot retire coverage debt
 	manualFetchMu           sync.Mutex
 	manualFetches           map[string]int
 	heartbeatLast           atomic.Int64
@@ -231,6 +233,7 @@ func (a *App) close() {
 	sessionResolver := a.sessionResolver
 	sessionState, sessionHandler := a.sessionState, a.sessionHandler
 	observer := a.outboundEvents
+	replayAppState := a.appStateReplayOnClose
 	a.waMu.Unlock()
 	if observer != nil {
 		observer.closeAdmissions()
@@ -257,6 +260,13 @@ func (a *App) close() {
 		waClient.Close()
 	}
 	if a.db != nil {
+		// No admitted App persistence or session cursor writes remain. A recovery
+		// that ran during cleanup may have cleared the earlier coverage intent.
+		if replayAppState {
+			if err := a.restoreAppStateReplay(); err != nil {
+				a.emitWarning("app_state_recovery_marker_failed", fmt.Sprintf("warning: preserve app state replay on close: %v", err), nil)
+			}
+		}
 		_ = a.db.Close()
 	}
 }

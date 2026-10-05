@@ -819,6 +819,7 @@ func TestChatStateEventsUpdateLocalStore(t *testing.T) {
 	a.wa = f
 
 	chat := types.JID{User: "456", Server: types.DefaultUserServer}
+	f.chatSettings[chat] = types.LocalChatSettings{Found: true, Archived: true, Pinned: true}
 	if err := a.db.UpsertChat(chat.String(), "dm", "Bob", time.Now()); err != nil {
 		t.Fatalf("UpsertChat: %v", err)
 	}
@@ -1598,7 +1599,7 @@ func TestArchiveChatOrdersPostSendEventsBeforeNewerLiveEventDuringApply(t *testi
 	}
 }
 
-func TestArchiveChatReplaysEventDispatchedAfterWriteCompletion(t *testing.T) {
+func TestArchiveChatIgnoresEventDispatchedAfterWriteCompletion(t *testing.T) {
 	a := newTestApp(t)
 	f := newFakeWA()
 	a.wa = f
@@ -1623,7 +1624,7 @@ func TestArchiveChatReplaysEventDispatchedAfterWriteCompletion(t *testing.T) {
 	if err := a.ArchiveChat(context.Background(), target, true); err != nil {
 		t.Fatalf("ArchiveChat: %v", err)
 	}
-	f.emit(&events.Archive{
+	f.dispatch(&events.Archive{
 		JID:       target,
 		Timestamp: when.Add(time.Minute),
 		Action:    &waSyncAction.ArchiveChatAction{Archived: proto.Bool(false)},
@@ -1632,8 +1633,8 @@ func TestArchiveChatReplaysEventDispatchedAfterWriteCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetChat after delayed dispatch: %v", err)
 	}
-	if stored.Archived {
-		t.Fatalf("delayed event did not reproduce stale cache: %+v", stored)
+	if !stored.Archived {
+		t.Fatalf("delayed event overwrote current SDK cache: %+v", stored)
 	}
 	required, err := a.db.AppStateRecoveryRequired(string(appstate.WAPatchRegularLow))
 	if err != nil {
