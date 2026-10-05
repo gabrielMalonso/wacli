@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- AppState: reconcile archive/pin from the exact SDK ChatSettings cache at ordered persistence, retaining uncertainty and unread boundaries. Protect standalone media connections, sync shutdown and incremental fetches with existing durable recovery generations; retain debt on partial pages, cancellation or persistence failure without replaying user mutations. Graceful shutdown can require full collection reads at next startup. Validate delayed callbacks, lifecycle gaps and offline media reuse with synthetic fixed-SDK fixtures.
+
 - Media: add complementary `media transcribe --file PATH --adapter /absolute/executable --agent`, with confined local reads up to 25 MiB, optional SHA-256 binding to exact stdin bytes, bounded strict executable protocol and sanitized local outcomes. Require explicit adapter selection without provider defaults, installation, network fallback, automatic download transcription or persistence. Support readonly archive policy and compact/full output; validate only synthetic offline stubs, not real speech recognition. The selected executable is not a network or filesystem sandbox.
 
 - Agents: add explicit `media retry --chat JID --id ID --output PATH --agent` through the shared legacy retry engine, with exact composite selection, bounded waits/deadline, lazy standalone authentication/connection and no owner IPC or historical LID migration. Preserve PR17 verified cache/destination reuse and no-replace publication; distinguish dated phone/CDN evidence, unknown current availability, file effects and archive persistence through sanitized live outcomes/errors. Refuse readonly, bulk flags, invalid selections and active writer LOCK safely; validate with fixtures/fakes and local HTTP only.
