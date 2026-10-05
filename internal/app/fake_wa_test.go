@@ -22,6 +22,7 @@ import (
 	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
 )
 
 type fakeWA struct {
@@ -879,12 +880,27 @@ func (f *fakeWA) RequestHistorySyncOnDemand(ctx context.Context, lastKnown types
 	return types.MessageID("req"), nil
 }
 
-func (f *fakeWA) RequestAppStateRecovery(ctx context.Context, name string) (types.MessageID, error) {
+func (f *fakeWA) emitRecoveryResponse() {
+	own := types.NewJID("15551234567", types.DefaultUserServer)
+	f.emit(&events.Message{Info: types.MessageInfo{MessageSource: types.MessageSource{IsFromMe: true, Sender: own, Chat: own}}, Message: &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{Type: waE2E.ProtocolMessage_PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE.Enum(), PeerDataOperationRequestResponseMessage: &waE2E.PeerDataOperationRequestResponseMessage{StanzaID: proto.String("recovery-req"), PeerDataOperationRequestType: waE2E.PeerDataOperationRequestType_COMPANION_SYNCD_SNAPSHOT_FATAL_RECOVERY.Enum()}}}})
+}
+
+func (f *fakeWA) RequestAppStateRecoveryObserved(ctx context.Context, name string, onAcknowledged func(types.MessageID)) (wa.AppStateRecoveryExchange, error) {
+	received := make(chan struct{}, 1)
+	id := f.AddEventHandler(func(evt any) {
+		if msg, ok := evt.(*events.Message); ok && msg != nil && msg.Message.GetProtocolMessage().GetPeerDataOperationRequestResponseMessage().GetStanzaID() == "recovery-req" {
+			select {
+			case received <- struct{}{}:
+			default:
+			}
+		}
+	})
+	defer f.RemoveEventHandler(id)
 	f.mu.Lock()
-	if f.appStateRecoveryErr != nil {
-		err := f.appStateRecoveryErr
+	err := f.appStateRecoveryErr
+	if err != nil {
 		f.mu.Unlock()
-		return "", err
+		return wa.AppStateRecoveryExchange{}, err
 	}
 	f.appStateRecoveries = append(f.appStateRecoveries, name)
 	hook := f.onAppStateRecovery
@@ -892,7 +908,17 @@ func (f *fakeWA) RequestAppStateRecovery(ctx context.Context, name string) (type
 	if hook != nil {
 		hook(name)
 	}
-	return types.MessageID("recovery-req"), nil
+	if onAcknowledged != nil {
+		onAcknowledged("recovery-req")
+	}
+	exchange := wa.AppStateRecoveryExchange{ACKConfirmed: true}
+	select {
+	case <-received:
+		exchange.ResponseReceived = true
+		return exchange, errors.Join(wa.ErrAppStateCompletionUnconfirmed, ctx.Err())
+	case <-ctx.Done():
+		return exchange, ctx.Err()
+	}
 }
 
 func (f *fakeWA) DeleteMessageForMe(ctx context.Context, info types.MessageInfo, deleteMedia bool) error {

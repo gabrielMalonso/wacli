@@ -34,7 +34,7 @@ func requireRecoveryObservation(t *testing.T, state AppStateDiagnostics, collect
 }
 
 func TestSyncAppStateDiagnostics(t *testing.T) {
-	for _, mode := range []string{"failed", "full_completed", "snapshot_completed", "cancelled", "preventive"} {
+	for _, mode := range []string{"failed", "full_completed", "snapshot_unconfirmed", "cancelled", "preventive"} {
 		t.Run(mode, func(t *testing.T) {
 			a := newTestApp(t)
 			a.opts.Events = out.NewEventWriter(io.Discard, true)
@@ -47,7 +47,7 @@ func TestSyncAppStateDiagnostics(t *testing.T) {
 					return nil
 				}
 				switch mode {
-				case "failed", "snapshot_completed":
+				case "failed", "snapshot_unconfirmed":
 					return appstate.ErrMismatchingLTHash
 				case "cancelled":
 					cancel()
@@ -57,7 +57,7 @@ func TestSyncAppStateDiagnostics(t *testing.T) {
 				}
 			}
 			f.requestAppStateRecovery = func(context.Context, string) (types.MessageID, error) {
-				if mode == "snapshot_completed" {
+				if mode == "snapshot_unconfirmed" {
 					f.emit(&events.AppStateSyncComplete{Name: appstate.WAPatchRegularLow, Recovery: true})
 					return "fixture", nil
 				}
@@ -85,9 +85,9 @@ func TestSyncAppStateDiagnostics(t *testing.T) {
 			case "full_completed":
 				requireRecoveryObservation(t, state, "regular_low", appStateRecoveryFullSync, AppStateRecoveryCompleted, "")
 				requireRecoveryObservation(t, state, "regular_low", appStateRecoveryCheckpoint, AppStateRecoveryCompleted, "")
-			case "snapshot_completed":
+			case "snapshot_unconfirmed":
 				requireRecoveryObservation(t, state, "regular_low", appStateRecoveryFullSync, AppStateRecoveryFailed, "lthash_mismatch")
-				requireRecoveryObservation(t, state, "regular_low", appStateRecoverySnapshot, AppStateRecoveryCompleted, "")
+				requireRecoveryObservation(t, state, "regular_low", appStateRecoverySnapshot, AppStateRecoveryUnconfirmed, "completion_unconfirmed")
 			case "cancelled":
 				requireRecoveryObservation(t, state, "regular_low", appStateRecoveryFullSync, AppStateRecoveryCancelled, "cancelled")
 			case "preventive":

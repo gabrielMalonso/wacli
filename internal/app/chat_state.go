@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -266,7 +265,7 @@ func (a *App) replayRequiredAppState(ctx context.Context, collection appstate.WA
 			return a.clearCompletedAppStateRecovery(collection, markerGeneration)
 		}
 		if errors.Is(fetchErr, appstate.ErrMismatchingLTHash) || errors.Is(fetchErr, wa.ErrEmptyAppStateKeyShare) {
-			return a.recoverMismatchingAppState(ctx, collection, markerGeneration, tracker, nil)
+			return a.recoverMismatchingAppState(ctx, collection, tracker, nil)
 		}
 		if !errors.Is(fetchErr, appstate.ErrKeyNotFound) {
 			return fmt.Errorf("replay WhatsApp app state recovery for %s: %w", collection, fetchErr)
@@ -291,78 +290,60 @@ func (a *App) replayRequiredAppState(ctx context.Context, collection appstate.WA
 	}
 }
 
-func (a *App) recoverMismatchingAppState(ctx context.Context, collection appstate.WAPatchName, markerGeneration int64, tracker *appStatePersistenceTracker, onRequested func(types.MessageID)) error {
+func (a *App) recoverMismatchingAppState(ctx context.Context, collection appstate.WAPatchName, tracker *appStatePersistenceTracker, onRequested func(types.MessageID)) error {
 	ticket := a.appStatePersist.reserve()
 	eventsToPersist, recoveryErr := a.waitForPrimaryAppStateRecovery(ctx, collection, onRequested)
 	persistCtx := context.WithoutCancel(ctx)
 	result := make(chan error, 1)
 	frontier := a.appStatePersist.complete(ticket, func() {
-		if recoveryErr != nil {
-			result <- nil
-			return
-		}
+		// These are real SDK events, irrespective of which request produced them.
+		// Persist them on every outcome, including standalone calls without a global handler.
 		result <- a.persistFetchedAppStateEvents(persistCtx, eventsToPersist, tracker)
 	})
 	if err := a.appStatePersist.waitThrough(persistCtx, frontier); err != nil {
-		return err
+		return errors.Join(recoveryErr, err)
 	}
-	if persistenceErr := <-result; persistenceErr != nil {
-		return fmt.Errorf("persist recovered app state %s: %w", collection, persistenceErr)
+	persistenceErr := <-result
+	if persistenceErr != nil {
+		recordAppStateRecovery(ctx, string(collection), appStateRecoveryPersist, persistenceErr)
+		persistenceErr = fmt.Errorf("persist observed app state %s: %w", collection, persistenceErr)
 	}
-	if recoveryErr != nil {
-		return recoveryErr
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return a.clearCompletedAppStateRecovery(collection, markerGeneration)
+	// Public snapshot events cannot authorize a checkpoint or the dependent mutation.
+	return errors.Join(recoveryErr, persistenceErr, ctx.Err())
 }
 
 func (a *App) waitForPrimaryAppStateRecovery(ctx context.Context, collection appstate.WAPatchName, onRequested func(types.MessageID)) ([]any, error) {
-	completed := make(chan []any, 1)
 	var mu sync.Mutex
 	var captured []any
 	finished := false
-	// whatsmeow dispatches recovery mutations synchronously and emits this
-	// collection's AppStateSyncComplete last, so the sentinel closes the drain.
+	// This capture is only for ordered persistence, never request attribution.
+	// SDK removal plus closed admission ends it before its reserved ticket drains.
 	handlerID := a.wa.AddEventHandler(func(evt any) {
 		mu.Lock()
 		defer mu.Unlock()
 		if finished {
 			return
 		}
-		if syncComplete, ok := evt.(*events.AppStateSyncComplete); ok {
-			if syncComplete != nil && syncComplete.Recovery && syncComplete.Name == collection {
-				finished = true
-				completed <- append([]any(nil), captured...)
+		for _, name := range appStateCollectionsForEvent(evt) {
+			if name == collection {
+				captured = append(captured, evt)
+				break
 			}
-			return
-		}
-		if slices.Contains(appStateCollectionsForEvent(evt), collection) {
-			captured = append(captured, evt)
 		}
 	})
-	defer a.wa.RemoveEventHandler(handlerID)
-
-	requestID, err := a.wa.RequestAppStateRecovery(ctx, string(collection))
-	if err != nil {
-		mu.Lock()
-		finished = true
-		mu.Unlock()
-		return nil, fmt.Errorf("request WhatsApp app state recovery for %s: %w", collection, err)
+	exchange, err := a.wa.RequestAppStateRecoveryObserved(ctx, string(collection), onRequested)
+	mu.Lock()
+	finished = true
+	mu.Unlock()
+	a.wa.RemoveEventHandler(handlerID)
+	a.emitOrPrint("app_state_recovery_observed", map[string]any{
+		"requested_collection": string(collection), "ack_confirmed": exchange.ACKConfirmed,
+		"response_received": exchange.ResponseReceived, "completion": "unconfirmed",
+	}, "\rApp state %s recovery: ack confirmed=%t, response received=%t; completion unconfirmed\n", collection, exchange.ACKConfirmed, exchange.ResponseReceived)
+	if err == nil {
+		err = wa.ErrAppStateCompletionUnconfirmed
 	}
-	if onRequested != nil {
-		onRequested(requestID)
-	}
-	select {
-	case eventsToPersist := <-completed:
-		return eventsToPersist, nil
-	case <-ctx.Done():
-		mu.Lock()
-		finished = true
-		mu.Unlock()
-		return nil, fmt.Errorf("wait for WhatsApp app state recovery for %s: %w", collection, ctx.Err())
-	}
+	return captured, fmt.Errorf("observe WhatsApp app state recovery for %s: %w", collection, err)
 }
 
 func (a *App) fetchAndPersistAppState(ctx context.Context, collection appstate.WAPatchName, fullSync bool, tracker *appStatePersistenceTracker) (fetchErr, persistenceErr error) {
