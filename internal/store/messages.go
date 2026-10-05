@@ -539,52 +539,49 @@ func (d *DB) GetNextMessageInfo(chatJID, msgID string) (MessageInfo, error) {
 }
 
 func (d *DB) MessageContext(chatJID, msgID string, before, after int) ([]Message, error) {
-	if before < 0 {
-		before = 0
+	return d.MessageContextForChats([]string{chatJID}, msgID, before, after)
+}
+
+// MessageContextForChats selects the first stored target in the supplied identity
+// order and reads bounded neighbors across those identities. A tombstoned target
+// remains visible, while neighbors use the normal list exclusion of tombstones.
+func (d *DB) MessageContextForChats(chatJIDs []string, msgID string, before, after int) ([]Message, error) {
+	before, after = max(before, 0), max(after, 0)
+	var target Message
+	err := sql.ErrNoRows
+	for _, chatJID := range chatJIDs {
+		target, err = d.GetMessage(chatJID, msgID)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
 	}
-	if after < 0 {
-		after = 0
-	}
-	target, err := d.GetMessage(chatJID, msgID)
 	if err != nil {
 		return nil, err
 	}
 
-	beforeRows, err := d.q.MessageContextBefore(storeCtx(), storedb.MessageContextBeforeParams{
-		ChatJid: chatJID,
-		Ts:      unix(target.Timestamp),
-		Ts_2:    unix(target.Timestamp),
-		Rowid:   target.rowID,
-		Limit:   int64(before),
-	})
+	anchor := &messageCursor{TS: target.rowTS, RowID: target.rowID}
+	neighbors := func(limit int, asc bool) ([]Message, error) {
+		if limit == 0 {
+			return nil, nil
+		}
+		query, args := listMessagesQuery(ListMessagesParams{ChatJIDs: chatJIDs, Limit: limit, Asc: asc}, anchor)
+		return d.scanMessages(query, args...)
+	}
+	beforeMessages, err := neighbors(before, false)
 	if err != nil {
 		return nil, err
 	}
-
-	afterRows, err := d.q.MessageContextAfter(storeCtx(), storedb.MessageContextAfterParams{
-		ChatJid: chatJID,
-		Ts:      unix(target.Timestamp),
-		Ts_2:    unix(target.Timestamp),
-		Rowid:   target.rowID,
-		Limit:   int64(after),
-	})
+	afterMessages, err := neighbors(after, true)
 	if err != nil {
 		return nil, err
 	}
-	beforeMessages := make([]Message, 0, len(beforeRows))
-	for _, row := range beforeRows {
-		beforeMessages = append(beforeMessages, messageFromBeforeRow(row))
-	}
-	afterMessages := make([]Message, 0, len(afterRows))
-	for _, row := range afterRows {
-		afterMessages = append(afterMessages, messageFromAfterRow(row))
-	}
-
 	// Reverse before rows back to chronological order.
 	for i, j := 0, len(beforeMessages)-1; i < j; i, j = i+1, j-1 {
 		beforeMessages[i], beforeMessages[j] = beforeMessages[j], beforeMessages[i]
 	}
-
 	out := make([]Message, 0, len(beforeMessages)+1+len(afterMessages))
 	out = append(out, beforeMessages...)
 	out = append(out, target)
@@ -652,31 +649,10 @@ func messageFromGetRow(row storedb.GetMessageRow) Message {
 	)
 }
 
-func messageFromBeforeRow(row storedb.MessageContextBeforeRow) Message {
-	return messageFromScalars(
-		row.Rowid, row.ChatJid, row.Name, row.MsgID, row.SenderJid, row.SenderName,
-		row.Ts, row.FromMe, row.Text, row.DisplayText, row.QuotedMsgID, row.QuotedSenderJid, row.IsForwarded,
-		row.ForwardingScore, row.ReactionToID, row.ReactionEmoji, row.MediaType,
-		row.MediaCaption, row.Filename, row.MimeType, row.DirectPath, row.LocalPath,
-		row.DownloadedAt, row.Column24, row.StarredAt, row.Revoked, row.DeletedForMe,
-		row.DeletedAt, row.DeletionReason, row.PayloadPurgedAt, row.Edited, row.Buttons, row.Column33,
-	)
-}
-
-func messageFromAfterRow(row storedb.MessageContextAfterRow) Message {
-	return messageFromScalars(
-		row.Rowid, row.ChatJid, row.Name, row.MsgID, row.SenderJid, row.SenderName,
-		row.Ts, row.FromMe, row.Text, row.DisplayText, row.QuotedMsgID, row.QuotedSenderJid, row.IsForwarded,
-		row.ForwardingScore, row.ReactionToID, row.ReactionEmoji, row.MediaType,
-		row.MediaCaption, row.Filename, row.MimeType, row.DirectPath, row.LocalPath,
-		row.DownloadedAt, row.Column24, row.StarredAt, row.Revoked, row.DeletedForMe,
-		row.DeletedAt, row.DeletionReason, row.PayloadPurgedAt, row.Edited, row.Buttons, row.Column33,
-	)
-}
-
 func messageFromScalars(rowID int64, chatJID, chatName, msgID, senderJID, senderName string, ts, fromMe int64, text, displayText, quotedMsgID, quotedSenderJID string, forwarded, forwardingScore int64, reactionToID, reactionEmoji, mediaType, mediaCaption, filename, mimeType, directPath, localPath string, downloadedAt, starred, starredAt, revoked, deletedForMe, deletedAt int64, deletionReason string, payloadPurgedAt, edited int64, buttonsJSON, snippet string) Message {
 	m := Message{
 		rowID:           rowID,
+		rowTS:           ts,
 		ChatJID:         chatJID,
 		ChatName:        chatName,
 		MsgID:           msgID,

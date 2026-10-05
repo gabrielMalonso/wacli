@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -101,5 +102,41 @@ func TestChatFlagsString(t *testing.T) {
 	}
 	if err := validateBoolFilter("archived", true, false); err != nil {
 		t.Fatalf("unexpected filter error: %v", err)
+	}
+}
+
+func TestResolveStoredChatsPreservesPinnedOrderAndStableTies(t *testing.T) {
+	lid := mustParseJID(t, "999123456789@lid")
+	pn := mustParseJID(t, "15551234567@s.whatsapp.net")
+	resolver := fakeChatResolver{lidToPN: map[types.JID]types.JID{lid: pn}}
+	old, recent := time.Unix(10, 0), time.Unix(20, 0)
+	for _, fusion := range []bool{false, true} {
+		t.Run(map[bool]string{false: "separate", true: "fused"}[fusion], func(t *testing.T) {
+			input := []store.Chat{
+				{JID: pn.String(), Pinned: true, Archived: true, MutedUntil: -1, LastMessageTS: old},
+				{JID: "pinned-tie@s.whatsapp.net", Pinned: true, LastMessageTS: old},
+				{JID: "recent@s.whatsapp.net", LastMessageTS: recent},
+				{JID: lid.String(), LastMessageTS: recent},
+				{JID: "last@s.whatsapp.net", LastMessageTS: old},
+			}
+			if !fusion {
+				input[0].JID = "other-pinned@s.whatsapp.net"
+			}
+			got := resolveStoredChatsWith(context.Background(), resolver, input)
+			var ids []string
+			for _, c := range got {
+				ids = append(ids, c.JID)
+			}
+			want := []string{input[0].JID, "pinned-tie@s.whatsapp.net", "recent@s.whatsapp.net", pn.String(), "last@s.whatsapp.net"}
+			if fusion {
+				want = []string{pn.String(), "pinned-tie@s.whatsapp.net", "recent@s.whatsapp.net", "last@s.whatsapp.net"}
+			}
+			if !reflect.DeepEqual(ids, want) || !got[0].Pinned || !got[0].Archived || got[0].MutedUntil != -1 {
+				t.Fatalf("resolved order/flags: %+v want=%v", got, want)
+			}
+			if fusion && !got[0].LastMessageTS.Equal(recent) {
+				t.Fatal("fusion should still use newest activity")
+			}
+		})
 	}
 }

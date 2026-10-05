@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Local results: normalize agent search sender filters consistently across relevance/time order; retain exact legacy sender matching. Read context neighbors across already verified chat identities using raw timestamp/rowid bounds, preserving target priority, tombstones, per-side limits and unknown public timestamps. Keep pinned chats ahead of activity after legacy PN/LID display fusion, with stable ties and unchanged flag fusion.
+
 - Agents: report broken history-action output with retained attempt correlation and uncertainty, preserve outbound archive-preflight exit 4, and sanitize chat-state argument errors. Emit domain-specific query hints only for truncated fields, omit unnecessary adapter-execution hints for short/empty transcripts, and clarify that outbound inspection never authorizes resending an uncertain operation. Preserve v1 envelopes, identity/unknown observations, readonly policy, idempotency and legacy output; document that encoded output caps do not bound marshal memory.
 
 - IPC: cap all owner request input before buffering/decoding at 4 MiB inclusive, with at most one extra byte read to detect overflow. Refuse excessive legacy envelopes previously accepted without a size limit; preserve smaller typed bounds, family framing/validation, correlation, uncertainty and retry behavior. This limits input consumption, not process RSS or authorization.
