@@ -84,7 +84,7 @@ func (a *App) runSyncFollow(ctx context.Context, maxReconnect time.Duration, pre
 	}
 }
 
-func (a *App) runSyncUntilIdle(ctx context.Context, idleExit, maxReconnect time.Duration, presenceMode SyncPresenceMode, messagesStored, lastEvent *atomic.Int64, disconnected <-chan struct{}, loggedOut <-chan struct{}) (SyncResult, error) {
+func (a *App) runSyncUntilIdle(ctx context.Context, idleExit, maxReconnect time.Duration, presenceMode SyncPresenceMode, messagesStored, lastEvent *atomic.Int64, disconnected <-chan struct{}, loggedOut <-chan struct{}, history *historyObserver) (SyncResult, error) {
 	poll := 250 * time.Millisecond
 	if idleExit >= 2*time.Second {
 		poll = 1 * time.Second
@@ -115,6 +115,11 @@ func (a *App) runSyncUntilIdle(ctx context.Context, idleExit, maxReconnect time.
 		case <-ticker.C:
 			last := time.Unix(0, lastEvent.Load())
 			if time.Since(last) >= idleExit {
+				if history != nil {
+					if _, closed := history.closeIfIdle(idleExit); !closed {
+						continue
+					}
+				}
 				a.emitOrPrint("idle_exit", map[string]any{
 					"idle_duration":   idleExit.String(),
 					"messages_synced": messagesStored.Load(),

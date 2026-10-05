@@ -80,6 +80,7 @@ type SyncOptions struct {
 	WebhookEvents       SyncWebhookEventSet // nil = messages only
 	afterHistorySync    func(*events.HistorySync)
 	historyStoreError   func(types.JID, error) // optional observer for backfill persistence failures
+	historyObserver     *historyObserver       // standalone backfill callback/idle window
 	outboundHistory     *outboundEvidenceBatch // shared by download and persistence, never per message
 }
 
@@ -265,7 +266,7 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 	if opts.Mode == SyncModeFollow {
 		_, err = a.runSyncFollow(syncCtx, opts.MaxReconnect, opts.PresenceMode, &messagesStored, &connectionEpoch, disconnected, loggedOut, staleReconnect)
 	} else {
-		_, err = a.runSyncUntilIdle(syncCtx, opts.IdleExit, opts.MaxReconnect, opts.PresenceMode, &messagesStored, &lastEvent, disconnected, loggedOut)
+		_, err = a.runSyncUntilIdle(syncCtx, opts.IdleExit, opts.MaxReconnect, opts.PresenceMode, &messagesStored, &lastEvent, disconnected, loggedOut, opts.historyObserver)
 	}
 	limitErr := limits.Err()
 	// Successful one-shot modes must finish queued downloads before cleanup
