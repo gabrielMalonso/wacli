@@ -63,7 +63,7 @@ rows = conn.execute("""
 """, (50,)).fetchall()
 ```
 
-Avoid `immutable=1` when `wacli sync --follow` may be writing concurrently; a normal read-only SQLite connection can see WAL updates safely.
+Use normal readonly SQLite when `wacli sync --follow` may write concurrently or start later; absent sidecars do not establish immutability. SQLite may create or update WAL/SHM bookkeeping and fail when required bookkeeping is unavailable. Wacli's readers use `mode=ro`/`query_only` without an immutable fallback; they do not create missing databases/directories/sessions, migrate, chmod, acquire writer LOCK or open WhatsApp. Reads do not share a global snapshot. See [store readonly access](store.md#local-reads-by-default).
 
 ## Common queries
 
@@ -155,7 +155,7 @@ ORDER BY name;
 - Hash JIDs with a tool-local salt if you only need stable identity buckets.
 - Provide a delete or opt-out path if the companion tool tracks people.
 - Do not copy `session.db`, media keys, or WhatsApp device keys into unrelated systems.
-- Use `WACLI_READONLY=1` when shelling out to `wacli` from a tool that should never mutate WhatsApp or the local store.
+- Use `WACLI_READONLY=1` when shelling out to `wacli` to reject intentional WhatsApp mutations and archive writes by wacli. Requested [message export files](messages.md#export), [media download output](media.md#download), [explicit adapter execution](media.md#explicit-local-transcription), and [SQLite WAL/SHM bookkeeping](store.md#local-reads-by-default) remain permitted. Downloads may use the network; the chosen adapter is not sandboxed and may make network requests or file writes.
 
 ## Speaker-tracking pattern
 

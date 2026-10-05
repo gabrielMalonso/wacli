@@ -46,11 +46,13 @@ CGO_ENABLED=1 CGO_CFLAGS="${CGO_CFLAGS:+$CGO_CFLAGS }-Wno-error=missing-braces" 
 node --input-type=module - "$store_dir" "${1:-./dist/wacli}" <<'JS'
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {readFileSync,readdirSync} from 'node:fs';
+import {readFileSync,readdirSync,statSync,lstatSync} from 'node:fs';
 import {join} from 'node:path';
 const store=process.argv[2];
 const binary=process.argv[3];
 const before=readFileSync(join(store,'wacli.db'));
+const dbMode=statSync(join(store,'wacli.db')).mode,dirMode=statSync(store).mode;
+assert.deepEqual(readdirSync(store),['wacli.db']);
 function run(args,exit=0) {
  const p=spawnSync(binary,['--store',store,'--read-only',...args],{encoding:'utf8'});
  assert.equal(p.status,exit,p.stderr);
@@ -129,7 +131,14 @@ for(const literal of ['--sort','--asc','--agent','--cursor']) {
 }
 assert.deepEqual(run(['--agent','messages','search','Synthetic','--sort','time','--limit','11']).meta.page,{returned:11,has_more:false,next_cursor:null});
 assert.deepEqual(run(['--agent','messages','search','Absent','--sort','time']).meta.page,{returned:0,has_more:false,next_cursor:null});
-assert.deepEqual(readFileSync(join(store,'wacli.db')),before);
-assert.deepEqual(readdirSync(store),['wacli.db']);
-console.log('Synthetic production CLI list/search pagination e2e passed (asc/desc, ties, limits, errors, legacy, unchanged archive).');
+assert.ok(readFileSync(join(store,'wacli.db')).equals(before),'readonly fixture changed database bytes/schema');
+assert.equal(statSync(join(store,'wacli.db')).mode,dbMode);assert.equal(statSync(store).mode,dirMode);
+// Exact database bytes preserve rows and schema; only SQLite bookkeeping may appear.
+const files=readdirSync(store).sort();
+assert.deepEqual(files.filter(name=>name!=='wacli.db-wal'&&name!=='wacli.db-shm'),['wacli.db']);
+for(const name of files.filter(name=>name!=='wacli.db')) {
+ const info=lstatSync(join(store,name));assert.ok(info.isFile(),`${name} must be a regular SQLite sidecar`);
+ if(name==='wacli.db-wal')assert.equal(info.size,0,'closed readonly fixture must not gain WAL frames');
+}
+console.log('Synthetic production CLI list/search pagination e2e passed (asc/desc, ties, limits, errors, legacy, unchanged database/schema/permissions, SQLite bookkeeping only).');
 JS

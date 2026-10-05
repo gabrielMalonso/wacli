@@ -67,12 +67,14 @@ WhatsApp Web provides history on a best-effort basis. Use [`history coverage`](d
 
 Human-readable tables are the default. Use `--json` for one-shot commands and `--events` for NDJSON lifecycle events from long-running commands. Progress and errors stay on stderr.
 
-Use `--read-only` or `WACLI_READONLY=1` when an integration must not change WhatsApp or the local store:
+Use `--read-only` or `WACLI_READONLY=1` to reject intentional WhatsApp mutations and archive writes by wacli:
 
 ```sh
 wacli --read-only --json messages search "invoice"
 WACLI_READONLY=1 wacli --json doctor
 ```
+
+This policy still permits requested [message export files](docs/messages.md#export), [media download output](docs/media.md#download), and [transcription through an explicitly selected adapter](docs/media.md#explicit-local-transcription). Downloads may use the network; the adapter is not sandboxed and can make its own network requests or file writes. Normal readonly SQLite may create or update WAL/SHM bookkeeping and fails when required bookkeeping is unavailable; see [store readonly access](docs/store.md#local-reads-by-default) for the no-create and snapshot limits.
 
 Write commands take a per-store lock. After a `sync --follow` process finishes startup, supported send commands plus the `chats` state commands (`mark-read`, `archive`, `pin`, `mute`, and their inverses) are delegated to it while it owns that lock. See [companion integrations](docs/integrations.md) for webhooks and safe read-only SQLite access.
 

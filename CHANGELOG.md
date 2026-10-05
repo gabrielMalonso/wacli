@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Tests/docs: align offline pagination fixture assertions with normal readonly SQLite bookkeeping, allowing only regular archive WAL/SHM sidecars and an empty WAL while retaining exact database bytes/schema, database/directory permissions and rejection of new databases/session/LOCK files. Compare database bytes with `Buffer.equals` and a concise assertion so mismatches do not construct large buffer diffs. Clarify readonly WhatsApp/archive write barriers, requested export/download output, explicitly selected unsandboxed adapters and bookkeeping exceptions; CLI/agent behavior is unchanged.
+
 - Local reads: propagate message chat-filter stat errors other than session absence and readonly session-opening failures instead of silently returning empty matches. Expose offline doctor auth-source failures through legacy `store_error` while preserving diagnostic exit 0, existing bool fields, known auth/JID data on archive-only failures, and normal session absence; agent errors remain sanitized with exit 4 and no auth data. Keep optional display-name decoration and identity queries unchanged.
 
 - Readonly SQLite: use normal `mode=ro`/`query_only` for archives, public-session identity resolution, auth status and offline doctor without inferring immutability from absent sidecars. Permit required WAL/SHM bookkeeping even on clean WAL files; report opener permission failures without fallback. Preserve missing-file/directory no-create, schema checks, permissions and SQL readonly behavior; document live-read snapshot limits and validate with synthetic WAL/DELETE fixtures.
