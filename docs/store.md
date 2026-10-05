@@ -26,22 +26,42 @@ stored data or file permissions. They work alongside a writer such as
 
 Persisted phone/JID/LID mappings resolve identities for display and lookup without
 opening a writable WhatsApp client or rewriting historical rows. Missing mappings
-leave the original identity unresolved. No refresh happens during a local query.
+leave the original identity unresolved. A missing session also leaves a message
+chat filter literal, but session stat errors other than absence and readonly
+opening failures stop the query instead of returning an empty success. Optional
+best-effort display-name decoration is unchanged. No refresh happens during a
+local query.
 
 A missing `wacli.db` produces an actionable error without creating its directory
 or database. `auth status` instead reports unauthenticated when its session is
-absent; `doctor` reports missing/incompatible stores in `store_error` and retains
-its diagnostic JSON shape. Read-only archive access requires the current schema
+absent; legacy offline `doctor` reports archive or auth-source failures in
+`store_error` and retains its diagnostic JSON shape and exit 0. If the auth source
+fails, its existing `authenticated=false` is a placeholder, not proof of
+logout or lost authentication; no `linked_jid` is inferred. Known auth/JID observations remain
+available if only the archive fails. Agent doctor instead returns its sanitized
+error with exit 4 and no auth data. Read-only archive access requires the current schema
 version: older or unversioned stores need an **explicit writable upgrade** (for
 example, `auth` or `sync`); a newer schema needs a compatible newer wacli binary.
 Local queries never perform that upgrade automatically. These writable commands
 may connect to WhatsApp; there is currently no dedicated offline upgrade command.
+Read-only validation also requires the complete supported migration-version set.
+A synthetic/anomalous ledger that replaces an expected version with zero or a
+negative value is refused even if its maximum version and row count still match;
+this check does not diagnose general database corruption.
 
-SQLite readers still need to see committed WAL data. When SQLite sidecars already
-exist, readers use normal SQLite locking and can incidentally create or update
-`-shm`/WAL bookkeeping as SQLite requires. A clean database without sidecars is
-opened with `immutable=1` to avoid creating sidecars. This is not a promise of
-absolute filesystem immutability while a writer is active.
+Archive and public-session readers (identity resolution, `auth status` and
+offline `doctor`) use normal SQLite `mode=ro` with
+`query_only`, including when no sidecars exist yet. SQLite may create or update
+WAL/`-shm` bookkeeping even for a clean database in WAL journal mode. This permits
+subsequent queries to observe commits from a writer that opens later; absence of
+sidecars is not evidence of an immutable database. Missing database/session files
+or directories are never created, and readers do not migrate, chmod, acquire the
+writer LOCK or open a WhatsApp client. Required bookkeeping that cannot be
+performed because of permissions produces an error, without an immutable fallback.
+For example, a clean WAL file in a directory without write permission can fail,
+while a clean DELETE-journal file needs no WAL bookkeeping. This does not promise
+a common snapshot across statements, pages or the archive/session files, or
+remote freshness/completeness.
 
 `--read-only` and `WACLI_READONLY=1` remain barriers to explicit mutations.
 Remote refresh/inspection commands retain their documented writable behavior,
@@ -79,6 +99,7 @@ wacli groups prune [--days N] [--left-only=false|--include-active] [--dry-run] [
 - Destructive cleanup commands require confirmation unless `--confirm` is passed.
 - If a row cannot be deleted, bulk cleanup continues with the other targets, then exits nonzero with the underlying errors and the number successfully deleted. In `--json` mode, failures use the error envelope on stderr and do not emit a success result on stdout. Successfully deleted rows stay deleted; failed deletions are rolled back individually.
 - Use `--dry-run` first; it reads the existing current-schema store without taking the writer lock, deleting media, migrating schemas, or changing data/permissions. It works alongside sync, subject to the SQLite WAL bookkeeping caveat above.
+- `store cleanup --dry-run` counts each selected chat once, including retained tombstones and chats with zero messages, and reuses those counts in text output. A counting error stops the preview before emitting its result. Selection and individual counts remain separate reads, not a globally atomic snapshot.
 - `--read-only` and `WACLI_READONLY=1` allow `--dry-run` previews and reject cleanup/purge execution before opening the store for writes. Defaults, target selection, and confirmation requirements are unchanged.
 - Use `--account NAME` to target a named account store. Use `--store DIR` for manual stores or migration debugging; it cannot be combined with `--account`.
 
