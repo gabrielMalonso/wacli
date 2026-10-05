@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openclaw/wacli/internal/app"
 	"github.com/openclaw/wacli/internal/out"
 	"github.com/openclaw/wacli/internal/store"
 	"github.com/spf13/cobra"
@@ -172,6 +173,9 @@ func explainChatStateDelegateError(err error, action string) error {
 }
 
 func runChatState(flags *rootFlags, opts chatStateOptions, action string, delegate sendDelegateRequest, run func(context.Context, chatStateApp, types.JID) error) error {
+	if flags.agent {
+		return runAgentChatState(flags, opts, app.ChatStateAction(action))
+	}
 	if strings.TrimSpace(opts.chat) == "" {
 		return fmt.Errorf("--chat is required")
 	}

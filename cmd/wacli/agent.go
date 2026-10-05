@@ -27,6 +27,7 @@ const (
 	agentHistoryRecovery
 	agentLocalDraftWrite
 	agentOutboundSend
+	agentChatState
 )
 
 // Recover output intent even if Cobra stops on an earlier parse error. Inspect
@@ -35,7 +36,7 @@ const (
 // values or executing hooks.
 func agentFlagIntent(root *cobra.Command, args []string) (intent struct {
 	agent, detailSet, cursorSet, help bool
-	store, account                    string
+	store, account, chat, chatAction  string
 	capability                        agentCapability
 }) {
 	known := make(map[string]*pflag.Flag)
@@ -63,6 +64,9 @@ func agentFlagIntent(root *cobra.Command, args []string) (intent struct {
 				if child.Name() == token {
 					node = child
 					intent.capability = agentCommandCapability(node)
+					if intent.capability == agentChatState {
+						intent.chatAction = node.Name()
+					}
 					break
 				}
 			}
@@ -118,6 +122,8 @@ func agentFlagIntent(root *cobra.Command, args []string) (intent struct {
 			intent.store = value
 		case "account":
 			intent.account = value
+		case "chat":
+			intent.chat = value
 		}
 	}
 	return intent
@@ -194,6 +200,8 @@ func agentCommandCapability(cmd *cobra.Command) agentCapability {
 		return agentHistoryRecovery
 	case "outbound send":
 		return agentOutboundSend
+	case "chats mark-unread", "chats archive", "chats unarchive":
+		return agentChatState
 	case "doctor":
 		connect, _ := cmd.Flags().GetBool("connect")
 		if !connect {
@@ -231,6 +239,15 @@ func validateAgentCommand(cmd *cobra.Command, args []string, flags *rootFlags) e
 		}
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), "wacli ")
+	if flags.agentCapability == agentChatState {
+		if flags.isReadOnly() {
+			return &out.AgentError{Code: "read_only", Message: "Read-only policy rejects chat state mutations.", ExitCode: 2}
+		}
+		chat, _ := cmd.Flags().GetString("chat")
+		if _, err := store.NormalizeDraftTarget(chat); err != nil || cmd.Flags().Changed("pick") {
+			return usage(fmt.Errorf("--chat requires an explicit phone/DM/group JID; --pick is not supported with --agent"))
+		}
+	}
 	if path == "outbound send" {
 		if flags.isReadOnly() {
 			return &out.AgentError{Code: "read_only", Message: "Read-only policy rejects outbound dispatch.", ExitCode: 2}
@@ -451,7 +468,7 @@ func agentMeta(flags *rootFlags) out.AgentMeta {
 		detail = "compact"
 	}
 	source := "local"
-	if flags.agentCapability == agentHistoryRecovery || flags.agentCapability == agentOutboundSend {
+	if flags.agentCapability == agentHistoryRecovery || flags.agentCapability == agentOutboundSend || flags.agentCapability == agentChatState {
 		source = "live"
 	}
 	meta := out.AgentMeta{Source: source, Detail: detail, Completeness: "unknown", Freshness: "unknown"}
