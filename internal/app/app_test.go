@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -62,6 +63,10 @@ func TestNewReadOnlyUsesReadOnlyStore(t *testing.T) {
 	writer.Close()
 
 	assertNoAppSQLiteSidecars(t, filepath.Join(storeDir, "wacli.db"))
+	before, err := os.ReadFile(filepath.Join(storeDir, "wacli.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	reader, err := New(Options{StoreDir: storeDir, ReadOnly: true})
 	if err != nil {
@@ -79,7 +84,10 @@ func TestNewReadOnlyUsesReadOnlyStore(t *testing.T) {
 		t.Fatalf("read-only UpsertChat err = %v, want readonly error", err)
 	}
 
-	assertNoAppSQLiteSidecars(t, filepath.Join(storeDir, "wacli.db"))
+	after, err := os.ReadFile(filepath.Join(storeDir, "wacli.db"))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("readonly changed archive bytes", err)
+	}
 }
 
 func TestOpenWARejectsReadOnlyWithoutCreatingSession(t *testing.T) {

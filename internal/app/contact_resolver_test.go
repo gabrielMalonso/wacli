@@ -1,10 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -27,7 +29,25 @@ func TestContactResolverLegacySourcesAndUnknownPairs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a, dir := newContactPageFixture(t)
 			path := filepath.Join(dir, "session.db")
-			fixtureSQL(t, path, `DROP TABLE whatsmeow_lid_map; DROP TABLE whatsmeow_device;`+tc.schema)
+			fixtureSQL(t, path, `PRAGMA journal_mode=WAL; DROP TABLE whatsmeow_lid_map; DROP TABLE whatsmeow_device;`+tc.schema)
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				after, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(before, after) {
+					t.Fatal("resolver changed public session bytes", err)
+				}
+				afterInfo, err := os.Stat(path)
+				if err != nil || afterInfo.Mode() != info.Mode() {
+					t.Fatal("resolver changed session permissions", err)
+				}
+			}()
 			resolver, err := a.ReadOnlyContactResolver(context.Background())
 			if tc.unavailable {
 				if err == nil {
@@ -61,7 +81,6 @@ func TestContactResolverLegacySourcesAndUnknownPairs(t *testing.T) {
 			if err != nil || got != unknown {
 				t.Fatalf("unknown => %s %v", got, err)
 			}
-			assertNoAppSQLiteSidecars(t, path)
 		})
 	}
 }

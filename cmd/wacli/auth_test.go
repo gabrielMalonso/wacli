@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -95,6 +96,7 @@ func TestReadOnlyAuthStatusNormalizesDeviceJID(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	assertNoAuthSQLiteSidecars(t, filepath.Join(storeDir, "session.db"))
+	before := snapshotLocalStore(t, storeDir)
 
 	authed, linkedJID, err := readOnlyAuthStatus(storeDir)
 	if err != nil {
@@ -103,10 +105,9 @@ func TestReadOnlyAuthStatusNormalizesDeviceJID(t *testing.T) {
 	if !authed || linkedJID != "15551234567@s.whatsapp.net" {
 		t.Fatalf("status = %v, %q; want normalized linked JID", authed, linkedJID)
 	}
-	if !strings.Contains(readOnlySessionSQLiteURI(filepath.Join(storeDir, "session.db")), "immutable=1") {
-		t.Fatalf("clean session read-only URI must avoid creating WAL sidecars")
+	if !reflect.DeepEqual(before, snapshotLocalStore(t, storeDir)) {
+		t.Fatal("auth status changed session bytes/permissions or created DB/LOCK")
 	}
-	assertNoAuthSQLiteSidecars(t, filepath.Join(storeDir, "session.db"))
 }
 
 func TestReadOnlyAuthStatusRejectsRevokedSessionMarker(t *testing.T) {
@@ -191,8 +192,9 @@ func TestReadOnlySessionSQLiteURIUsesLockingForLiveState(t *testing.T) {
 			t.Fatalf("Remove %s: %v", suffix, err)
 		}
 	}
-	if !strings.Contains(readOnlySessionSQLiteURI(path), "immutable=1") {
-		t.Fatalf("clean session read-only URI must use immutable mode")
+	uri := readOnlySessionSQLiteURI(path)
+	if strings.Contains(uri, "immutable=") || !strings.Contains(uri, "mode=ro") || !strings.Contains(uri, "_query_only=1") {
+		t.Fatalf("clean session URI must use normal readonly SQLite: %s", uri)
 	}
 }
 
