@@ -86,9 +86,14 @@ type SyncOptions struct {
 
 type SyncResult struct {
 	MessagesStored int64
+	recovery       *appStateRecoveryRun
+	storeDir       string
 }
 
 func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, syncErr error) {
+	run := &appStateRecoveryRun{}
+	ctx = context.WithValue(ctx, appStateRecoveryRunKey{}, run)
+	defer func() { result.recovery, result.storeDir = run, a.StoreDir() }()
 	status := a.beginSyncStatus()
 	defer a.endSyncStatus(status)
 
@@ -124,6 +129,7 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 	}
 	a.waMu.Lock()
 	a.appStateReplayOnClose = true
+	a.appStateRecoveryOnClose = run
 	a.waMu.Unlock()
 	if opts.Mode == SyncModeFollow && opts.StaleThreshold > 0 {
 		restoreAutoReconnect, ok := a.wa.SetAutoReconnect(false)
@@ -207,6 +213,9 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 		// The detached socket and SDK send callbacks can outlive this handler.
 		// Record debt before removing it, without waiting for unknown callbacks.
 		if err := a.RequireAppStateReplay(context.Background()); err != nil {
+			for _, collection := range mirroredAppStateCollections {
+				recordAppStateRecovery(ctx, string(collection), appStateRecoveryShutdown, err)
+			}
 			syncErr = errors.Join(syncErr, err)
 			// Keep coverage until App closes the session store. Disconnect alone
 			// does not drain asynchronous SDK callbacks.

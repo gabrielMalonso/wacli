@@ -61,6 +61,22 @@ wacli sync [--once] [--follow] [--idle-exit 30s] [--max-reconnect 5m] [--stale-t
 - `offline_sync_preview` reports the server's announced reconnect backlog with `total`, `messages`, `receipts`, `notifications`, and `app_data_changes`; `offline_sync_completed` reports the server's final `count`. Without `--events`, both print as status lines. Completion can arrive without a preview, including when there is no backlog.
 - These are server replay signals on stderr. Webhooks use a separate background queue, so completion does not mean queued HTTP deliveries have finished. Storage failures or webhook drops can also make delivery counts differ from the announced counts. Do not use these signals to classify individual webhook messages as replayed or live. Webhook payloads keep their existing shape.
 
+## App-state summary
+
+The final human/legacy JSON summary includes `app_state`, read after App closes the session, drains known local writers and reaffirms preventive replay debt. Sync keeps its writer lock until this read-only archive snapshot and report finish. `success` and `synced` preserve the existing successful-stop contract, including cancellation and observed logout; they do not certify queue integrity, remote completeness or freshness. Existing command errors and exits are unchanged; an unavailable diagnostic read adds `reconciliation="unknown"`, `pending_collections=null` and only `error.code="recovery_state_unavailable"`, without changing the exit.
+
+`reconciliation` is `required` when debt is retained, or `none_recorded` when the query succeeds without any. `pending_collections` is sorted and distinct, and is `[]` only for a successful empty query. Successful recovery and failed recovery can both end with `required`: ordinary shutdown records preventive debt for the next covered startup. Do not interpret debt alone as a recovery failure, or an empty list as a healthy/fresh mirror.
+
+`recovery_observations` contains facts from **this invocation**, captured by its workers and collected after they drain. It is `[]` when no monitored recovery/failure was observed; doctor returns `null` because these outcomes are not persisted. Each entry has a collection, phase, an `outcomes` set (`completed`, `failed`, `cancelled`) and sanitized `error_codes`. A full-refresh failure followed by snapshot success retains both phase observations; repeated outcomes in one phase are deduplicated, and a later completion cannot erase an earlier failure. These sets do not encode attempt order or count. Storage is fixed to the five known app-state collections and seven phases (`prepare`, `full_sync`, `snapshot`, `persist`, `checkpoint`, `delta`, `shutdown`), at most 35 entries. `completed` describes the observed phase, not a remote integrity check or a guarantee that all debt was cleared. Shutdown observations record marker failures, not ordinary preventive markers.
+
+For example, a command can retain its legacy successful exit while reporting a failed recovery:
+
+```json
+{"success":true,"data":{"synced":true,"messages_stored":0,"app_state":{"reconciliation":"required","pending_collections":["regular","regular_high","regular_low"],"recovery_observations":[{"collection":"regular_low","phase":"full_sync","outcomes":["failed"],"error_codes":["lthash_mismatch"]},{"collection":"regular_low","phase":"snapshot","outcomes":["failed"],"error_codes":["deadline_exceeded"]}]}},"error":null}
+```
+
+When a failure or cancellation is known, inspect its collection, phase and code and retain them for investigation. When the read is unavailable, check local archive readability and schema compatibility. Neither case establishes the original cause of a remote LTHash mismatch.
+
 ## Webhook payloads
 
 Webhook payloads remain flat JSON objects. Receipt and chat-presence payloads carry
