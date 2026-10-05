@@ -68,7 +68,7 @@ func (r *readOnlySessionResolver) ResolveLIDToPN(ctx context.Context, jid types.
 	if jid.Server != types.HiddenUserServer {
 		return jid
 	}
-	if ownPN := r.resolveOwnPNForLID(ctx, jid); !ownPN.IsEmpty() {
+	if ownPN, _ := r.resolveOwnPNForLID(ctx, jid); !ownPN.IsEmpty() {
 		return ownPN
 	}
 	var user string
@@ -82,7 +82,7 @@ func (r *readOnlySessionResolver) ResolvePNToLID(ctx context.Context, jid types.
 	if jid.Server != types.DefaultUserServer {
 		return jid
 	}
-	if ownLID := r.resolveOwnLIDForPN(ctx, jid); !ownLID.IsEmpty() {
+	if ownLID, _ := r.resolveOwnLIDForPN(ctx, jid); !ownLID.IsEmpty() {
 		return ownLID
 	}
 	var user string
@@ -92,50 +92,50 @@ func (r *readOnlySessionResolver) ResolvePNToLID(ctx context.Context, jid types.
 	return types.JID{User: user, Device: jid.Device, Server: types.HiddenUserServer}
 }
 
-func (r *readOnlySessionResolver) resolveOwnLIDForPN(ctx context.Context, jid types.JID) types.JID {
+func (r *readOnlySessionResolver) resolveOwnLIDForPN(ctx context.Context, jid types.JID) (types.JID, error) {
 	rows, err := r.db.QueryContext(ctx, "SELECT jid, lid FROM whatsmeow_device")
 	if err != nil {
-		return types.EmptyJID
+		return types.EmptyJID, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var pnText, lidText string
+		var pnText, lidText sql.NullString
 		if err := rows.Scan(&pnText, &lidText); err != nil {
-			return types.EmptyJID
+			return types.EmptyJID, err
 		}
-		pn, err := types.ParseJID(strings.TrimSpace(pnText))
+		pn, err := types.ParseJID(strings.TrimSpace(pnText.String))
 		if err != nil || pn.ToNonAD() != jid.ToNonAD() {
 			continue
 		}
-		lid, err := types.ParseJID(strings.TrimSpace(lidText))
+		lid, err := types.ParseJID(strings.TrimSpace(lidText.String))
 		if err == nil && lid.Server == types.HiddenUserServer {
-			return types.JID{User: lid.User, Device: jid.Device, Server: types.HiddenUserServer}
+			return types.JID{User: lid.User, Device: jid.Device, Server: types.HiddenUserServer}, nil
 		}
 	}
-	return types.EmptyJID
+	return types.EmptyJID, rows.Err()
 }
 
-func (r *readOnlySessionResolver) resolveOwnPNForLID(ctx context.Context, jid types.JID) types.JID {
+func (r *readOnlySessionResolver) resolveOwnPNForLID(ctx context.Context, jid types.JID) (types.JID, error) {
 	rows, err := r.db.QueryContext(ctx, "SELECT jid, lid FROM whatsmeow_device")
 	if err != nil {
-		return types.EmptyJID
+		return types.EmptyJID, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var pnText, lidText string
+		var pnText, lidText sql.NullString
 		if err := rows.Scan(&pnText, &lidText); err != nil {
-			return types.EmptyJID
+			return types.EmptyJID, err
 		}
-		lid, err := types.ParseJID(strings.TrimSpace(lidText))
+		lid, err := types.ParseJID(strings.TrimSpace(lidText.String))
 		if err != nil || lid.ToNonAD() != jid.ToNonAD() {
 			continue
 		}
-		pn, err := types.ParseJID(strings.TrimSpace(pnText))
+		pn, err := types.ParseJID(strings.TrimSpace(pnText.String))
 		if err == nil && pn.Server == types.DefaultUserServer {
-			return types.JID{User: pn.User, Device: jid.Device, Server: types.DefaultUserServer}
+			return types.JID{User: pn.User, Device: jid.Device, Server: types.DefaultUserServer}, nil
 		}
 	}
-	return types.EmptyJID
+	return types.EmptyJID, rows.Err()
 }
 
 func (r *readOnlySessionResolver) ResolveChatName(ctx context.Context, chat types.JID, pushName string) string {

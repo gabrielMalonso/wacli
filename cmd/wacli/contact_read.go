@@ -34,7 +34,7 @@ func searchContactsForDisplay(ctx context.Context, a *app.App, query string, lim
 }
 
 func getContactForDisplay(ctx context.Context, a *app.App, rawJID string) (store.Contact, error) {
-	resolver, err := contactReadResolver(a)
+	resolver, err := contactReadResolver(ctx, a)
 	if err != nil {
 		return store.Contact{}, err
 	}
@@ -42,7 +42,10 @@ func getContactForDisplay(ctx context.Context, a *app.App, rawJID string) (store
 	if err != nil {
 		return store.Contact{}, err
 	}
-	jid := resolveContactReadJID(ctx, resolver, rawJID)
+	jid, err := resolveContactReadJID(ctx, resolver, rawJID)
+	if err != nil {
+		return store.Contact{}, err
+	}
 	for _, display := range contacts {
 		match := display.contact.JID == jid
 		for _, source := range display.sources {
@@ -78,59 +81,69 @@ type localIdentityError struct{ cause error }
 func (e *localIdentityError) Error() string { return e.cause.Error() }
 func (e *localIdentityError) Unwrap() error { return e.cause }
 
-func contactReadResolver(a *app.App) (app.LocalResolver, error) {
+func contactReadResolver(ctx context.Context, a *app.App) (app.ContactResolver, error) {
 	if _, err := os.Stat(filepath.Join(a.StoreDir(), "session.db")); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
 		return nil, &localIdentityError{err}
 	}
-	resolver, err := a.ReadOnlyResolver()
+	resolver, err := a.ReadOnlyContactResolver(ctx)
 	if err != nil {
 		return nil, &localIdentityError{err}
 	}
 	return resolver, nil
 }
 
-func resolveContactReadJID(ctx context.Context, resolver app.LocalResolver, rawJID string) string {
+func resolveContactReadJID(ctx context.Context, resolver app.ContactResolver, rawJID string) (string, error) {
 	rawJID = strings.TrimSpace(rawJID)
 	jid, err := types.ParseJID(rawJID)
 	if err != nil {
-		return rawJID
+		return rawJID, nil
 	}
 	if jid.Server == types.HiddenUserServer {
 		if resolver != nil {
-			pn := resolver.ResolveLIDToPN(ctx, jid)
+			pn, err := resolver.ResolveLIDToPN(ctx, jid)
+			if err != nil {
+				return "", &localIdentityError{err}
+			}
 			if pn.User != "" && pn.Server == types.DefaultUserServer {
-				return pn.ToNonAD().String()
+				return pn.ToNonAD().String(), nil
 			}
 		}
 	}
-	return canonicalCLIJID(jid).String()
+	return canonicalCLIJID(jid).String(), nil
 }
 
 func contactMetadataJIDs(ctx context.Context, a *app.App, rawJID string) ([]string, error) {
-	resolver, err := contactReadResolver(a)
+	resolver, err := contactReadResolver(ctx, a)
 	if err != nil {
 		return nil, err
 	}
-	return contactIdentityJIDs(ctx, resolver, rawJID), nil
+	return contactIdentityJIDs(ctx, resolver, rawJID)
 }
 
-func contactIdentityJIDs(ctx context.Context, resolver app.LocalResolver, rawJID string) []string {
-	canonical := resolveContactReadJID(ctx, resolver, rawJID)
+func contactIdentityJIDs(ctx context.Context, resolver app.ContactResolver, rawJID string) ([]string, error) {
+	canonical, err := resolveContactReadJID(ctx, resolver, rawJID)
+	if err != nil {
+		return nil, err
+	}
 	jids := []string{canonical}
 	jid, err := types.ParseJID(canonical)
 	if err == nil && resolver != nil && jid.Server == types.DefaultUserServer {
-		lid := resolver.ResolvePNToLID(ctx, jid).ToNonAD()
+		lid, err := resolver.ResolvePNToLID(ctx, jid)
+		if err != nil {
+			return nil, &localIdentityError{err}
+		}
+		lid = lid.ToNonAD()
 		if lid.User != "" && lid.Server == types.HiddenUserServer {
 			jids = append(jids, lid.String())
 		}
 	}
-	return jids
+	return jids, nil
 }
 
-func contactsForDisplay(ctx context.Context, a *app.App, resolver app.LocalResolver) ([]contactDisplay, error) {
+func contactsForDisplay(ctx context.Context, a *app.App, resolver app.ContactResolver) ([]contactDisplay, error) {
 	// Load before limiting so duplicate rows cannot displace distinct contacts,
 	// and a LID-only row is searchable by its resolved phone number.
 	contacts, err := a.DB().ListContacts(math.MaxInt)
@@ -154,7 +167,10 @@ func contactsForDisplay(ctx context.Context, a *app.App, resolver app.LocalResol
 			// A LID's user component is an opaque identifier, never a phone number.
 			contact.Phone = ""
 			if resolver != nil {
-				pn := resolver.ResolveLIDToPN(ctx, jid)
+				pn, err := resolver.ResolveLIDToPN(ctx, jid)
+				if err != nil {
+					return nil, &localIdentityError{err}
+				}
 				if pn.User != "" && pn.Server == types.DefaultUserServer {
 					contact.JID = pn.ToNonAD().String()
 					contact.Phone = pn.User
@@ -184,7 +200,10 @@ func contactsForDisplay(ctx context.Context, a *app.App, resolver app.LocalResol
 		}
 		display := &result[i]
 		// Metadata can precede its contact row. Prefer the PN alias even then.
-		sources := contactIdentityJIDs(ctx, resolver, display.contact.JID)
+		sources, err := contactIdentityJIDs(ctx, resolver, display.contact.JID)
+		if err != nil {
+			return nil, err
+		}
 		for _, source := range display.sources {
 			if !slices.Contains(sources, source) {
 				sources = append(sources, source)
