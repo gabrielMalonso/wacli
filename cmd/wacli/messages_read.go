@@ -178,14 +178,14 @@ func newMessagesSearchCmd(flags *rootFlags) *cobra.Command {
 				Forwarded: forwarded,
 				Starred:   starred,
 			}
-			if flags.agent && sortBy == "time" {
-				if strings.TrimSpace(from) != "" {
-					jid, err := wa.ParseUserOrJID(strings.TrimSpace(from))
-					if err != nil {
-						return err
-					}
-					params.From = canonicalMessageFilterJID(jid).String()
+			if flags.agent && strings.TrimSpace(from) != "" {
+				jid, err := wa.ParseUserOrJID(strings.TrimSpace(from))
+				if err != nil {
+					return err
 				}
+				params.From = canonicalMessageFilterJID(jid).String()
+			}
+			if flags.agent && sortBy == "time" {
 				chatIdentity := ""
 				if strings.TrimSpace(chat) != "" {
 					jid, err := wa.ParseUserOrJID(strings.TrimSpace(chat))

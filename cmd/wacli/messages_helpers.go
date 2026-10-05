@@ -159,21 +159,7 @@ func getMessageByChatFilter(db *store.DB, chatJIDs []string, id string) (store.M
 }
 
 func getMessageContextByChatFilter(db *store.DB, chatJIDs []string, id string, before, after int) ([]store.Message, error) {
-	var notFound error
-	for _, chatJID := range chatJIDs {
-		msgs, err := db.MessageContext(chatJID, id, before, after)
-		if err == nil {
-			return msgs, nil
-		}
-		if !isNoRows(err) {
-			return nil, err
-		}
-		notFound = err
-	}
-	if notFound != nil {
-		return nil, notFound
-	}
-	return nil, sql.ErrNoRows
+	return db.MessageContextForChats(chatJIDs, id, before, after)
 }
 
 func isNoRows(err error) bool {

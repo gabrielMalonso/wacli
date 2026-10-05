@@ -32,6 +32,7 @@ Agent temporal search uses `wacli --agent messages search "invoice" --sort time 
 - Uses SQLite FTS5 when the binary was built with `-tags sqlite_fts5`.
 - Falls back to `LIKE` if FTS5 is not available.
 - `--type` accepts `text`, `image`, `video`, `audio`, or `document`.
+- Agent `--from` accepts a phone number or JID in both relevance and temporal search, trims surrounding whitespace and removes PN device components. It remains one exact stored sender identity; it does not expand PN/LID sender aliases. Legacy `--from` retains its exact stored-JID filter.
 - Shared WhatsApp contact cards are stored as searchable text with contact names and phone numbers when WhatsApp includes a vCard payload.
 - Associated-child and group-status-mention wrappers retain their inner text, media, and reply context. Group invitations expose their caption, with the group name as a fallback. These parser fixes apply on re-ingestion; they cannot recover absent payloads or missing decryption keys.
 - Comment payloads retain their inner text or media and their envelope's reply target. Album headers show expected image/video counts; those summaries do not recover missing child captions or undecryptable history.
@@ -69,7 +70,7 @@ Plain audio messages have an empty `MediaCaption`. Their `Text` keeps the `[Audi
 
 ## LID mapping
 
-When a phone-number chat JID maps to a stored `@lid` row, list/search/show/context include the mapped rows so historical LID splits do not hide messages.
+When a phone-number chat JID maps to a stored `@lid` row, list/search/show/context include the mapped rows so historical LID splits do not hide messages. Context selects the target in the existing requested-identity-first order, then takes up to `--before` and `--after` neighbors across the verified identities, ordered by raw stored `(ts,rowid)`. Zero disables that side. The target may be a tombstone; neighboring tombstones remain excluded. Nonpositive timestamps still display as unknown, without changing their ordering keys.
 
 ## Examples
 
