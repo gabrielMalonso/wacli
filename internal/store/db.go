@@ -144,20 +144,8 @@ func sqliteURI(path string, readOnly bool) string {
 	params := "_foreign_keys=on&_busy_timeout=5000"
 	if readOnly {
 		params += "&mode=ro&_query_only=1"
-		if !sqliteSidecarsExist(path) {
-			params += "&immutable=1"
-		}
 	}
 	return sqliteutil.FileURI(path, params)
-}
-
-func sqliteSidecarsExist(path string) bool {
-	for _, suffix := range []string{"-journal", "-wal", "-shm"} {
-		if _, err := os.Stat(path + suffix); err == nil {
-			return true
-		}
-	}
-	return false
 }
 
 func (d *DB) Close() error {

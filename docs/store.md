@@ -41,11 +41,19 @@ A synthetic/anomalous ledger that replaces an expected version with zero or a
 negative value is refused even if its maximum version and row count still match;
 this check does not diagnose general database corruption.
 
-SQLite readers still need to see committed WAL data. When SQLite sidecars already
-exist, readers use normal SQLite locking and can incidentally create or update
-`-shm`/WAL bookkeeping as SQLite requires. A clean database without sidecars is
-opened with `immutable=1` to avoid creating sidecars. This is not a promise of
-absolute filesystem immutability while a writer is active.
+Archive and public-session readers (identity resolution, `auth status` and
+offline `doctor`) use normal SQLite `mode=ro` with
+`query_only`, including when no sidecars exist yet. SQLite may create or update
+WAL/`-shm` bookkeeping even for a clean database in WAL journal mode. This permits
+subsequent queries to observe commits from a writer that opens later; absence of
+sidecars is not evidence of an immutable database. Missing database/session files
+or directories are never created, and readers do not migrate, chmod, acquire the
+writer LOCK or open a WhatsApp client. Required bookkeeping that cannot be
+performed because of permissions produces an error, without an immutable fallback.
+For example, a clean WAL file in a directory without write permission can fail,
+while a clean DELETE-journal file needs no WAL bookkeeping. This does not promise
+a common snapshot across statements, pages or the archive/session files, or
+remote freshness/completeness.
 
 `--read-only` and `WACLI_READONLY=1` remain barriers to explicit mutations.
 Remote refresh/inspection commands retain their documented writable behavior,

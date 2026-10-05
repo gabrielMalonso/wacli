@@ -41,20 +41,7 @@ func openReadOnlySessionResolver(path string) (*readOnlySessionResolver, error) 
 }
 
 func readOnlySessionURI(path string) string {
-	params := "_foreign_keys=on&_busy_timeout=5000&mode=ro&_query_only=1"
-	if !sessionSQLiteSidecarsExist(path) {
-		params += "&immutable=1"
-	}
-	return sqliteutil.FileURI(path, params)
-}
-
-func sessionSQLiteSidecarsExist(path string) bool {
-	for _, suffix := range []string{"-journal", "-wal", "-shm"} {
-		if _, err := os.Stat(path + suffix); err == nil {
-			return true
-		}
-	}
-	return false
+	return sqliteutil.FileURI(path, "_foreign_keys=on&_busy_timeout=5000&mode=ro&_query_only=1")
 }
 
 func (r *readOnlySessionResolver) Close() error {

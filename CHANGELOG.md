@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Readonly SQLite: use normal `mode=ro`/`query_only` for archives, public-session identity resolution, auth status and offline doctor without inferring immutability from absent sidecars. Permit required WAL/SHM bookkeeping even on clean WAL files; report opener permission failures without fallback. Preserve missing-file/directory no-create, schema checks, permissions and SQL readonly behavior; document live-read snapshot limits and validate with synthetic WAL/DELETE fixtures.
+
 - Maintenance/compatibility: reject anomalous readonly migration ledgers with unsupported interval bounds even when maximum/count match. Count selected chats once in `store cleanup --dry-run`, reuse text counts and propagate counting errors before output, retaining selection, tombstones, zero counts and JSON/text formats. Destructive cleanup is unchanged.
 
 - Local results: normalize agent search sender filters consistently across relevance/time order; retain exact legacy sender matching. Read context neighbors across already verified chat identities using raw timestamp/rowid bounds, preserving target priority, tombstones, per-side limits and unknown public timestamps. Keep pinned chats ahead of activity after legacy PN/LID display fusion, with stable ties and unchanged flag fusion.

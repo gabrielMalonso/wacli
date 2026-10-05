@@ -24,6 +24,7 @@ wacli --account work auth status
 - Bootstrap sync honors `WACLI_SYNC_MAX_MESSAGES` and `WACLI_SYNC_MAX_DB_SIZE` to cap local history growth.
 - `--events` emits NDJSON lifecycle events on stderr, including raw QR and phone-pairing codes for external renderers.
 - `auth status` reads the existing session read-only by default and creates no store, session, or writer lock. A missing session reports unauthenticated. It reports whether the local store is authenticated. A recorded remote logout overrides a stale device row until WhatsApp confirms a new login.
+- `auth status` and offline `doctor` use normal SQLite readonly locking. WAL/SHM bookkeeping may be created or updated even when the session starts without sidecars; required permission failures are not retried as immutable reads. See [store readonly access](store.md#local-reads-by-default) for the no-create and live-read limits.
 - `auth logout` invalidates the linked-device session and requires writable mode.
 - For multiple accounts, prefer `wacli accounts add NAME`; it creates an isolated account store and runs the same auth/bootstrap flow.
 

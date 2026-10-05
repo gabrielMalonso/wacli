@@ -125,6 +125,13 @@ func snapshotLocalStore(t *testing.T, dir string) map[string]localFileSnapshot {
 		if err != nil {
 			return err
 		}
+		// Normal readonly SQLite may create SHM and empty WAL bookkeeping even
+		// before a writer appears. Retain nonempty WAL bytes to catch SQL effects.
+		for _, db := range []string{"wacli.db", "session.db"} {
+			if path == filepath.Join(dir, db+"-shm") || (path == filepath.Join(dir, db+"-wal") && info.Size() == 0) {
+				return nil
+			}
+		}
 		state := localFileSnapshot{Mode: info.Mode()}
 		if !entry.IsDir() {
 			data, err := os.ReadFile(path)
