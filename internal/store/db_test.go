@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,7 +38,7 @@ func TestOpenUsesExactPercentEscapedPath(t *testing.T) {
 	}
 }
 
-func TestOpenReadOnlyDoesNotCreateWALSidecars(t *testing.T) {
+func TestOpenReadOnlyCleanWALKeepsDatabaseBytesAndPermissions(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
 	db, err := Open(path)
@@ -48,6 +49,13 @@ func TestOpenReadOnlyDoesNotCreateWALSidecars(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	assertNoSQLiteSidecars(t, path)
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	roDB, err := OpenReadOnly(path)
 	if err != nil {
@@ -56,7 +64,17 @@ func TestOpenReadOnlyDoesNotCreateWALSidecars(t *testing.T) {
 	if err := roDB.Close(); err != nil {
 		t.Fatalf("Close read-only: %v", err)
 	}
-	assertNoSQLiteSidecars(t, path)
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) || info.Mode().Perm() != 0o640 {
+		t.Fatal("readonly changed the database bytes or permissions")
+	}
 }
 
 func TestOpenReadOnlyReadsLiveWALSidecars(t *testing.T) {
@@ -86,25 +104,11 @@ func TestOpenReadOnlyReadsLiveWALSidecars(t *testing.T) {
 	}
 }
 
-func TestOpenReadOnlyUsesLockingForAnySQLiteSidecar(t *testing.T) {
+func TestOpenReadOnlyUsesNormalSQLite(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")
-	if err := os.WriteFile(path, []byte(""), 0o600); err != nil {
-		t.Fatalf("WriteFile db: %v", err)
-	}
-	for _, suffix := range []string{"-journal", "-wal", "-shm"} {
-		sidecar := path + suffix
-		if err := os.WriteFile(sidecar, []byte("sidecar"), 0o600); err != nil {
-			t.Fatalf("WriteFile %s: %v", suffix, err)
-		}
-		if strings.Contains(sqliteURI(path, true), "immutable=1") {
-			t.Fatalf("%s sidecar URI must preserve SQLite locking", suffix)
-		}
-		if err := os.Remove(sidecar); err != nil {
-			t.Fatalf("Remove %s: %v", suffix, err)
-		}
-	}
-	if !strings.Contains(sqliteURI(path, true), "immutable=1") {
-		t.Fatalf("clean read-only URI must use immutable mode")
+	uri := sqliteURI(path, true)
+	if !strings.Contains(uri, "mode=ro") || !strings.Contains(uri, "_query_only=1") || strings.Contains(uri, "immutable=") {
+		t.Fatalf("readonly URI must use normal SQLite: %s", uri)
 	}
 }
 

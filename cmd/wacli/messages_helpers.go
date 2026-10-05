@@ -26,11 +26,14 @@ func messageChatJIDFilter(ctx context.Context, a *app.App, chat string) ([]strin
 	}
 	jids := []types.JID{canonicalMessageFilterJID(jid)}
 	if _, err := os.Stat(filepath.Join(a.StoreDir(), "session.db")); err != nil {
-		return jidStrings(jids), nil
+		if errors.Is(err, os.ErrNotExist) {
+			return jidStrings(jids), nil
+		}
+		return nil, &localIdentityError{cause: fmt.Errorf("read session identity source: %w", err)}
 	}
 	resolver, err := a.ReadOnlyResolver()
 	if err != nil {
-		return jidStrings(jids), nil
+		return nil, &localIdentityError{cause: fmt.Errorf("open session identity source: %w", err)}
 	}
 	switch jid.Server {
 	case types.DefaultUserServer:

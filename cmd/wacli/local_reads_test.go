@@ -125,6 +125,13 @@ func snapshotLocalStore(t *testing.T, dir string) map[string]localFileSnapshot {
 		if err != nil {
 			return err
 		}
+		// Normal readonly SQLite may create SHM and empty WAL bookkeeping even
+		// before a writer appears. Retain nonempty WAL bytes to catch SQL effects.
+		for _, db := range []string{"wacli.db", "session.db"} {
+			if path == filepath.Join(dir, db+"-shm") || (path == filepath.Join(dir, db+"-wal") && info.Size() == 0) {
+				return nil
+			}
+		}
 		state := localFileSnapshot{Mode: info.Mode()}
 		if !entry.IsDir() {
 			data, err := os.ReadFile(path)
@@ -358,6 +365,8 @@ func TestLocalReadsDefaultRejectUnsupportedSchemasAndKeepDoctorDiagnostics(t *te
 		{"newer", "INSERT INTO schema_migrations(version, name, applied_at) SELECT MAX(version) + 1, 'future migration', 1 FROM schema_migrations", "newer than supported"},
 		{"unversioned", "DROP TABLE schema_migrations", "explicit writable upgrade"},
 		{"missing earlier migration", "DELETE FROM schema_migrations WHERE version = 27", "explicit writable upgrade"},
+		{"zero replacing migration", "UPDATE schema_migrations SET version = 0 WHERE version = 27", "unknown migration versions"},
+		{"negative replacing migration", "UPDATE schema_migrations SET version = -1 WHERE version = 1", "unknown migration versions"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := seedLocalReadStore(t)

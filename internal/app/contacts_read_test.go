@@ -399,7 +399,12 @@ func TestContactReadsNullableOwnLID(t *testing.T) {
 					fixtureSQL(t, sessionPath, `INSERT INTO whatsmeow_device (jid,lid) VALUES ('15550000:1@s.whatsapp.net',NULL)`)
 				}
 				fixtureSQL(t, filepath.Join(dir, "wacli.db"), `UPDATE contacts SET full_name='Nullable fixture contact' WHERE jid='15550000@s.whatsapp.net'; INSERT INTO contacts (jid,phone,full_name,updated_at) VALUES ('9000@lid','9000','Nullable fixture device',1),('9005@lid','9005','Valid own fixture',1)`)
+				fixtureSQL(t, sessionPath, `PRAGMA journal_mode=WAL`)
 				before, err := os.ReadFile(sessionPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				beforeInfo, err := os.Stat(sessionPath)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -464,7 +469,10 @@ func TestContactReadsNullableOwnLID(t *testing.T) {
 				if !reflect.DeepEqual(before, after) {
 					t.Fatal("read changed nullable session fixture")
 				}
-				assertNoAppSQLiteSidecars(t, sessionPath)
+				afterInfo, err := os.Stat(sessionPath)
+				if err != nil || afterInfo.Mode() != beforeInfo.Mode() {
+					t.Fatal("read changed nullable session permissions", err)
+				}
 			})
 		}
 	}

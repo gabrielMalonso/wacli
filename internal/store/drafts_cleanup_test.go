@@ -342,7 +342,7 @@ func TestDraftCleanupReadonlyLockedWALSnapshotAndCorruption(t *testing.T) {
 	assertCleanupCode(t, err, DraftCleanupStoreError)
 }
 
-func TestDraftCleanupClosedReadonlyNoFilesystemChangesOldMissingStore(t *testing.T) {
+func TestDraftCleanupClosedReadonlyKeepsArchiveOldMissingStore(t *testing.T) {
 	for _, old := range []bool{false, true} {
 		t.Run(fmt.Sprint("old=", old), func(t *testing.T) {
 			db := openTestDB(t)
@@ -356,11 +356,20 @@ func TestDraftCleanupClosedReadonlyNoFilesystemChangesOldMissingStore(t *testing
 				}
 			}
 			db.Close()
+			assertNoSQLiteSidecars(t, db.path)
 			before, err := os.ReadFile(db.path)
 			if err != nil {
 				t.Fatal(err)
 			}
 			beforeNames, _ := os.ReadDir(filepath.Dir(db.path))
+			beforeInfo, err := os.Stat(db.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeDir, err := os.Stat(filepath.Dir(db.path))
+			if err != nil {
+				t.Fatal(err)
+			}
 			ro, err := OpenReadOnly(db.path)
 			if old {
 				if err == nil {
@@ -379,8 +388,30 @@ func TestDraftCleanupClosedReadonlyNoFilesystemChangesOldMissingStore(t *testing
 			}
 			after, _ := os.ReadFile(db.path)
 			afterNames, _ := os.ReadDir(filepath.Dir(db.path))
-			if !bytes.Equal(before, after) || len(beforeNames) != len(afterNames) {
-				t.Fatal("readonly inspection modified closed archive")
+			var otherFiles int
+			for _, entry := range afterNames {
+				switch entry.Name() {
+				case filepath.Base(db.path) + "-shm":
+					// SQLite shared-memory bookkeeping is permitted on clean WAL files.
+				case filepath.Base(db.path) + "-wal":
+					info, err := entry.Info()
+					if err != nil || info.Size() != 0 {
+						t.Fatal("readonly inspection added WAL data", err)
+					}
+				default:
+					otherFiles++
+				}
+			}
+			afterInfo, err := os.Stat(db.path)
+			if err != nil || afterInfo.Mode() != beforeInfo.Mode() {
+				t.Fatal("readonly inspection changed archive permissions", err)
+			}
+			afterDir, err := os.Stat(filepath.Dir(db.path))
+			if err != nil || afterDir.Mode() != beforeDir.Mode() {
+				t.Fatal("readonly inspection changed directory permissions", err)
+			}
+			if !bytes.Equal(before, after) || len(beforeNames) != otherFiles {
+				t.Fatal("readonly inspection changed archive bytes or created non-bookkeeping files")
 			}
 		})
 	}

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/openclaw/wacli/internal/out"
+	"github.com/openclaw/wacli/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -53,13 +54,11 @@ Use --dry-run to preview what would be deleted.`,
 				return nil
 			}
 
-			var totalMessages int64
-			for _, c := range chats {
-				count, _ := a.DB().CountChatMessages(c.JID)
-				totalMessages += count
-			}
-
 			if dryRun {
+				counts, totalMessages, err := countCleanupPreview(chats, a.DB().CountChatMessages)
+				if err != nil {
+					return err
+				}
 				if flags.asJSON {
 					return out.WriteJSON(os.Stdout, map[string]any{
 						"would_delete_chats":    len(chats),
@@ -68,16 +67,21 @@ Use --dry-run to preview what would be deleted.`,
 					})
 				}
 				fmt.Fprintf(os.Stderr, "Would delete %d chat(s) with %d total message(s) (older than %d days):\n", len(chats), totalMessages, days)
-				for _, c := range chats {
+				for i, c := range chats {
 					name := c.Name
 					if name == "" {
 						name = c.JID
 					}
-					count, _ := a.DB().CountChatMessages(c.JID)
-					fmt.Fprintf(os.Stderr, "  - %s (%s, %d messages)\n", name, c.JID, count)
+					fmt.Fprintf(os.Stderr, "  - %s (%s, %d messages)\n", name, c.JID, counts[i])
 				}
 				fmt.Fprintln(os.Stderr, "\nRun without --dry-run to actually delete.")
 				return nil
+			}
+
+			var totalMessages int64
+			for _, c := range chats {
+				count, _ := a.DB().CountChatMessages(c.JID)
+				totalMessages += count
 			}
 
 			if !confirm {
@@ -129,4 +133,18 @@ Use --dry-run to preview what would be deleted.`,
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show what would be deleted without deleting")
 	cmd.Flags().BoolVar(&confirm, "confirm", false, "skip confirmation prompt")
 	return cmd
+}
+
+func countCleanupPreview(chats []store.Chat, countMessages func(string) (int64, error)) ([]int64, int64, error) {
+	counts := make([]int64, len(chats))
+	var total int64
+	for i, chat := range chats {
+		count, err := countMessages(chat.JID)
+		if err != nil {
+			return nil, 0, fmt.Errorf("count messages for cleanup preview: %w", err)
+		}
+		counts[i] = count
+		total += count
+	}
+	return counts, total, nil
 }
