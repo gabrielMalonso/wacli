@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Drafts: add the internal explicit retention nucleus, pending CLI/owner integration. Preview bounded readonly catalogue pages and remove only verified document snapshots of discarded drafts, including a sole head, with no outbound reference in any state. Reaffirm discard through a checked leased FULL commit before unlink; retain all revisions/metadata, keys and receipts, and distinguish confirmed, absent and uncertain filesystem effects. No schema/index change, automatic GC, orphan purge or whole-archive compaction.
+
 - Agents: add only explicit `chats mark-unread/archive/unarchive` through existing app-state recovery and a bounded typed owner IPC kind, outside send queue/pacing. Freeze strict public account/target observations without requiring unknown PN/LID aliases; report SDK completion, uncertainty and local mirror/output failures without replay or remote-state guarantees. Preserve legacy behavior, independent requests and draining; no schema or journal. Validate standalone/owner lifecycle, deadlines, identities and errors with fixtures/fakes.
 
 - Tests/docs: cover independent outbound requests sharing one account through existing LOCK/owner IPC, including response correlation, queue expiry, parallel local reads, uncertainty and no application replay. Document concurrent use and legacy limits without changing production behavior.
