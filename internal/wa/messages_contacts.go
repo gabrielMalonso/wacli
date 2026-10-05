@@ -18,6 +18,12 @@ func extractContactText(m *waProto.Message, pm *ParsedMessage) {
 	}
 }
 
+// ContactDisplayText formats a contact as searchable text using its display name
+// and vCard phone numbers. Incoming and outbound history share this projection.
+func ContactDisplayText(contact *waProto.ContactMessage) string {
+	return contactDisplayText(contact)
+}
+
 func contactDisplayText(contact *waProto.ContactMessage) string {
 	if contact == nil {
 		return ""
