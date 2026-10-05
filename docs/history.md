@@ -29,7 +29,7 @@ wacli history backfill --chat JID [--count 50] [--requests N] [--wait 1m] [--idl
 - A phone-number JID and its verified mapped LID refer to the same local chat. Backfill uses the phone JID for local anchors and results, requests history with the corresponding LID when available, and accepts responses under either identity. The primary device answers some 1:1 chats only by LID and others only by phone number (#444), so an unanswered request is retried for the same anchor with the other identity, and the identity of a successful attempt is preferred for later batches. Responses do not identify the triggering request, so a late reply may temporarily favor the other identity; the bounded fallback remains available on every batch. A `backfill_identity_retry` warning reports the switch. Unmapped JIDs and groups retain their original identity.
 - Each attempt gets its own `--wait`; a batch can therefore wait up to twice that duration for responses, or four times for a mapped 1:1 chat whose identities are both silent (two identities for each of two anchors). If there is no next anchor, or the retry also times out, backfill stops with an error naming the unanswered anchor. Transport errors and cancellation are not retried.
 - A successful retry must add history older than the original local anchor to continue to another batch. Returning only already-stored messages stops backfill normally.
-- Backfill evaluates progress after the history response has been processed into the local store, including asynchronously delivered responses.
+- Backfill evaluates progress after the history response has been processed into the local store, including asynchronously delivered responses. If a response contains both identities of the frozen verified PN/LID scope, their message observations are summed into one response; a primary end marker from either identity takes precedence and retains its observed identity and time. Conversations outside that scope do not contribute observations or primary markers.
 - Sync owns the manual-history download setting. Backfill uses the same persistence handler for both directly delivered history events and manually downloaded on-demand notifications; a notification is downloaded and persisted once.
 - `--events` emits NDJSON request/response/stop lifecycle events on stderr. Requests include `anchor_msg_id` and `request_chat_jid` (the identity sent to the phone), and a `warning` with code `backfill_anchor_retry` identifies the unanswered anchor and its replacement. Human output reports the same retry on stderr. The result's request count includes retry attempts.
 
@@ -57,9 +57,12 @@ requests/retries, and the final idle window (default 5 minutes). Increase it for
 many batches; `--wait` remains a per-attempt limit. The owner uses the caller's
 absolute deadline, reserving a small response margin, and never dispatches an
 operation whose queued budget has expired. Ordinary message/history activity
-extends the idle window; typing and keepalive notifications do not. Success waits
-for callbacks captured by this observer to finish persisting. Cancellation closes
-the observer promptly and does not wait indefinitely for an in-flight download.
+extends the idle window; typing and keepalive notifications do not. Success in
+both standalone and owner mode waits for callbacks captured by the operation's observer to finish persisting, including
+downloads and writes already in flight during the final idle window. Cancellation
+or deadline expiry closes the observer promptly without waiting for a blocked
+callback. After possible dispatch, that exit is uncertain: final growth remains
+unknown and the previous `last_success` is preserved.
 Stopping the owner cancels its active operation without backfill reconnecting it.
 
 An explicit pre-dispatch queue refusal means no history was requested by that
