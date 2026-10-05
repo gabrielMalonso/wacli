@@ -295,7 +295,7 @@ func TestRunSyncUntilIdleStopsOnLoggedOut(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		// Large idleExit so the idle ticker never fires before the logout signal.
-		_, err := a.runSyncUntilIdle(context.Background(), time.Hour, time.Second, SyncPresenceModeNormal, &messagesStored, &lastEvent, disconnected, loggedOut)
+		_, err := a.runSyncUntilIdle(context.Background(), time.Hour, time.Second, SyncPresenceModeNormal, &messagesStored, &lastEvent, disconnected, loggedOut, nil)
 		done <- err
 	}()
 
@@ -333,7 +333,7 @@ func TestRunSyncUntilIdleLoggedOutWinsOverDisconnected(t *testing.T) {
 		done := make(chan error, 1)
 		go func() {
 			// Large idleExit so the idle ticker never fires before the logout signal.
-			_, err := a.runSyncUntilIdle(context.Background(), time.Hour, time.Second, SyncPresenceModeNormal, &messagesStored, &lastEvent, disconnected, loggedOut)
+			_, err := a.runSyncUntilIdle(context.Background(), time.Hour, time.Second, SyncPresenceModeNormal, &messagesStored, &lastEvent, disconnected, loggedOut, nil)
 			done <- err
 		}()
 
@@ -372,7 +372,7 @@ func TestRunSyncUntilIdleStopsWhenLoggedOutDuringReconnect(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := a.runSyncUntilIdle(ctx, time.Hour, time.Hour, SyncPresenceModeNormal, &messagesStored, &lastEvent, disconnected, loggedOut)
+		_, err := a.runSyncUntilIdle(ctx, time.Hour, time.Hour, SyncPresenceModeNormal, &messagesStored, &lastEvent, disconnected, loggedOut, nil)
 		done <- err
 	}()
 
