@@ -143,6 +143,30 @@ func (a *App) historyMessageSender(ctx context.Context, account historySenderAcc
 			sender = pn
 		}
 	}
+	if !pm.FromMe {
+		// Conversion can expose an own alias absent from the device metadata.
+		// Check the final author, without resolving either identity again.
+		own, alternate := account.pn, account.lid
+		if sender.Server == types.HiddenUserServer {
+			own, alternate = alternate, own
+		}
+		if own.IsEmpty() {
+			own = alternate
+		}
+		isOwn := sender == own
+		if !own.IsEmpty() && sender.Server != own.Server {
+			pair, err := a.wa.CheckPublicPair(ctx, sender, own)
+			if err != nil {
+				return "", err
+			}
+			// Only a verified pair proves equivalence. A different mapped
+			// peer or an unavailable pair does not prove an own author.
+			isOwn = pair == wa.PublicPairVerified
+		}
+		if isOwn {
+			return "", fmt.Errorf("incoming history author contradicts local account")
+		}
+	}
 	return sender.String(), nil
 }
 

@@ -32,6 +32,7 @@ type historySenderWA struct {
 	*fakeWA
 	pn, lid      string
 	pairErr      error
+	pairResult   *wa.PublicPairResult
 	pairCalls    int
 	cryptoSender types.JID
 	resolveCalls int
@@ -66,6 +67,9 @@ func (f *historySenderWA) CheckPublicPair(ctx context.Context, first, second typ
 	f.pairCalls++
 	if f.pairErr != nil {
 		return wa.PublicPairUnverified, f.pairErr
+	}
+	if f.pairResult != nil {
+		return *f.pairResult, nil
 	}
 	return f.fakeWA.CheckPublicPair(ctx, first, second)
 }
@@ -193,6 +197,76 @@ func TestHistorySenderImportMatrix(t *testing.T) {
 				t.Fatalf("count=%d failures=%v row=%+v err=%v", count, failures, row, err)
 			}
 		})
+	}
+}
+
+func TestHistorySenderIncomingOwnAliasAfterCanonicalization(t *testing.T) {
+	for _, tc := range []struct {
+		name, pn, lid, author, wantSender string
+		refused                           bool
+		pair                              *wa.PublicPairResult
+		pairErr                           error
+		missingMap                        bool
+	}{
+		{name: "own LID with only own PN", pn: historyOwnPN, author: historyOwnLID, refused: true},
+		{name: "own PN with only own LID", lid: historyOwnLID, author: historyOwnPN, refused: true},
+		{name: "own LID with only own LID", lid: historyOwnLID, author: historyOwnLID, refused: true},
+		{name: "own PN with only own PN", pn: historyOwnPN, author: historyOwnPN, refused: true},
+		{name: "peer LID with only own PN", pn: historyOwnPN, author: historyPeerLID, wantSender: historyPeerPN},
+		{name: "peer PN with only own LID", lid: historyOwnLID, author: historyPeerPN, wantSender: historyPeerPN},
+		{name: "peer LID with only own LID", lid: historyOwnLID, author: historyPeerLID, wantSender: historyPeerPN},
+		{name: "account absent preserves observed peer", author: historyPeerLID, wantSender: historyPeerPN},
+		{name: "unknown map retains observed LID", pn: historyOwnPN, author: historyOwnLID, missingMap: true, wantSender: historyOwnLID},
+		{name: "unverified conversion stays unknown", pn: historyOwnPN, author: historyOwnLID, pair: new(wa.PublicPairUnverified)},
+		{name: "contradictory conversion refused", pn: historyOwnPN, author: historyOwnLID, pair: new(wa.PublicPairContradictory), refused: true},
+		{name: "conversion SQL error refused", pn: historyOwnPN, author: historyOwnLID, pairErr: errors.New("synthetic SQL failure"), refused: true},
+		{name: "unknown own PN alias retains observed PN", lid: historyOwnLID, author: historyOwnPN, missingMap: true, wantSender: historyOwnPN},
+		{name: "own PN alias SQL error refused", lid: historyOwnLID, author: historyOwnPN, pairErr: errors.New("synthetic SQL failure"), refused: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTestApp(t)
+			f := newHistorySenderWA()
+			f.pn, f.lid, f.pairResult, f.pairErr = tc.pn, tc.lid, tc.pair, tc.pairErr
+			if tc.missingMap {
+				f.lids = map[types.JID]types.JID{}
+			}
+			a.wa = f
+			group := "12345@g.us"
+			m := historySenderMessage(group, false)
+			m.Participant = proto.String(tc.author)
+			count, failures := importHistorySender(t, a, group, m)
+			row, err := a.DB().GetMessage(group, m.GetKey().GetID())
+			if tc.refused {
+				if count != 0 || len(failures) != 1 || !errors.Is(err, sql.ErrNoRows) {
+					t.Fatalf("count=%d failures=%v row=%+v err=%v", count, failures, row, err)
+				}
+			} else if count != 1 || len(failures) != 0 || err != nil || row.SenderJID != tc.wantSender || row.FromMe {
+				t.Fatalf("count=%d failures=%v row=%+v err=%v", count, failures, row, err)
+			}
+		})
+	}
+}
+
+func TestHistorySenderIncomingOwnAliasRefusesPollEffects(t *testing.T) {
+	a := newTestApp(t)
+	f := newHistorySenderWA()
+	f.lid = ""
+	a.wa = f
+	group := "12345@g.us"
+	m := historySenderMessage(group, false)
+	m.Participant = proto.String(historyOwnLID)
+	m.Message = &waE2E.Message{PollCreationMessageV3: &waE2E.PollCreationMessage{
+		Name: proto.String("synthetic poll"), Options: []*waE2E.PollCreationMessage_Option{{OptionName: proto.String("synthetic option")}},
+	}}
+	count, failures := importHistorySender(t, a, group, m)
+	if count != 0 || len(failures) != 1 {
+		t.Fatal(count, failures)
+	}
+	if _, err := a.DB().GetMessage(group, m.GetKey().GetID()); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("incoming own alias was written", err)
+	}
+	if _, err := a.DB().GetPoll(group, m.GetKey().GetID()); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("incoming own alias produced poll effects", err)
 	}
 }
 
