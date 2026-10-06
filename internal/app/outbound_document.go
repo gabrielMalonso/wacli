@@ -25,6 +25,8 @@ func readOutboundDocument(ctx context.Context, dir string, r store.DraftRevision
 		size, digest = p.Document.Size, p.Document.SHA256
 	} else if p.Image != nil {
 		size, digest = p.Image.Size, p.Image.SHA256
+	} else if p.Voice != nil {
+		size, digest = p.Voice.Size, p.Voice.SHA256
 	} else {
 		return nil, fmt.Errorf("snapshot metadata required")
 	}
@@ -81,6 +83,17 @@ func readOutboundDocument(ctx context.Context, dir string, r store.DraftRevision
 	if p.Image != nil {
 		if err := wa.ValidateStaticImageMetadata(b.Bytes(), wa.ImageMetadata{MIME: p.Image.MIME, Width: p.Image.Width, Height: p.Image.Height}); err != nil {
 			return nil, err
+		}
+	}
+	if p.Voice != nil {
+		// A second structural pass compares all frozen metadata on the upload
+		// buffer, never reopening the source, decoding or invoking a probe.
+		metadata, err := wa.InspectOggOpus(ctx, b.Bytes())
+		if err != nil {
+			return nil, err
+		}
+		if draftVoiceFromMetadata(metadata, size, digest) != *p.Voice {
+			return nil, fmt.Errorf("voice metadata does not match snapshot structure")
 		}
 	}
 	return b.Bytes(), nil

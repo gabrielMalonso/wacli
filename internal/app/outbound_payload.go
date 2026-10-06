@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -69,6 +70,13 @@ func prepareOutboundPayload(p store.DraftPayloadData, uploaded *whatsmeow.Upload
 		value := p.Image
 		msg.ImageMessage = wa.BuildImageMessage(up, value.Caption, wa.ImageMetadata{MIME: value.MIME, Width: value.Width, Height: value.Height, JPEGThumbnail: value.JPEGThumbnail})
 		msg.ImageMessage.ContextInfo = ci
+	case store.DraftVoiceKind:
+		msg.AudioMessage = &waE2E.AudioMessage{Mimetype: proto.String(p.Voice.MIME), PTT: proto.Bool(true), ContextInfo: ci}
+		if uploaded != nil {
+			m := msg.AudioMessage
+			m.URL, m.DirectPath, m.FileLength = proto.String(uploaded.URL), proto.String(uploaded.DirectPath), proto.Uint64(uploaded.FileLength)
+			m.MediaKey, m.FileSHA256, m.FileEncSHA256 = bytes.Clone(uploaded.MediaKey), bytes.Clone(uploaded.FileSHA256), bytes.Clone(uploaded.FileEncSHA256)
+		}
 	case store.DraftDocumentKind:
 		msg.DocumentMessage = &waE2E.DocumentMessage{FileName: proto.String(p.Document.Filename), Mimetype: proto.String(p.Document.MIME), Caption: proto.String(p.Document.Caption), ContextInfo: ci}
 		if uploaded != nil {

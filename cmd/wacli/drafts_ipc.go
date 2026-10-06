@@ -21,7 +21,25 @@ type draftValidationField string
 const (
 	draftReplySenderField      draftValidationField = "reply.sender"
 	draftReplyUnsupportedField draftValidationField = "reply.unsupported"
+	draftVoiceInvalidField     draftValidationField = "voice.invalid"
+	draftVoiceProfileField     draftValidationField = "voice.unsupported_profile"
+	draftVoiceQuotaField       draftValidationField = "voice.quota"
+	draftVoiceCanceledField    draftValidationField = "voice.canceled"
 )
+
+func draftRequestsVoice(req sendDelegateRequest) bool {
+	r := req.Draft
+	return req.Version == sendDelegateVersion && req.Kind == draftWriteKind && req.File == "" && r != nil && r.Version == 3 && (r.Action == "create" || r.Action == "update") && r.Input != nil && r.Input.Voice != nil && r.Validate() == nil
+}
+
+func voiceDraftAdvice(field draftValidationField) bool {
+	switch field {
+	case draftVoiceInvalidField, draftVoiceProfileField, draftVoiceQuotaField, draftVoiceCanceledField:
+		return true
+	default:
+		return false
+	}
+}
 
 func draftRequestsQuote(req sendDelegateRequest) bool {
 	return req.Kind == draftWriteKind && req.Draft != nil && (req.Draft.Action == "create" || req.Draft.Action == "update") && req.Draft.Input != nil && req.Draft.Input.ReplyTo != ""
@@ -115,6 +133,9 @@ func draftRefusal(req sendDelegateRequest, err error) sendDelegateResponse {
 			resp.DraftValidationField = draftValidationField(validation.Field)
 		}
 	}
+	if copy.Code == "invalid_arguments" && draftRequestsVoice(req) && errors.As(err, &validation) && voiceDraftAdvice(draftValidationField(validation.Field)) {
+		resp.DraftValidationField = draftValidationField(validation.Field)
+	}
 	return resp
 }
 func draftIPCFailure(req sendDelegateRequest, resp sendDelegateResponse) error {
@@ -141,6 +162,12 @@ func draftIPCFailure(req sendDelegateRequest, resp sendDelegateResponse) error {
 			classified.Draft = &out.AgentDraftError{DraftID: failure.DraftID, RevisionID: failure.RevisionID, Hash: failure.Hash}
 			return classified
 		}
+	}
+	if failure.Code == "invalid_arguments" && draftRequestsVoice(req) && voiceDraftAdvice(resp.DraftValidationField) {
+		classified := classifyDraftError(&store.DraftValidationError{Field: string(resp.DraftValidationField)})
+		classified.Cause = failure
+		classified.Draft = &out.AgentDraftError{DraftID: failure.DraftID, RevisionID: failure.RevisionID, Hash: failure.Hash}
+		return classified
 	}
 	return failure
 }

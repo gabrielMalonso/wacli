@@ -14,10 +14,15 @@ import (
 	"unicode/utf8"
 
 	"github.com/openclaw/wacli/internal/store"
+	"github.com/openclaw/wacli/internal/wa"
 )
 
 // DraftImageInput selects image preparation without legacy document fields.
 type DraftImageInput struct {
+	Path string `json:"path"`
+}
+
+type DraftVoiceInput struct {
 	Path string `json:"path"`
 }
 
@@ -34,6 +39,7 @@ type DraftInput struct {
 	Caption  string              `json:"caption,omitempty"`
 	Contact  *store.DraftContact `json:"contact,omitempty"`
 	Image    *DraftImageInput    `json:"image,omitempty"`
+	Voice    *DraftVoiceInput    `json:"voice,omitempty"`
 }
 
 type DraftWriteRequest struct {
@@ -49,7 +55,8 @@ type DraftWriteRequest struct {
 
 func (r DraftWriteRequest) Validate() error {
 	image := r.Input != nil && r.Input.Image != nil
-	if (r.Version != 1 && r.Version != 2) || (r.Version == 2) != image || image && r.Action != "create" && r.Action != "update" {
+	voice := r.Input != nil && r.Input.Voice != nil
+	if r.Version < 1 || r.Version > 3 || (r.Version == 2) != image || (r.Version == 3) != voice || (image || voice) && r.Action != "create" && r.Action != "update" {
 		return &store.DraftValidationError{Field: "request.version", Reason: "unsupported"}
 	}
 	for _, id := range []string{r.DraftID, r.RevisionID} {
@@ -118,11 +125,14 @@ func (in DraftInput) Validate() error {
 	if in.Image != nil {
 		count++
 	}
+	if in.Voice != nil {
+		count++
+	}
 	if in.Contact != nil {
 		count++
 	}
 	if count != 1 {
-		return &store.DraftValidationError{Field: "input", Reason: "exactly one text, document, image or contact variant is required"}
+		return &store.DraftValidationError{Field: "input", Reason: "exactly one text, document, image, voice or contact variant is required"}
 	}
 	fields := []string{in.To, in.ReplyTo, in.Filename, in.MIME, in.Caption, in.File}
 	if in.Image != nil {
@@ -130,6 +140,12 @@ func (in DraftInput) Validate() error {
 			return &store.DraftValidationError{Field: "image", Reason: "image path required; document options are unsupported"}
 		}
 		fields = append(fields, in.Image.Path)
+	}
+	if in.Voice != nil {
+		if in.Voice.Path == "" || in.Filename != "" || in.MIME != "" || in.Caption != "" || len(in.Mentions) > 0 {
+			return &store.DraftValidationError{Field: "voice.invalid", Reason: "voice path required; caption, document options and mentions are unsupported"}
+		}
+		fields = append(fields, in.Voice.Path)
 	}
 	if in.Message != nil {
 		fields = append(fields, *in.Message)
@@ -280,6 +296,9 @@ func (a *App) WriteLocalDraft(ctx context.Context, request DraftWriteRequest, op
 		data.Kind = store.DraftImageKind
 		// Content metadata is filled from the captured image bytes below.
 		data.Image = &store.DraftImage{MIME: "image/png", Caption: input.Caption}
+	} else if input.Voice != nil {
+		data.Kind = store.DraftVoiceKind
+		data.Voice = &store.DraftVoice{}
 	} else {
 		name := input.Filename
 		if name == "" {
@@ -306,6 +325,10 @@ func (a *App) WriteLocalDraft(ctx context.Context, request DraftWriteRequest, op
 		preflightData.Kind, preflightData.Image = store.DraftTextKind, nil
 		preflightData.Text = &store.DraftText{Text: "image preparation"}
 	}
+	if data.Voice != nil {
+		preflightData.Kind, preflightData.Voice = store.DraftTextKind, nil
+		preflightData.Text = &store.DraftText{Text: "voice preparation"}
+	}
 	if _, err := store.NewDraftPayload(preflightData); err != nil {
 		return store.DraftEntry{}, err
 	}
@@ -327,7 +350,7 @@ func (a *App) WriteLocalDraft(ctx context.Context, request DraftWriteRequest, op
 		}
 	}
 	review := store.DraftReviewSnapshot{RequestedRaw: input.To, RecipientName: name, AccountName: request.AccountName}
-	if data.Document != nil || data.Image != nil {
+	if data.Kind.HasUpload() {
 		review.SnapshotPath, _ = store.DraftSnapshotRelativePath(request.RevisionID)
 		review.VerifiedAtCreate = time.Now().UTC()
 		if data.Document != nil {
@@ -340,7 +363,10 @@ func (a *App) WriteLocalDraft(ctx context.Context, request DraftWriteRequest, op
 		if input.Image != nil {
 			sourcePath = input.Image.Path
 		}
-		options := DraftSnapshotOptions{StoreDir: a.StoreDir(), RevisionID: request.RevisionID, SourcePath: sourcePath, Image: input.Image != nil, Filename: input.Filename, MIME: input.MIME, Caption: input.Caption, OpenSource: openSource}
+		if input.Voice != nil {
+			sourcePath = input.Voice.Path
+		}
+		options := DraftSnapshotOptions{StoreDir: a.StoreDir(), RevisionID: request.RevisionID, SourcePath: sourcePath, Image: input.Image != nil, Voice: input.Voice != nil, Filename: input.Filename, MIME: input.MIME, Caption: input.Caption, OpenSource: openSource}
 		if input.Image != nil {
 			options.validateImage = func(value store.DraftImage) error {
 				candidate := data
@@ -353,14 +379,36 @@ func (a *App) WriteLocalDraft(ctx context.Context, request DraftWriteRequest, op
 				return err
 			}
 		}
+		if input.Voice != nil {
+			options.validateVoice = func(value store.DraftVoice) error {
+				candidate := data
+				candidate.Voice = &value
+				payload, err := store.NewDraftPayload(candidate)
+				if err != nil {
+					return err
+				}
+				_, err = store.NewDraftRevision(request.DraftID, request.RevisionID, time.Now().UTC(), payload, review)
+				return err
+			}
+		}
 		snapshot, err := CreateDraftSnapshot(ctx, options)
 		if err != nil {
+			// Typed voice refusals precede publication. Preserve their sanitized
+			// category through the existing validation/IPC advice contract.
+			if input.Voice != nil {
+				if validation := voiceSnapshotValidation(err); validation != nil {
+					return store.DraftEntry{}, validation
+				}
+			}
 			code := "document_unavailable"
+			if input.Voice != nil {
+				code = "store_unavailable"
+			}
 			if input.Image != nil {
 				code = "image_unavailable"
 			}
 			var snapshotErr *DraftSnapshotError
-			if errors.As(err, &snapshotErr) && snapshotErr.Publication == DraftPublicationUnknown {
+			if errors.As(err, &snapshotErr) && (snapshotErr.Publication == DraftPublicationUnknown || input.Voice != nil && snapshotErr.Publication == DraftPublished) {
 				code = "local_write_uncertain"
 			}
 			return store.DraftEntry{}, store.DraftFailure(code, request.DraftID, request.RevisionID, "", err)
@@ -370,6 +418,8 @@ func (a *App) WriteLocalDraft(ctx context.Context, request DraftWriteRequest, op
 		}
 		if input.Image != nil {
 			data.Image = snapshot.Image()
+		} else if input.Voice != nil {
+			data.Voice = snapshot.Voice()
 		} else {
 			doc := snapshot.Document()
 			data.Document = &doc
@@ -393,6 +443,24 @@ func (a *App) WriteLocalDraft(ctx context.Context, request DraftWriteRequest, op
 		}
 	}
 	return entry, err
+}
+
+// Only the inspector's confirmed pre-publication refusal can carry voice advice.
+// Cancellation in copying, transport, publication or later effects stays a base
+// failure; it must never be relabeled as an arguments refusal.
+func voiceSnapshotValidation(err error) *store.DraftValidationError {
+	var snapshot *DraftSnapshotError
+	if !errors.As(err, &snapshot) || snapshot.Publication != DraftUnpublished || snapshot.Stage != "voice" {
+		return nil
+	}
+	var voice *wa.OggOpusError
+	if errors.As(err, &voice) {
+		return &store.DraftValidationError{Field: "voice." + voice.Code, Reason: voice.Reason}
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return &store.DraftValidationError{Field: "voice.canceled", Reason: "structural voice validation canceled before publication"}
+	}
+	return nil
 }
 
 // UnmarshalJSON accepts only the versioned canonical internal request. It

@@ -296,6 +296,8 @@ func outboundEchoKind(msg *waE2E.Message) store.DraftKind {
 		return store.DraftContactKind
 	case m.GetImageMessage() != nil:
 		return store.DraftImageKind
+	case m.GetAudioMessage().GetPTT():
+		return store.DraftVoiceKind
 	case m.GetDocumentMessage() != nil:
 		return store.DraftDocumentKind
 	default:

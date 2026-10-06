@@ -61,10 +61,21 @@ type draftDTO struct {
 	Text            *store.DraftText     `json:"text,omitempty"`
 	Document        *draftDocumentDTO    `json:"document,omitempty"`
 	Image           *draftImageDTO       `json:"image,omitempty"`
+	Voice           *draftVoiceDTO       `json:"voice,omitempty"`
 	Contact         *store.DraftContact  `json:"contact,omitempty"`
 	Reply           *store.DraftReply    `json:"reply,omitempty"`
 	TruncatedFields []string             `json:"truncated_fields,omitempty"`
 	Recovery        string               `json:"recovery,omitempty"`
+}
+
+type draftVoiceDTO struct {
+	store.DraftVoice
+	Basis            string    `json:"basis"`
+	PTT              bool      `json:"ptt"`
+	SecondsPresent   bool      `json:"seconds_present"`
+	WaveformPresent  bool      `json:"waveform_present"`
+	VerifiedAtCreate time.Time `json:"verified_at_create"`
+	SnapshotPath     string    `json:"snapshot_path,omitempty"`
 }
 
 func projectDraft(entry store.DraftEntry, storeRef string, full bool) draftDTO {
@@ -117,6 +128,19 @@ func projectDraft(entry store.DraftEntry, storeRef string, full bool) draftDTO {
 		}
 		d.Recovery = "Inspect image bytes visually with appropriate local tools. Metadata describes creation, not current availability/integrity or human approval."
 	}
+	if p.Voice != nil {
+		d.Voice = &draftVoiceDTO{DraftVoice: *p.Voice, Basis: "declared_structure", PTT: true, VerifiedAtCreate: review.VerifiedAtCreate}
+		if full {
+			relative, err := store.DraftSnapshotRelativePath(revision.ID())
+			if err == nil {
+				d.Voice.SnapshotPath = filepath.Join(storeRef, filepath.FromSlash(relative))
+			}
+		}
+		d.Recovery = "Inspect voice bytes separately with appropriate local tools. Declared structure is not decoded duration, speech quality or human approval; creation metadata does not establish current snapshot availability/integrity."
+		if !full {
+			d.Recovery = fmt.Sprintf("Use draft show %s --revision %s --agent --detail full; inspect voice bytes separately. Declared structure does not establish decoded duration, speech quality, current availability/integrity or human approval.", r.ID, revision.ID())
+		}
+	}
 	if d.Image != nil && !full {
 		d.Recovery = fmt.Sprintf("Use draft show %s --revision %s --agent --detail full; inspect image bytes separately. Metadata describes creation only, not current availability/integrity. No approval is recorded.", r.ID, revision.ID())
 	} else if d.Document != nil && !full {
@@ -137,6 +161,14 @@ func classifyDraftError(err error) *out.AgentError {
 		var validation *store.DraftValidationError
 		if errors.As(err, &validation) {
 			switch validation.Field {
+			case "voice.invalid":
+				return &out.AgentError{Code: "invalid_arguments", Message: "Voice Ogg/Opus structure is invalid or incomplete.", Recovery: "Inspect the complete local Ogg/Opus bytes; no conversion or fallback is performed.", ExitCode: 2, Cause: err}
+			case "voice.unsupported_profile":
+				return &out.AgentError{Code: "invalid_arguments", Message: "Voice format is outside the supported Ogg/Opus PTT profile; a broader format may still be valid.", Recovery: "Inspect the documented version 1, mapping 0, single-stream, zero-origin profile before preparing another revision.", ExitCode: 2, Cause: err}
+			case "voice.quota":
+				return &out.AgentError{Code: "invalid_arguments", Message: "Voice exceeds a local preparation quota; these quotas are not WhatsApp limits.", Recovery: "Inspect the documented byte, packet, page and one-hour encoded timeline quotas.", ExitCode: 2, Cause: err}
+			case "voice.canceled":
+				return &out.AgentError{Code: "invalid_arguments", Message: "Voice structural validation was canceled before snapshot publication or revision persistence.", Recovery: "Inspect the current local draft state before explicitly preparing another revision.", ExitCode: 2, Cause: err}
 			case "reply.sender":
 				return &out.AgentError{Code: "invalid_arguments", Message: "Quoted sender identity is unavailable or incompatible with the observed local account or recipient.", Recovery: "Inspect messages show --chat CHAT_JID --id MESSAGE_ID --agent --detail full locally; select a compatible quote or explicitly recreate without --reply-to.", ExitCode: 2, Cause: err}
 			case "reply.unsupported":

@@ -114,7 +114,7 @@ wacli polls list [--chat RECIPIENT] [--limit N] [--json]
 - Files sent to channels use WhatsApp's unencrypted newsletter media upload path and include the upstream media handle required by `whatsmeow`.
 - Quoted file replies and `--ptt` voice-note mode are not supported for channel sends.
 - `send sticker` requires 512x512 WebP input. Static stickers are capped at 100 KiB; animated stickers are capped at 500 KiB and are sent with animation metadata.
-- `send voice` is a shortcut for `send file --ptt`.
+- `send voice` is a shortcut for `send file --ptt`. For reviewed immutable preparation, use [`draft create/update --voice PATH`](drafts.md#immutable-voice-ptt) and explicit retained `outbound send`. That separate strict Ogg/Opus contract preserves bytes and omits seconds/waveform without probes; it does not change the legacy behavior below.
 - Voice notes require OGG/Opus audio (`audio/ogg; codecs=opus`).
 - When available, `ffprobe` sets voice-note duration and `ffmpeg` generates the 64-sample waveform from decoded PCM audio.
 - Waveform decoding is capped at 2 MiB (about 131 seconds). Longer voice notes use that initial segment for the waveform; the complete audio file and its full duration are still sent. Failed decodes omit the optional waveform.
