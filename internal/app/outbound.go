@@ -189,6 +189,8 @@ func (x outboundRunner) send(ctx context.Context, r OutboundSendRequest, beforeN
 		uploadType := whatsmeow.MediaDocument
 		if p.Kind == store.DraftImageKind {
 			uploadType = whatsmeow.MediaImage
+		} else if p.Kind == store.DraftVoiceKind {
+			uploadType = whatsmeow.MediaAudio
 		}
 		response, uploadErr := client.Upload(ctx, buffer, uploadType)
 		if uploadErr != nil {
@@ -347,6 +349,13 @@ func (a *App) persistOutboundHistory(p store.DraftPayloadData, o store.OutboundO
 	if p.Image != nil {
 		u.Text, u.MediaCaption = p.Image.Caption, p.Image.Caption
 		u.MediaType, u.MimeType, u.FileLength = "image", p.Image.MIME, uint64(p.Image.Size)
+		if uploaded != nil {
+			u.DirectPath, u.MediaKey = uploaded.DirectPath, uploaded.MediaKey
+			u.FileSHA256, u.FileEncSHA256 = uploaded.FileSHA256, uploaded.FileEncSHA256
+		}
+	}
+	if p.Voice != nil {
+		u.MediaType, u.MimeType, u.FileLength = "audio", p.Voice.MIME, uint64(p.Voice.Size)
 		if uploaded != nil {
 			u.DirectPath, u.MediaKey = uploaded.DirectPath, uploaded.MediaKey
 			u.FileSHA256, u.FileEncSHA256 = uploaded.FileSHA256, uploaded.FileEncSHA256

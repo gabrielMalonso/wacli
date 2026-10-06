@@ -417,10 +417,10 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 		_ = json.NewEncoder(conn).Encode(agentChatStateRefusal(req, "invalid_arguments"))
 		return
 	}
-	// Image preparation is never a legacy file/send request, even if its
+	// Image/voice preparation is never a legacy file/send request, even if its
 	// envelope supplies legacy fields or names another executor.
-	if req.Draft != nil && (req.Draft.Version == 2 || req.Draft.Input != nil && req.Draft.Input.Image != nil) && (req.Kind != draftWriteKind || req.File != "") {
-		_ = json.NewEncoder(conn).Encode(draftRefusal(req, &store.DraftValidationError{Field: "request.kind", Reason: "image preparation requires the local draft executor"}))
+	if req.Draft != nil && (req.Draft.Version == 2 || req.Draft.Version == 3 || req.Draft.Input != nil && (req.Draft.Input.Image != nil || req.Draft.Input.Voice != nil)) && (req.Kind != draftWriteKind || req.File != "") {
+		_ = json.NewEncoder(conn).Encode(draftRefusal(req, &store.DraftValidationError{Field: "request.kind", Reason: "image/voice preparation requires the local draft executor"}))
 		return
 	}
 

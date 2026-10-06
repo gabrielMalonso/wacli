@@ -45,7 +45,9 @@ type DraftSnapshotOptions struct {
 	StoreDir, RevisionID, SourcePath string
 	Filename, MIME, Caption          string
 	Image                            bool
+	Voice                            bool
 	validateImage                    func(store.DraftImage) error
+	validateVoice                    func(store.DraftVoice) error
 	// The process opening the file must enforce its media roots here. There
 	// is deliberately no unrestricted default or pre-open stat shortcut.
 	OpenSource func(string) (*os.File, error)
@@ -57,6 +59,7 @@ type DraftSnapshot struct {
 	document                 store.DraftDocument
 	verifiedAt               time.Time
 	image                    *store.DraftImage
+	voice                    *store.DraftVoice
 }
 
 func (s DraftSnapshot) RevisionID() string            { return s.revisionID }
@@ -73,11 +76,25 @@ func (s DraftSnapshot) Image() *store.DraftImage {
 	return &value
 }
 
+func (s DraftSnapshot) Voice() *store.DraftVoice {
+	if s.voice == nil {
+		return nil
+	}
+	value := *s.voice
+	return &value
+}
+
+func draftVoiceFromMetadata(m wa.OggOpusMetadata, size int64, digest string) store.DraftVoice {
+	return store.DraftVoice{MIME: wa.OggOpusMIME, Size: size, SHA256: digest, OpusVersion: m.OpusVersion, Channels: m.Channels, MappingFamily: m.MappingFamily, PreSkip: m.PreSkip, InputSampleRate: m.InputSampleRate, OutputGain: m.OutputGain, EncodedSamples: m.EncodedSamples, PlayableSamples: m.PlayableSamples}
+}
+
 type draftSnapshotIO struct {
 	syncFile func(*os.File) error
 	publish  func(*os.Root, string, string) error
 	syncDir  func(*os.Root) error
 }
+
+var errDraftFileLimit = errors.New("source exceeds draft file limit")
 
 // CreateDraftSnapshot streams one regular source to an exclusive revision file.
 // The caller must hold the store LOCK (directly or as its existing sync owner).
@@ -103,7 +120,11 @@ func createDraftSnapshot(ctx context.Context, opts DraftSnapshotOptions, disk dr
 		name = filepath.Base(opts.SourcePath)
 	}
 	// Validate input fields before touching source or store.
-	if opts.Image {
+	if opts.Voice {
+		if opts.Image || opts.Filename != "" || opts.MIME != "" || opts.Caption != "" {
+			return DraftSnapshot{}, fmt.Errorf("invalid voice input")
+		}
+	} else if opts.Image {
 		if opts.Filename != "" || opts.MIME != "" || !utf8.ValidString(opts.Caption) || len(opts.Caption) > store.MaxDraftFieldBytes {
 			return DraftSnapshot{}, fmt.Errorf("invalid image input")
 		}
@@ -139,6 +160,9 @@ func createDraftSnapshot(ctx context.Context, opts DraftSnapshotOptions, disk dr
 		return fail("source", fmt.Errorf("opened source is not a regular file"))
 	}
 	if info.Size() > store.MaxDraftFileBytes {
+		if opts.Voice {
+			return fail("voice", &wa.OggOpusError{Code: "quota", Reason: "local 100 MiB file byte limit exceeded"})
+		}
 		return fail("source", fmt.Errorf("source exceeds 100 MiB"))
 	}
 	if err := ctx.Err(); err != nil {
@@ -171,15 +195,19 @@ func createDraftSnapshot(ctx context.Context, opts DraftSnapshotOptions, disk dr
 	}()
 	var captured bytes.Buffer
 	var destination io.Writer = temp
-	if opts.Image {
+	if opts.Image || opts.Voice {
 		destination = io.MultiWriter(temp, &captured)
 	}
 	meta, err := copyDraftSnapshotBytes(ctx, destination, source, store.MaxDraftFileBytes)
 	if err != nil {
+		if opts.Voice && errors.Is(err, errDraftFileLimit) {
+			return fail("voice", &wa.OggOpusError{Code: "quota", Reason: "local 100 MiB file byte limit exceeded"})
+		}
 		return fail("copy", err)
 	}
 	var document store.DraftDocument
 	var image *store.DraftImage
+	var voice *store.DraftVoice
 	if opts.Image {
 		metadata, err := wa.PrepareStaticImage(captured.Bytes())
 		if err != nil {
@@ -195,6 +223,21 @@ func createDraftSnapshot(ctx context.Context, opts DraftSnapshotOptions, disk dr
 			}
 		}
 		image = &value
+	} else if opts.Voice {
+		metadata, err := wa.InspectOggOpus(ctx, captured.Bytes())
+		if err != nil {
+			return fail("voice", err)
+		}
+		value, err := store.NewDraftVoice(draftVoiceFromMetadata(metadata, meta.size, meta.sha256))
+		if err != nil {
+			return fail("voice", err)
+		}
+		if opts.validateVoice != nil {
+			if err := opts.validateVoice(value); err != nil {
+				return fail("voice_payload", err)
+			}
+		}
+		voice = &value
 	} else {
 		document = store.DraftDocument{Filename: name, MIME: detectDraftDocumentMIME(opts.MIME, meta.sniff), Caption: opts.Caption, Size: meta.size, SHA256: meta.sha256}
 		document, err = store.NewDraftDocument(document)
@@ -240,7 +283,7 @@ func createDraftSnapshot(ctx context.Context, opts DraftSnapshotOptions, disk dr
 	if err := ctx.Err(); err != nil {
 		return fail("publish", err)
 	}
-	return DraftSnapshot{revisionID: opts.RevisionID, relativePath: relativePath, document: document, verifiedAt: time.Now().UTC(), image: image}, nil
+	return DraftSnapshot{revisionID: opts.RevisionID, relativePath: relativePath, document: document, verifiedAt: time.Now().UTC(), image: image, voice: voice}, nil
 }
 
 // Opening the existing store is intentional: this helper cannot initialize
@@ -306,7 +349,7 @@ func copyDraftSnapshotBytes(ctx context.Context, dst io.Writer, src io.Reader, l
 		}
 		if n > 0 {
 			if int64(n) > limit-meta.size {
-				return draftSnapshotBytes{}, fmt.Errorf("source exceeds draft file limit")
+				return draftSnapshotBytes{}, errDraftFileLimit
 			}
 			chunk := buffer[:n]
 			written, err := dst.Write(chunk)

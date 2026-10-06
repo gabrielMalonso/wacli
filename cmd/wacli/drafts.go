@@ -41,7 +41,7 @@ func draftWritable(flags *rootFlags) error {
 
 func newDraftWriteCmd(flags *rootFlags, action string) *cobra.Command {
 	var input app.DraftInput
-	var message, messageFile, imagePath, contactName, contactPhone, expected string
+	var message, messageFile, imagePath, voicePath, contactName, contactPhone, expected string
 	cmd := &cobra.Command{Use: action, Short: action + " a local draft revision", Args: cobra.NoArgs}
 	if action == "update" {
 		cmd.Use = "update ID"
@@ -54,6 +54,7 @@ func newDraftWriteCmd(flags *rootFlags, action string) *cobra.Command {
 	cmd.Flags().StringArrayVar(&input.Mentions, "mention", nil, "explicit user phone/JID to mention (repeatable)")
 	cmd.Flags().StringVar(&input.ReplyTo, "reply-to", "", "existing local textual message ID in the selected chat")
 	cmd.Flags().StringVar(&imagePath, "image", "", "static JPEG/PNG image to snapshot (100 MiB and 40 million pixels maximum)")
+	cmd.Flags().StringVar(&voicePath, "voice", "", "complete Ogg/Opus PTT to snapshot (local 100 MiB and one-hour encoded timeline limits)")
 	cmd.Flags().StringVar(&input.File, "file", "", "local document to snapshot (100 MiB maximum)")
 	cmd.Flags().StringVar(&input.Filename, "filename", "", "document display name (defaults to source basename)")
 	cmd.Flags().StringVar(&input.MIME, "mime", "", "explicit document MIME override")
@@ -65,9 +66,16 @@ func newDraftWriteCmd(flags *rootFlags, action string) *cobra.Command {
 			return err
 		}
 		if cmd.Flags().Changed("image") {
-			for _, option := range []string{"file", "message", "message-file", "contact-name", "contact-phone", "filename", "mime"} {
+			for _, option := range []string{"file", "message", "message-file", "contact-name", "contact-phone", "filename", "mime", "voice"} {
 				if cmd.Flags().Changed(option) {
 					return agentUsageError(fmt.Errorf("--image is exclusive of --%s", option))
+				}
+			}
+		}
+		if cmd.Flags().Changed("voice") {
+			for _, option := range []string{"image", "file", "message", "message-file", "contact-name", "contact-phone", "filename", "mime", "caption", "mention"} {
+				if cmd.Flags().Changed(option) {
+					return agentUsageError(fmt.Errorf("--voice is exclusive of --%s", option))
 				}
 			}
 		}
@@ -106,12 +114,18 @@ func newDraftWriteCmd(flags *rootFlags, action string) *cobra.Command {
 		if cmd.Flags().Changed("image") {
 			input.Image = &app.DraftImageInput{Path: imagePath}
 		}
+		if cmd.Flags().Changed("voice") {
+			input.Voice = &app.DraftVoiceInput{Path: voicePath}
+		}
 		if err := input.Validate(); err != nil {
 			return classifyDraftError(err)
 		}
 		sourcePath := input.File
 		if input.Image != nil {
 			sourcePath = input.Image.Path
+		}
+		if input.Voice != nil {
+			sourcePath = input.Voice.Path
 		}
 		if sourcePath != "" {
 			path, err := filepath.Abs(sourcePath)
@@ -120,6 +134,8 @@ func newDraftWriteCmd(flags *rootFlags, action string) *cobra.Command {
 			}
 			if input.Image != nil {
 				input.Image.Path = path
+			} else if input.Voice != nil {
+				input.Voice.Path = path
 			} else {
 				input.File = path
 			}
@@ -127,6 +143,9 @@ func newDraftWriteCmd(flags *rootFlags, action string) *cobra.Command {
 				message := "Document source is unavailable or outside allowed media roots."
 				if input.Image != nil {
 					message = "Image source is unavailable or outside allowed media roots."
+				}
+				if input.Voice != nil {
+					message = "Voice source is unavailable or outside allowed media roots."
 				}
 				return &out.AgentError{Code: "invalid_arguments", Message: message, ExitCode: 2, Cause: err}
 			}
@@ -156,6 +175,9 @@ func newDraftWriteCmd(flags *rootFlags, action string) *cobra.Command {
 		version := 1
 		if input.Image != nil {
 			version = 2
+		}
+		if input.Voice != nil {
+			version = 3
 		}
 		request := app.DraftWriteRequest{Version: version, Action: action, DraftID: id, RevisionID: rid, ExpectedRevision: expected, StoreRef: flags.storeDir, AccountName: flags.agentAccount.Name, Input: &input}
 		return runDraftWrite(ctx, flags, request)

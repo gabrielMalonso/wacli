@@ -33,6 +33,7 @@ const (
 	DraftDocumentKind DraftKind = "document"
 	DraftContactKind  DraftKind = "contact"
 	DraftImageKind    DraftKind = "image"
+	DraftVoiceKind    DraftKind = "voice"
 )
 
 // DraftValidationError contains field names, never caller content or paths.
@@ -110,8 +111,41 @@ func NewDraftImage(value DraftImage) (DraftImage, error) {
 	return value, nil
 }
 
+// DraftVoice freezes structural metadata only. Kind=voice fixes PTT=true and
+// absent seconds/waveform; there is no caption, codec override or original path.
+type DraftVoice struct {
+	MIME            string `json:"mime"`
+	Size            int64  `json:"size"`
+	SHA256          string `json:"sha256"`
+	OpusVersion     uint8  `json:"opus_version"`
+	Channels        uint8  `json:"channels"`
+	MappingFamily   uint8  `json:"mapping_family"`
+	PreSkip         uint16 `json:"pre_skip"`
+	InputSampleRate uint32 `json:"input_sample_rate"`
+	OutputGain      int16  `json:"output_gain"`
+	EncodedSamples  uint64 `json:"encoded_samples"`
+	PlayableSamples uint64 `json:"playable_samples"`
+}
+
+const MaxDraftVoiceSamples = 172_800_000
+
+func NewDraftVoice(value DraftVoice) (DraftVoice, error) {
+	if value.MIME != "audio/ogg; codecs=opus" || value.OpusVersion != 1 || value.MappingFamily != 0 || value.Channels < 1 || value.Channels > 2 {
+		return DraftVoice{}, invalidDraft("voice.unsupported_profile", "Opus version 1 and mapping family 0 with one or two output channels required")
+	}
+	if value.Size <= 0 || value.Size > MaxDraftFileBytes || !draftHex(value.SHA256, sha256.Size*2) {
+		return DraftVoice{}, invalidDraft("voice.invalid", "invalid snapshot size or SHA-256")
+	}
+	if value.EncodedSamples == 0 || value.EncodedSamples > MaxDraftVoiceSamples || value.EncodedSamples%120 != 0 || value.PlayableSamples == 0 || uint64(value.PreSkip) >= value.EncodedSamples || value.PlayableSamples > value.EncodedSamples-uint64(value.PreSkip) {
+		return DraftVoice{}, invalidDraft("voice.invalid", "inconsistent bounded declared sample counts")
+	}
+	return value, nil
+}
+
 // HasUpload distinguishes the supported snapshot kinds from text/contact.
-func (kind DraftKind) HasUpload() bool { return kind == DraftDocumentKind || kind == DraftImageKind }
+func (kind DraftKind) HasUpload() bool {
+	return kind == DraftDocumentKind || kind == DraftImageKind || kind == DraftVoiceKind
+}
 
 type DraftContact struct {
 	DisplayName string `json:"display_name"`
@@ -150,6 +184,7 @@ type DraftPayloadData struct {
 	Contact   *DraftContact  `json:"contact,omitempty"`
 	Reply     *DraftReply    `json:"reply,omitempty"`
 	Image     *DraftImage    `json:"image,omitempty"`
+	Voice     *DraftVoice    `json:"voice,omitempty"`
 }
 
 type DraftPayload struct {
@@ -188,7 +223,7 @@ func NewDraftPayload(data DraftPayloadData) (DraftPayload, error) {
 		return DraftPayload{}, invalidDraft("recipient", "matches the observed local account")
 	}
 	count := 0
-	for _, present := range []bool{data.Text != nil, data.Document != nil, data.Contact != nil, data.Image != nil} {
+	for _, present := range []bool{data.Text != nil, data.Document != nil, data.Contact != nil, data.Image != nil, data.Voice != nil} {
 		if present {
 			count++
 		}
@@ -228,6 +263,15 @@ func NewDraftPayload(data DraftPayloadData) (DraftPayload, error) {
 			return DraftPayload{}, err
 		}
 		data.Image = &value
+	case DraftVoiceKind:
+		if data.Voice == nil {
+			return DraftPayload{}, invalidDraft("kind", "does not match content")
+		}
+		value, err := NewDraftVoice(*data.Voice)
+		if err != nil {
+			return DraftPayload{}, err
+		}
+		data.Voice = &value
 	case DraftContactKind:
 		if data.Contact == nil || data.Reply != nil {
 			return DraftPayload{}, invalidDraft("kind", "contact content is required and contact replies are unsupported")

@@ -35,6 +35,9 @@ func draftAppRequest(t *testing.T, a *App, input DraftInput) DraftWriteRequest {
 	if input.Image != nil {
 		version = 2
 	}
+	if input.Voice != nil {
+		version = 3
+	}
 	return DraftWriteRequest{Version: version, Action: "create", DraftID: id, RevisionID: rid, StoreRef: a.StoreDir(), Input: &input}
 }
 func draftTextPointer(text string) *string { return &text }

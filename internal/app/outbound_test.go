@@ -100,6 +100,9 @@ func outboundAppFixture(t *testing.T, kind store.DraftKind) (*App, outboundRunne
 			t.Fatal(err)
 		}
 	}
+	if kind == store.DraftVoiceKind {
+		input, _ = voiceDraftInput(t, a)
+	}
 	e, err := a.WriteLocalDraft(t.Context(), draftAppRequest(t, a, input), os.Open)
 	if err != nil {
 		t.Fatal(err)
@@ -115,11 +118,16 @@ func outboundAppFixture(t *testing.T, kind store.DraftKind) (*App, outboundRunne
 }
 
 func TestOutboundTypedPayloadAndRetainedDuplicate(t *testing.T) {
-	for _, kind := range []store.DraftKind{store.DraftTextKind, store.DraftContactKind, store.DraftDocumentKind, store.DraftImageKind} {
+	for _, kind := range []store.DraftKind{store.DraftTextKind, store.DraftContactKind, store.DraftDocumentKind, store.DraftImageKind, store.DraftVoiceKind} {
 		t.Run(string(kind), func(t *testing.T) {
 			a, x, r, f, rev := outboundAppFixture(t, kind)
 			if kind == store.DraftImageKind {
 				if err := a.DB().UpsertMessage(store.UpsertMessageParams{ChatJID: "90002@lid", MsgID: "image-quoted", SenderJID: "90002@lid", Text: "edited after preparation", Timestamp: time.Unix(2, 0)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if kind == store.DraftVoiceKind {
+				if err := a.DB().UpsertMessage(store.UpsertMessageParams{ChatJID: "90002@lid", MsgID: "voice-quoted", SenderJID: "90002@lid", Text: "edited after voice preparation", Timestamp: time.Unix(2, 0)}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -156,6 +164,22 @@ func TestOutboundTypedPayloadAndRetainedDuplicate(t *testing.T) {
 				info, err := a.DB().GetMediaDownloadInfo(result.Entry.Operation.Recipient.JID, f.id)
 				if err != nil || info.MediaType != "image" || info.MimeType != value.MIME {
 					t.Fatal(info, err)
+				}
+			} else if kind == store.DraftVoiceKind {
+				msg := f.sent.GetAudioMessage()
+				value := rev.Payload().Data().Voice
+				if f.uploadType != whatsmeow.MediaAudio || !msg.GetPTT() || msg.Seconds != nil || msg.Waveform != nil || msg.GetMimetype() != value.MIME || msg.GetFileLength() != uint64(value.Size) || !bytes.Equal(f.bytes, voiceFixtureBytes(t)) {
+					t.Fatal("voice wire", msg)
+				}
+				if msg.GetContextInfo().GetQuotedMessage().GetConversation() != " frozen\n voice quote " {
+					t.Fatal("voice quote followed current history")
+				}
+				info, err := a.DB().GetMediaDownloadInfo(result.Entry.Operation.Recipient.JID, f.id)
+				if err != nil || info.MediaType != "audio" || info.MimeType != value.MIME {
+					t.Fatal(info, err)
+				}
+				if err := os.Rename(filepath.Join(a.StoreDir(), rev.Review().SnapshotPath), filepath.Join(a.StoreDir(), rev.Review().SnapshotPath)+".retained"); err != nil {
+					t.Fatal(err)
 				}
 			} else if !proto.Equal(f.sent, want) || f.uploads != 0 {
 				t.Fatal("payload", f.sent, want)
@@ -212,7 +236,7 @@ func TestOutboundMilestonesFailuresAndNoApplicationRetry(t *testing.T) {
 		{name: "send response lost", sendError: true, want: store.OutboundUncertain, uploads: 1, sends: 1},
 		{name: "caller canceled in send", cancel: true, want: store.OutboundUncertain, uploads: 1, sends: 1},
 	}
-	for _, kind := range []store.DraftKind{store.DraftDocumentKind, store.DraftImageKind} {
+	for _, kind := range []store.DraftKind{store.DraftDocumentKind, store.DraftImageKind, store.DraftVoiceKind} {
 		for _, c := range cases {
 			t.Run(string(kind)+"/"+c.name, func(t *testing.T) {
 				_, x, r, f, _ := outboundAppFixture(t, kind)
