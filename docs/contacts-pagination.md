@@ -29,10 +29,11 @@ Independent, uninstrumented `BenchmarkReadContacts -benchtime=1x` measured the e
 
 ## Reproduce
 
-Use the project toolchain and a hidden TMPDIR in the worktree, as for the normal gate:
+From the checkout, use an already installed project toolchain and cached modules, with a hidden TMPDIR in the worktree. Select the toolchain on PATH before running; if it or required modules are unavailable, stop rather than downloading replacements. These commands disable automatic toolchain/module downloads. The measurements above retain their original environment and provenance.
 
 ```bash
-source /home/gabriel-alonso/Projetos/wacli/dist/dev-env.sh
+export GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off
+go version
 mkdir -p dist/.tmp
 export TMPDIR="$PWD/dist/.tmp"
 go test ./internal/app -run '^$' -bench '^BenchmarkReadContacts$' -benchtime=1x -count=1
