@@ -34,6 +34,7 @@ const (
 	agentMediaRead
 	agentMediaRecovery
 	agentMediaTranscription
+	agentDiscovery
 )
 
 // Recover output intent even if Cobra stops on an earlier parse error. Inspect
@@ -233,6 +234,8 @@ func installAgentGuards(root *cobra.Command, flags *rootFlags) {
 
 func agentCommandCapability(cmd *cobra.Command) agentCapability {
 	switch strings.TrimPrefix(cmd.CommandPath(), "wacli ") {
+	case "capabilities":
+		return agentDiscovery
 	case "messages list", "messages search", "messages show", "messages context", "chats list", "chats show", "contacts list", "contacts search", "contacts show", "contacts resolve", "history coverage", "auth status":
 		return agentLocalRead
 	case "draft show", "draft list", "draft cleanup preview", "outbound show", "outbound list", "changes list":
@@ -271,6 +274,9 @@ func validateAgentCommand(cmd *cobra.Command, args []string, flags *rootFlags) e
 	}
 	if flags.events {
 		return usage(fmt.Errorf("--events cannot be combined with --agent"))
+	}
+	if flags.agentCapability == agentDiscovery {
+		return validateCapabilitiesSelectors(cmd)
 	}
 	if flags.storeDir != "" && flags.account != "" {
 		return usage(fmt.Errorf("--store and --account cannot be combined"))
@@ -566,9 +572,12 @@ func agentMeta(flags *rootFlags) out.AgentMeta {
 	if detail != "full" {
 		detail = "compact"
 	}
-	source := "local"
-	if flags.agentCapability == agentHistoryRecovery || flags.agentCapability == agentOutboundSend || flags.agentCapability == agentChatState || flags.agentCapability == agentMediaDownload || flags.agentCapability == agentMediaRecovery {
-		source = "live"
+	return out.AgentMeta{Source: agentCapabilitySource(flags.agentCapability), Detail: detail, Completeness: "unknown", Freshness: "unknown"}
+}
+
+func agentCapabilitySource(capability agentCapability) string {
+	if capability == agentHistoryRecovery || capability == agentOutboundSend || capability == agentChatState || capability == agentMediaDownload || capability == agentMediaRecovery {
+		return "live"
 	}
-	return out.AgentMeta{Source: source, Detail: detail, Completeness: "unknown", Freshness: "unknown"}
+	return "local"
 }

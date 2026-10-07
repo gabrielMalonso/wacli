@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Agents: add unbound `capabilities` discovery from this binary's command tree and agent guards, with contract version/limits, static requirements and explicit unknown account availability. Preserve v1 envelopes, legacy JSON/tables/text helpers, error exits and query broken-pipe behavior; discovery reads no config/store/session and performs no connection or migration. Validate with isolated CLI fixtures only.
+
 - Agents: add readonly `changes list` with opaque restartable checkpoints, file/selection isolation and stable public event references in schema 33. Record effective message mutations transactionally (including edits, tombstones, cleanup, media enrichment and PN/LID repair), and deduplicated public SDK receipt observations. Empty/final pages retain a cursor; no retroactive history, automatic retention, remote completeness or universal restore detection is promised. Preserve existing query formats, outbound evidence and bounded diagnostics; validation uses synthetic SQLite/fakes only.
 
 - Diagnostics: retain two bounded, sanitized SQLite snapshots for the latest connection and Sync executions, with correlation, dates, history/replay signals and monotonic recovery outcomes after cleanup/restart. Add historical evidence to doctor human/JSON/agent and sync summary/events without claiming current liveness, freshness or completeness. Preserve preventive debt, readonly errors/exits, writer isolation and explicit unconfirmed persistence; schema 32 is writable-only.

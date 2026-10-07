@@ -80,9 +80,10 @@ Write commands take a per-store lock. After a `sync --follow` process finishes s
 
 ## Start an agent workflow
 
-Discover accounts with legacy JSON, then choose a listed name explicitly for bounded queries:
+Discover static capabilities without an account, then list accounts with legacy JSON and choose a name explicitly for bounded queries:
 
 ```sh
+wacli --read-only capabilities --agent
 wacli --read-only accounts list --json
 # Bind to the exact requested name reviewed in data.accounts; this name is illustrative.
 wacli_account='example-account'
@@ -100,6 +101,7 @@ These checkout docs describe this fork's implementation. Installation and hosted
 
 | Area | What it covers |
 | --- | --- |
+| [`capabilities`](docs/agent.md#static-capability-discovery) | Discover static command support and agent contract limits without opening an account. |
 | [`auth`](docs/auth.md), [`accounts`](docs/accounts.md) | Pair a linked device and manage isolated account stores. |
 | [`sync`](docs/sync.md), [`history`](docs/history.md) | Mirror new events and request older per-chat history. |
 | [`messages`](docs/messages.md), [`calls`](docs/calls.md) | Search, inspect, export, and manage local records. |

@@ -24,7 +24,7 @@ type accountBinding struct {
 	accountSeen     bool
 	accountMismatch bool
 	storeSeen       bool
-	registryCommand bool
+	unboundCommand  string
 	agent           bool // output intent, independent of partially parsed --agent flags
 }
 
@@ -75,8 +75,8 @@ func registerAccountBinding(root *cobra.Command, flags *rootFlags) {
 		if err := config.ValidateAccountName(value); err != nil {
 			return err
 		}
-		if b.registryCommand {
-			return fmt.Errorf("--for-account cannot be used with global accounts commands")
+		if b.unboundCommand != "" {
+			return fmt.Errorf("--for-account cannot be used with global %s commands", b.unboundCommand)
 		}
 		if b.storeSeen {
 			return fmt.Errorf("--store cannot be combined with --for-account")
