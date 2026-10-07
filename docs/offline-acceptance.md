@@ -2,6 +2,8 @@
 
 Read when: checking the generic reference CLI scope with synthetic fixtures before a separately authorized live acceptance.
 
+For the integrated continuous/reconnect/restart matrix, executed fixture results and pinned SDK passkey/native-flow limits, see [continuous operation acceptance](continuous-acceptance.md).
+
 Baseline: `3ba371e713cc162e828e29095fbdd0623eb5d805` (fork PRs 1–20). Static inspection found no blocking generic gap requiring new production code. This is local contract acceptance, not WhatsApp Web parity or live approval. The recipe below reuses existing tests; it adds no test harness or production feature.
 
 Reference requirements come only from generic portions of `tools/cli/python/whatsapp_cli/__main__.py`, `whatsapp.py`, and `tools/cli/docs/whatsapp-cli.md` in the reference checkout. These files were read, never imported or executed. No memory, patient, secret configuration or clinical routine is an acceptance input.
