@@ -123,6 +123,9 @@ func execute(args []string) error {
 	rootCmd.InitDefaultHelpCmd()
 	rootCmd.InitDefaultCompletionCmd()
 	intent := agentFlagIntent(rootCmd, args)
+	if intent.cobraArgs != nil {
+		args = intent.cobraArgs
+	}
 	if intent.bindingSet {
 		// Find must know that automatic helpers do not consume the next flag.
 		// Keep legacy discovery unchanged when no binding was requested.

@@ -18,6 +18,7 @@ import (
 	"github.com/openclaw/wacli/internal/out"
 	"github.com/openclaw/wacli/internal/store"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // XDG fixture selection is Linux-specific; other platforms use HOME for the
@@ -554,5 +555,248 @@ func TestAccountBindingHelpAndCompletionNeighbors(t *testing.T) {
 	}
 	if !reflect.DeepEqual(before, snapshotLocalStore(t, filepath.Dir(cfg))) || !reflect.DeepEqual(beforeA, snapshotLocalStore(t, a)) || !reflect.DeepEqual(beforeB, snapshotLocalStore(t, b)) {
 		t.Fatal("help/completion executed a registry/archive effect")
+	}
+}
+
+// Reflection keeps this regression compilable against the exact published
+// source before the optional derived representation existed.
+func accountBindingTestCobraArgs(root *cobra.Command, args []string) []string {
+	field := reflect.ValueOf(agentFlagIntent(root, args)).FieldByName("cobraArgs")
+	if !field.IsValid() || field.IsNil() {
+		return args
+	}
+	derived := make([]string, field.Len())
+	for i := range derived {
+		derived[i] = field.Index(i).String()
+	}
+	return derived
+}
+
+func TestAccountBindingClusterRepresentation(t *testing.T) {
+	fresh := func() (*cobra.Command, *[][2]string) {
+		root := &cobra.Command{Use: "wacli"}
+		fs := root.PersistentFlags()
+		fs.StringP("for-account", "a", "", "")
+		fs.String("account", "", "")
+		fs.String("store", "", "")
+		fs.String("message", "", "")
+		fs.StringP("literal", "q", "", "")
+		fs.BoolP("toggle", "t", false, "")
+		fs.Bool("agent", false, "")
+		root.InitDefaultHelpFlag()
+		events := [][2]string{}
+		record := func(f *pflag.Flag) {
+			f.Value = bindingFlagValue{Value: f.Value, set: func(value string) error { events = append(events, [2]string{f.Name, value}); return nil }}
+		}
+		root.Flags().VisitAll(record)
+		return root, &events
+	}
+	for _, tc := range []struct{ args, want []string }{
+		{[]string{"-ha", "fixture-a"}, []string{"-ha=fixture-a"}},
+		{[]string{"auth", "status", "-ha", " 雪🙂 = ' \n", "tail"}, []string{"auth", "status", "-ha= 雪🙂 = ' \n", "tail"}},
+		{[]string{"prefix", "-hha", "fixture-a", "--agent", "-ha", "fixture-b", "--", "-ha", "ignored"}, []string{"prefix", "-hha=fixture-a", "--agent", "-ha=fixture-b", "--", "-ha", "ignored"}},
+		{[]string{"-hta", "fixture-a"}, []string{"-hta=fixture-a"}},
+		{[]string{"-ha", "--", "--agent"}, []string{"-ha=--", "--agent"}},
+		{[]string{"-ha", "--agent", "--account", "fixture-a"}, []string{"-ha=--agent", "--account", "fixture-a"}},
+		{[]string{"-ha", "="}, []string{"-ha=="}},
+		{[]string{"-ha", "=a"}, []string{"-ha==a"}},
+		{[]string{"-ha", "fixture-a", "--help=false"}, []string{"-ha=fixture-a", "--help=false"}},
+		{[]string{"--account=fixture-a", "-ha", "fixture-a", "--account=fixture-b", "-ha", "fixture-a"}, []string{"--account=fixture-a", "-ha=fixture-a", "--account=fixture-b", "-ha=fixture-a"}},
+		{[]string{"-ha", ""}, nil}, // pflag -ha= consumes "=", so retain the original empty value.
+		{[]string{"-ha"}, nil}, {[]string{"-haA1"}, nil}, {[]string{"-ha=A1"}, nil},
+		{[]string{"-a", "A1"}, nil}, {[]string{"--for-account", "A1"}, nil},
+		{[]string{"-zha", "A1"}, nil}, {[]string{"-h=a", "A1"}, nil}, {[]string{"-qha", "A1"}, nil},
+		{[]string{"--message", "-ha", "A1"}, nil}, {[]string{"--", "-ha", "A1"}, nil},
+	} {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			backing := append(append([]string{"caller-prefix"}, tc.args...), "caller-tail")
+			original := backing[1 : len(backing)-1]
+			saved := append([]string{}, backing...)
+			root, events := fresh()
+			derived := accountBindingTestCobraArgs(root, original)
+			want := tc.want
+			if want == nil {
+				want = original
+			}
+			if !reflect.DeepEqual(derived, want) {
+				t.Errorf("representation: got %q want %q", derived, want)
+			}
+			if !reflect.DeepEqual(backing, saved) || len(*events) != 0 {
+				t.Fatal("intent changed caller storage or called Set", backing, *events)
+			}
+			// Inspect the actual returned slice, before the test helper copies it.
+			field := reflect.ValueOf(agentFlagIntent(root, original)).FieldByName("cobraArgs")
+			if field.IsValid() && !field.IsNil() && field.Len() > 0 {
+				for i := range backing {
+					if field.Pointer() == reflect.ValueOf(&backing[i]).Pointer() {
+						t.Fatal("derived slice aliases caller storage")
+					}
+				}
+			}
+			left, leftEvents := fresh()
+			right, rightEvents := fresh()
+			leftErr, rightErr := left.ParseFlags(original), right.ParseFlags(derived)
+			errText := func(err error) string {
+				if err == nil {
+					return ""
+				}
+				return err.Error()
+			}
+			lh, _ := left.Flags().GetBool("help")
+			rh, _ := right.Flags().GetBool("help")
+			la, _ := left.Flags().GetString("for-account")
+			ra, _ := right.Flags().GetString("for-account")
+			if errText(leftErr) != errText(rightErr) || !reflect.DeepEqual(*leftEvents, *rightEvents) || !reflect.DeepEqual(left.Flags().Args(), right.Flags().Args()) || left.Flags().ArgsLenAtDash() != right.Flags().ArgsLenAtDash() || lh != rh || la != ra {
+				t.Fatalf("pflag inequivalence: errors=%v/%v events=%q/%q args=%q/%q help=%v/%v account=%q/%q", leftErr, rightErr, *leftEvents, *rightEvents, left.Flags().Args(), right.Flags().Args(), lh, rh, la, ra)
+			}
+		})
+	}
+}
+
+func TestAccountBindingClusterSplitExecution(t *testing.T) {
+	cfg, a, b := accountBindingFixture(t)
+	configData, err := config.LoadAccountsConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"auth", "accounts"} {
+		configData.Accounts[name] = config.AccountEntry{Store: a}
+	}
+	if err := config.SaveAccountsConfig(cfg, configData); err != nil {
+		t.Fatal(err)
+	}
+	valid, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeA, beforeB := snapshotLocalStore(t, a), snapshotLocalStore(t, b)
+	for _, state := range []string{"valid", "absent", "invalid-config"} {
+		name := "fixture-a"
+		if state == "absent" {
+			name = "absent"
+		}
+		if state == "invalid-config" {
+			if err := os.WriteFile(cfg, []byte("PRIVATE_CLUSTER_CONFIG: [broken"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, prefix := range [][]string{{"-ha", name}, {"-hha", name}, {"-ha" + name}, {"-ha=" + name}, {"--help", "-a", name}} {
+			for _, tail := range [][]string{nil, {"auth", "status"}} {
+				for _, agent := range []bool{false, true} {
+					args := append(append([]string{}, prefix...), tail...)
+					if agent {
+						args = append([]string{"--agent"}, args...)
+					}
+					t.Run(state+"/"+strings.Join(args, " "), func(t *testing.T) {
+						stdout, stderr, err := runAgentTest(t, args...)
+						if state == "valid" {
+							if err != nil || stdout == "" || stderr != "" || strings.Contains(stdout, "schema_version") {
+								t.Fatalf("text help: %v stdout=%q stderr=%q", err, stdout, stderr)
+							}
+							if len(tail) > 0 {
+								target := "wacli auth status"
+								if prefix[0] == "--help" {
+									// Preserve the existing independent-helper discovery.
+									target = "wacli auth [flags]"
+								}
+								if !strings.Contains(stdout, target) {
+									t.Fatal("lost command target", stdout)
+								}
+							}
+						} else if agent {
+							if commandExitCode(err) != 4 || stdout != "" || len(strings.Split(strings.TrimSpace(stderr), "\n")) != 1 || decodeAgentTest(t, stderr).Error.Code != "store_unavailable" {
+								t.Fatalf("typed selection: %v stdout=%q stderr=%q", err, stdout, stderr)
+							}
+						} else if commandExitCode(err) != 1 || stdout != "" || stderr == "" || strings.Contains(stderr, "unknown command") || strings.Contains(stderr, "schema_version") {
+							t.Fatalf("legacy selection: %v stdout=%q stderr=%q", err, stdout, stderr)
+						}
+						if strings.Contains(stderr, cfg) || strings.Contains(stderr, "PRIVATE_CLUSTER_CONFIG") {
+							t.Fatal("private selection cause leaked", stderr)
+						}
+					})
+				}
+			}
+		}
+	}
+	if err := os.WriteFile(cfg, valid, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"auth", "accounts"} {
+		stdout, stderr, err := runAgentTest(t, "--agent", "-ha", name)
+		if err != nil || stdout == "" || stderr != "" {
+			t.Errorf("account name mistaken for command %q: %v %q %q", name, err, stdout, stderr)
+		}
+	}
+	for _, args := range [][]string{
+		{"-ha", "fixture-a", "help", "accounts", "use"},
+		{"help", "-ha", "fixture-a", "accounts", "remove"},
+		{"-ha", "fixture-a", "--help=false", "help", "--", "accounts", "show"},
+		{"-ha", "fixture-a", "no-such-command"},
+		{"-ha", "fixture-a", "--account=fixture-b", "--account=fixture-a"},
+		{"-ha", "fixture-a", "-ha", "fixture-b", "-ha", "fixture-a"},
+		{"-ha", "fixture-a", "--account=same-path"}, {"-ha", "fixture-a", "--store="},
+		{"-ha", ""}, {"-ha"}, {"-ha", "--"}, {"-ha", " 雪 "},
+	} {
+		stdout, stderr, err := runAgentTest(t, append([]string{"--agent"}, args...)...)
+		if commandExitCode(err) != 2 || stdout != "" || decodeAgentTest(t, stderr).Error.Code != "invalid_arguments" {
+			t.Errorf("refusal %q: %v stdout=%q stderr=%q", args, err, stdout, stderr)
+		}
+	}
+	for _, args := range [][]string{
+		{"-ha", "fixture-a", "--help=false", "--read-only", "draft", "create", "--to", localReadPN, "--message-file", "-"},
+		{"-ha", "fixture-a", "--help=false", "sync"},
+	} {
+		stdout, stderr, err := runAgentTest(t, append([]string{"--agent"}, args...)...)
+		want := "read_only"
+		if args[len(args)-1] == "sync" {
+			want = "unsupported_command"
+		}
+		if commandExitCode(err) != 2 || stdout != "" || decodeAgentTest(t, stderr).Error.Code != want {
+			t.Errorf("help=false guard: %v stdout=%q stderr=%q", err, stdout, stderr)
+		}
+	}
+	if !reflect.DeepEqual(beforeA, snapshotLocalStore(t, a)) || !reflect.DeepEqual(beforeB, snapshotLocalStore(t, b)) {
+		t.Fatal("cluster preflight changed archive")
+	}
+	if data, err := os.ReadFile(cfg); err != nil || !bytes.Equal(data, valid) {
+		t.Fatal("cluster preflight changed registry", err)
+	}
+}
+
+func TestAccountBindingClusterSetOnce(t *testing.T) {
+	cfg, a, _ := accountBindingFixture(t)
+	flags := rootFlags{}
+	root := &cobra.Command{Use: "wacli", SilenceErrors: true, SilenceUsage: true}
+	root.PersistentFlags().StringVar(&flags.account, "account", "", "")
+	root.PersistentFlags().StringVar(&flags.storeDir, "store", "", "")
+	registerAccountBinding(root, &flags)
+	root.InitDefaultHelpFlag()
+	sets, argsCalls, hooks, runs := 0, 0, 0, 0
+	binding := root.PersistentFlags().Lookup("for-account")
+	binding.Value = bindingFlagValue{Value: binding.Value, set: func(string) error {
+		sets++
+		if sets == 2 {
+			return os.WriteFile(cfg, []byte("PRIVATE_REMAPPED_CONFIG: [broken"), 0600)
+		}
+		return nil
+	}}
+	auth := &cobra.Command{Use: "auth"}
+	status := &cobra.Command{Use: "status", Args: func(*cobra.Command, []string) error { argsCalls++; return nil }, PreRun: func(*cobra.Command, []string) { hooks++ }, Run: func(*cobra.Command, []string) { runs++ }}
+	auth.AddCommand(status)
+	root.AddCommand(auth)
+	original := []string{"-ha", "fixture-a", "--help=false", "auth", "status", "-ha", "fixture-a", "--help=false"}
+	derived := accountBindingTestCobraArgs(root, original)
+	if _, _, err := root.Find(derived); err != nil {
+		t.Fatal("derived discovery", err)
+	}
+	if sets != 0 || flags.accountBinding.name != "" || argsCalls+hooks+runs != 0 {
+		t.Fatal("discovery invoked Set/resolution/Args/hooks/Run")
+	}
+	root.SetArgs(derived)
+	if err := root.Execute(); err != nil {
+		t.Fatal("fake execution", err)
+	}
+	if sets != 2 || flags.accountBinding.name != "fixture-a" || flags.accountBinding.storeRef != a || argsCalls != 1 || hooks != 1 || runs != 1 {
+		t.Fatalf("occurrence/cache/handler counts: sets=%d binding=%+v args=%d hooks=%d runs=%d", sets, flags.accountBinding, argsCalls, hooks, runs)
 	}
 }
