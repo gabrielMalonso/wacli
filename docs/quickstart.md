@@ -18,13 +18,15 @@ Other options (release archives, source builds, GCC 15 notes) are documented on 
 
 ## 2. Pair as a linked device
 
-Choose the account explicitly. Keep the selected variables in the same Bash session for the later examples:
+Choose the account explicitly. Bind `wacli_account` to the exact requested name reviewed in `data.accounts` (or an intentionally chosen new name for pairing). `example-account` below is illustrative, not a default. Keep the selected variables in the same Bash session for the later examples:
 
 ```bash
 wacli --read-only accounts list --json || exit "$?"
-read -r -p 'Account name (existing, or a name for a new account): ' wacli_account
+wacli_account='example-account' # Replace with the reviewed existing or intended new name.
 : "${wacli_account:?Choose an account name}"
 ```
+
+Agents supply the binding from validated task input/account output without prompting. A human may optionally replace the assignment with `read -r -p 'Account name: ' wacli_account`, then check it against that output. To inspect an existing archive without pairing or syncing, go directly to [step 4](#4-search-and-read) with the reviewed binding.
 
 For a **new** account, create its isolated store and start pairing:
 
@@ -56,7 +58,7 @@ Use a separate Bash terminal for this foreground process. Select the same accoun
 
 ```bash
 wacli --read-only accounts list --json || exit "$?"
-read -r -p 'Same account name selected in step 2: ' wacli_account
+wacli_account='example-account' # Replace with the exact name selected in step 2.
 : "${wacli_account:?Select the intended account}"
 wacli --account "$wacli_account" sync --follow
 ```
@@ -78,13 +80,21 @@ wacli --account "$wacli_account" --read-only --agent messages search "meeting" -
 
 # Select a chat from data.chats[].jid (or a search result's chat_jid).
 wacli --account "$wacli_account" --read-only --agent chats list || exit "$?"
-read -r -p 'Chat JID reviewed in the preceding output: ' wacli_chat
-: "${wacli_chat:?Select a returned chat JID}"
+```
+
+Bind `wacli_chat` to the exact reviewed `data.chats[].jid` or search result's `chat_jid`. The caller supplies this binding from that response; stop on empty/error output or an ambiguous selection.
+
+```bash
+: "${wacli_chat:?Bind the reviewed chat JID from the preceding response}"
 
 # List messages from that chat, oldest first; select data.messages[].id.
 wacli --account "$wacli_account" --read-only --agent messages list --chat "$wacli_chat" --asc || exit "$?"
-read -r -p 'Message ID reviewed in that chat response: ' wacli_message_id
-: "${wacli_message_id:?Select a returned message ID}"
+```
+
+Bind `wacli_message_id` to the exact reviewed `data.messages[].id` from that chat response. Keep both returned identifiers unchanged; the account/chat combination is part of the selection.
+
+```bash
+: "${wacli_message_id:?Bind the reviewed message ID from that chat response}"
 
 # Show that exact message with full agent detail.
 wacli --account "$wacli_account" --read-only --agent messages show --chat "$wacli_chat" --id "$wacli_message_id" --detail full || exit "$?"
@@ -101,8 +111,7 @@ The following are separate live actions: run only the ones you intend and are au
 
 ```bash
 # Choose the intended recipient: a phone, JID, or synced contact/group/chat name.
-read -r -p 'Recipient you intend to contact: ' wacli_recipient
-: "${wacli_recipient:?Choose the intended recipient}"
+: "${wacli_recipient:?Bind the explicitly authorized recipient from task input or reviewed resolution}"
 wacli --account "$wacli_account" send text --to "$wacli_recipient" --message "hello"
 
 # Send a quoted reply

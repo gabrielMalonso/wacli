@@ -14,13 +14,26 @@ Read when: building a local analytics, search, CRM, or agent-side companion tool
 
 Prefer the CLI or webhook when possible. Direct SQLite reads are powerful, but the schema can evolve between releases.
 
+## Optional mode-only wrapper example
+
+A small `wacli-ro` script can save repeated readonly flags. This is a documentation example, not an installed command, account alias or launcher:
+
+```sh
+#!/bin/sh
+WACLI_READONLY=1
+export WACLI_READONLY
+exec wacli "$@"
+```
+
+It forwards argv (including empty/literal values), stdin, stdout, stderr and exit status to the selected `wacli` on PATH. It does not parse arguments, bind an account, add `--agent`, retry or use `eval`. The caller must still pass an explicit `--account NAME` or `--store DIR`; normal CLI selection rules apply, including repeated selectors. It offers no protection against choosing another account. `WACLI_READONLY=1` keeps the policy enabled even with `--read-only=false`; existing readonly exceptions still permit requested output files, network downloads, adapter effects and SQLite WAL/SHM bookkeeping. It is not a sandbox or guarantee of zero effects. No shell profile changes or installation are needed to understand this example.
+
 ## Store paths
 
-Platform defaults are described in [accounts](accounts.md). Linux uses an absolute `XDG_STATE_HOME` when set, otherwise the XDG state directory with legacy fallback; other platforms use `~/.wacli`. Configured accounts can point elsewhere. Obtain the actual selected path rather than constructing one from an account name:
+Platform defaults are described in [accounts](accounts.md). Linux uses an absolute `XDG_STATE_HOME` when set, otherwise the XDG state directory with legacy fallback; other platforms use `~/.wacli`. Configured accounts can point elsewhere. Obtain the actual selected path rather than constructing one from an account name. Bind the account from validated task input and reviewed `data.accounts`; the name below is illustrative, not a default:
 
 ```bash
 wacli --read-only accounts list --json
-read -r -p 'Account name from data.accounts: ' wacli_account
+wacli_account='example-account' # Replace with the exact requested name reviewed in data.accounts.
 : "${wacli_account:?Select an existing account}"
 wacli --read-only accounts show "$wacli_account" --json
 ```

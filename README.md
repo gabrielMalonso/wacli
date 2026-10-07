@@ -84,9 +84,10 @@ Discover accounts with legacy JSON, then choose a listed name explicitly for bou
 
 ```sh
 wacli --read-only accounts list --json
-# Replace personal with the selected existing account name.
-wacli --account personal --read-only --agent auth status
-wacli --account personal --read-only --agent messages list --limit 20
+# Bind to the exact requested name reviewed in data.accounts; this name is illustrative.
+wacli_account='example-account'
+wacli --account "$wacli_account" --read-only --agent auth status
+wacli --account "$wacli_account" --read-only --agent messages list --limit 20
 ```
 
 Start with [account selection](docs/accounts.md) and the [agent contract](docs/agent.md) for supported commands, typed errors, compact/full recovery and pagination. Help/version remain text; `--json` and human tables remain available. Local results do not certify current connectivity, freshness or complete WhatsApp history. The read-only policy exceptions above still apply.

@@ -15,10 +15,10 @@ Discover existing account names and resolved stores with legacy JSON; `accounts`
 wacli --read-only accounts list --json
 ```
 
-Choose a listed name, then keep it explicit on each operation. This Bash example prompts for that selection; it does not create or switch the default account:
+Bind `wacli_account` to the exact listed name requested by the task, then keep it explicit on each operation. For example, if the requested/listed name is `example-account`:
 
 ```bash
-read -r -p 'Account name from data.accounts: ' wacli_account
+wacli_account='example-account' # Replace with the reviewed name from data.accounts.
 : "${wacli_account:?Select an existing account}"
 wacli --account "$wacli_account" --read-only --agent auth status
 wacli --account "$wacli_account" --read-only --agent doctor
