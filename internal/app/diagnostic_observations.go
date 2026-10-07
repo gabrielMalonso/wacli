@@ -70,9 +70,14 @@ type SyncObservation struct {
 
 // Writes are synchronous, bounded checkpoints under the existing writer/owner.
 // No heartbeat worker or message-by-message diagnostic writes are introduced.
+type diagnosticRecoveryWriter interface {
+	RecoverDiagnosticSnapshot(context.Context, string, string, string, []byte) error
+}
+
 type diagnosticRun struct {
 	mu                  sync.Mutex
 	app                 *App
+	recoveryWriter      diagnosticRecoveryWriter
 	connection          *ConnectionObservation
 	sync                *SyncObservation
 	recovery            *appStateRecoveryRun
@@ -85,7 +90,7 @@ type diagnosticRun struct {
 func newDiagnosticRun(a *App, mode SyncMode, recovery *appStateRecoveryRun) *diagnosticRun {
 	at := nowUTC()
 	id := randomDiagnosticID()
-	r := &diagnosticRun{app: a, recovery: recovery}
+	r := &diagnosticRun{app: a, recovery: recovery, recoveryWriter: a.db}
 	if recovery == nil {
 		r.connection = &ConnectionObservation{ExecutionID: id, StartedAt: at, ObservedAt: at, LastEvent: "unobserved"}
 	} else {
@@ -129,9 +134,10 @@ func (r *diagnosticRun) persistLocked(start bool) {
 		} else if !r.started {
 			current := true
 			if r.recovery != nil {
+				// Serialize the check AND recovery write with Sync's fence advance.
+				// Otherwise two failed starts can claim the same prior execution.
 				r.app.waMu.Lock()
 				current = r.app.appStateRecoveryOnClose == r.recovery
-				r.app.waMu.Unlock()
 			}
 			if current {
 				// Without a readable prior token, only an absent slot or our own ID can match.
@@ -139,9 +145,12 @@ func (r *diagnosticRun) persistLocked(start bool) {
 				if r.previousExecutionID != nil {
 					previous = *r.previousExecutionID
 				}
-				err = r.app.db.RecoverDiagnosticSnapshot(ctx, slot, id, previous, raw)
+				err = r.recoveryWriter.RecoverDiagnosticSnapshot(ctx, slot, id, previous, raw)
 			} else {
 				err = errors.New("diagnostic execution superseded")
+			}
+			if r.recovery != nil {
+				r.app.waMu.Unlock()
 			}
 		} else {
 			err = r.app.db.SaveDiagnosticSnapshot(ctx, slot, id, raw)
