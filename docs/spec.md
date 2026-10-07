@@ -55,6 +55,8 @@ The standard build enables `sqlite_fts5` and requires cgo. Both FTS and non-FTS 
 
 Human-readable tables are the default. `--json` returns the established `success`, `data`, and `error` envelope. Long-running commands can emit NDJSON lifecycle events on stderr with `--events`; progress, warnings, and errors must not corrupt primary stdout data.
 
+Unbound `capabilities --agent` discovers this binary's commands, static support/requirements and the existing [agent v1 contract](agent.md#static-capability-discovery). It opens no account/config/store/session and keeps account availability unknown. Contract version, CLI release version and persisted/IPC versions are independent; discovery never grants permission or certifies remote completeness.
+
 Webhooks run on a bounded worker and preserve their documented payloads and event selection. Companions can also read `wacli.db` in read-only mode. See [integrations](integrations.md) for schemas and supported access patterns.
 
 ## Compatibility boundaries

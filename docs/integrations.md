@@ -6,6 +6,7 @@ Read when: building a local analytics, search, CRM, or agent-side companion tool
 
 ## Integration surfaces
 
+- Start with `capabilities --agent` for this binary's static command support and contract version/limits, without account/store selectors. It opens no config/store/session and reports account availability as unknown; select and inspect the account separately. See [discovery](agent.md#static-capability-discovery).
 - Use `--json` for one-shot command output from `chats`, `contacts`, `groups`, `messages`, `calls`, and `doctor`.
 - For supported agent queries/actions, use the [versioned `--agent` contract](agent.md) with typed errors, compact/full projections and local cursors. Accounts still use legacy `--json`; auth/sync events keep their separate stream. An unsupported agent action must not silently fall back to a mutation in another mode.
 - Use [`changes list`](changes.md) for durable local message mutations and receipt observations across process restarts. Save every page checkpoint, including empty/final pages; timestamps, lifecycle stdout and webhooks do not replace this log.

@@ -89,7 +89,7 @@ func execute(args []string) error {
 	rootCmd.PersistentFlags().StringVar(&flags.account, "account", "", "named account from config.yaml")
 	registerAccountBinding(rootCmd, &flags)
 	rootCmd.PersistentFlags().BoolVar(&flags.asJSON, "json", false, "output JSON instead of human-readable text")
-	rootCmd.PersistentFlags().BoolVar(&flags.agent, "agent", false, "output the versioned agent JSON contract (queries, media status/download/retry/transcribe, drafts, history recovery, outbound dispatch and explicit unread/archive state)")
+	rootCmd.PersistentFlags().BoolVar(&flags.agent, "agent", false, "output the versioned agent JSON contract (discovery, supported queries and explicit actions)")
 	rootCmd.PersistentFlags().StringVar(&flags.cursor, "cursor", "", "resume changes list or agent list/temporal search pagination")
 	rootCmd.PersistentFlags().StringVar(&flags.detail, "detail", "compact", "agent detail: compact|full (requires --agent)")
 	rootCmd.PersistentFlags().BoolVar(&flags.fullOutput, "full", false, "disable truncation in table output")
@@ -99,6 +99,8 @@ func execute(args []string) error {
 	rootCmd.PersistentFlags().BoolVar(&flags.readOnly, "read-only", false, "reject commands that intentionally write WhatsApp or the local store (or set WACLI_READONLY=1)")
 
 	rootCmd.AddCommand(newVersionCmd())
+	var capabilities capabilitiesData
+	rootCmd.AddCommand(newCapabilitiesCmd(&flags, &capabilities))
 	rootCmd.AddCommand(newAccountsCmd(&flags))
 	rootCmd.AddCommand(newDoctorCmd(&flags))
 	rootCmd.AddCommand(newAuthCmd(&flags))
@@ -144,13 +146,17 @@ func execute(args []string) error {
 	// hidden shell-completion commands. Find performs no parsing or hooks.
 	var agentFindErr error
 	selectedCommand, commandArgs, findErr := rootCmd.Find(args)
-	registryCommand := func(cmd *cobra.Command) bool {
+	if findErr == nil && selectedCommand.Name() == "capabilities" {
+		// Capture runnable commands before agent guards add help-only RunE hooks.
+		capabilities = discoverCapabilities(rootCmd)
+	}
+	unboundCommand := func(cmd *cobra.Command) string {
 		for c := cmd; c != nil; c = c.Parent() {
-			if c.Name() == "accounts" {
-				return true
+			if c.Name() == "accounts" || c.Name() == "capabilities" {
+				return c.Name()
 			}
 		}
-		return false
+		return ""
 	}
 	scopeCommand := selectedCommand
 	if intent.bindingSet && selectedCommand != nil && selectedCommand.Name() == "help" {
@@ -161,8 +167,8 @@ func execute(args []string) error {
 			// Positional help targets after -- are available only after parsing.
 			// Check them before the original help validator, hooks or help Run.
 			target, _, _ := rootCmd.Find(args)
-			if registryCommand(target) {
-				return fmt.Errorf("--for-account cannot be used with global accounts commands")
+			if name := unboundCommand(target); name != "" {
+				return fmt.Errorf("--for-account cannot be used with global %s commands", name)
 			}
 			if original != nil {
 				return original(c, args)
@@ -170,7 +176,7 @@ func execute(args []string) error {
 			return nil
 		}
 	}
-	flags.accountBinding.registryCommand = registryCommand(scopeCommand)
+	flags.accountBinding.unboundCommand = unboundCommand(scopeCommand)
 	if intent.agent {
 		agentFindErr = findErr
 	}
@@ -204,7 +210,7 @@ func execute(args []string) error {
 		}
 		if intent.agent {
 			flags.agent = true
-			if flags.agentAccount.StoreRef == nil && intent.store != "" && intent.account == "" && !intent.bindingSet {
+			if flags.agentCapability != agentDiscovery && flags.agentAccount.StoreRef == nil && intent.store != "" && intent.account == "" && !intent.bindingSet {
 				ref, absErr := filepath.Abs(intent.store)
 				if absErr == nil {
 					flags.agentAccount.StoreRef = &ref

@@ -7,6 +7,14 @@ description: "Use wacli for account selection, local WhatsApp archive queries, e
 
 Use the installed `wacli`, or `./dist/wacli` after building the current checkout. Check `--version` and command `--help` against the documentation for that build. Repository work follows [AGENTS.md](../../../AGENTS.md); see the [command map](../../../docs/overview.md) for task-specific pages.
 
+Discover this binary's static CLI/agent support before account selection:
+
+```sh
+wacli --read-only capabilities --agent
+```
+
+Run unbound, without account/store selectors. Discovery opens no config/store/session and reports `account_availability="unknown"`; static requirements and `read_only` policy are not evidence of readiness, authorization or zero external effects. Check the contract version and requested command's `agent_mode`; refuse unknown/unsupported modes rather than falling back to a mutation. Use command help and the [discovery contract](../../../docs/agent.md#static-capability-discovery) for restrictions and limits.
+
 ## Select an account and read
 
 Discover existing account names and resolved stores with legacy JSON; `accounts` is outside the agent contract:

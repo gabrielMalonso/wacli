@@ -8,8 +8,14 @@ import (
 	"time"
 )
 
+const (
+	AgentSchemaVersion   = 1
+	AgentCompactMaxBytes = 1 << 20
+	AgentFullMaxBytes    = 8 << 20
+)
+
 // AgentAccount identifies the selected archive without opening credentials.
-// StoreRef is null only when argument/config resolution failed.
+// StoreRef is null for unbound discovery or failed argument/config resolution.
 type AgentAccount struct {
 	StoreRef *string `json:"store_ref"`
 	Name     string  `json:"name,omitempty"`
@@ -163,11 +169,11 @@ func WriteAgentActionJSON[T any](w io.Writer, account AgentAccount, meta AgentMe
 }
 
 func writeAgentJSON[T any](w io.Writer, account AgentAccount, meta AgentMeta, data T, ignoreBrokenPipe bool) error {
-	limit := 1 << 20
+	limit := AgentCompactMaxBytes
 	if meta.Detail == "full" {
-		limit = 8 << 20
+		limit = AgentFullMaxBytes
 	}
-	err := writeAgentPolicy(w, agentSuccess[T]{1, true, account, meta, data}, limit, ignoreBrokenPipe)
+	err := writeAgentPolicy(w, agentSuccess[T]{AgentSchemaVersion, true, account, meta, data}, limit, ignoreBrokenPipe)
 	if meta.Detail == "full" {
 		var tooLarge *AgentError
 		if errors.As(err, &tooLarge) && tooLarge.Code == "payload_too_large" {
@@ -177,7 +183,7 @@ func writeAgentJSON[T any](w io.Writer, account AgentAccount, meta AgentMeta, da
 	return err
 }
 func WriteAgentError(w io.Writer, account AgentAccount, meta AgentMeta, err *AgentError) error {
-	return writeAgent(w, agentFailure{1, false, account, meta, err}, 1<<20)
+	return writeAgent(w, agentFailure{AgentSchemaVersion, false, account, meta, err}, AgentCompactMaxBytes)
 }
 func writeAgent(w io.Writer, value any, limit int) error {
 	return writeAgentPolicy(w, value, limit, true)

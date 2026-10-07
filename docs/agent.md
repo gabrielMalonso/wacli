@@ -4,9 +4,10 @@ Read when: integrating a coding agent with bounded archive queries, explicit his
 
 `--agent` enables JSON contract **v1**. `--detail compact|full` chooses its public detail level; compact is the default. Flags work before or after the subcommand. `--agent --json` still returns v1. Existing `--json` envelopes, field names, list defaults, tables, and `--full` table behavior remain unchanged. `--detail` without `--agent` is an error; `--full` does not select full agent detail.
 
-Start with legacy account discovery, then bind the exact requested/listed name explicitly. The name below is illustrative, not a default; automated callers bind it from validated task input and the response without an interactive prompt:
+Discover this binary's capabilities first, then use legacy account discovery and bind the exact requested/listed name explicitly. The name below is illustrative, not a default; automated callers bind it from validated task input and the response without an interactive prompt:
 
 ```bash
+wacli --read-only capabilities --agent || exit "$?"
 wacli --read-only accounts list --json || exit "$?"
 wacli_account='example-account' # Replace with the reviewed name from data.accounts.
 wacli --account "$wacli_account" --read-only --agent auth status
@@ -17,10 +18,34 @@ wacli --account "$wacli_account" --read-only --agent doctor
 
 Accounts use legacy JSON; help/version remain text. For a manual archive use `--store DIR` instead of `--account`, never both. The [quickstart](quickstart.md#4-search-and-read) shows selection of returned chat/message IDs and full recovery. For an authorized write, read [drafts](drafts.md) before [outbound](outbound.md); use [media](media.md) only for the file task at hand. Local exhaustion never certifies remote freshness/completeness, and an uncertain effect calls for inspection rather than automatic replay. Readonly rejects intentional archive/WhatsApp mutations; requested output, network download, explicit adapter and WAL bookkeeping exceptions remain, as described in [integrations](integrations.md#optional-mode-only-wrapper-example).
 
+## Static capability discovery
+
+```bash
+wacli capabilities --agent
+wacli capabilities --json
+wacli capabilities
+```
+
+Discovery reads the compiled command tree and the same support classification used by agent preflight. It does not read the account registry, select an archive, open SQLite/session/LOCK/IPC, connect, migrate or inspect credentials. Missing, old, corrupt or locked stores and malformed default account configuration do not affect it. Explicit `--account`, `--store` and `-a`/`--for-account` are rejected; run account discovery separately. Environment/default selection is ignored. In agent mode the envelope has `account={"store_ref":null}`, `meta.source="local"`, and unknown freshness/completeness. Compact/full return the same catalog; ordinary `--json` uses the legacy envelope and no flag prints a command table. `--agent --events` remains an error.
+
+`data` contains:
+
+- `cli_version`: this binary's effective version, also reported by `version`.
+- `account_availability="unknown"`: no selected account was inspected. Static support does not certify authentication, recipient support, network/media availability, a compatible owner, permission to act, or successful execution.
+- `agent_contract`: envelope `schema_version`, `versioning="additive_within_version"`, single-line JSON encoding, stdout success/stderr error streams, supported detail levels, maximum bounded query results (200), compact/full encoded envelope caps (1/8 MiB), and the usual exit categories (0 success, 1 operational, 2 usage/policy, 3 missing local record, 4 store). Action-specific codes remain documented on their pages.
+- `commands`: sorted canonical runnable command paths from this binary. Containers and hidden completion-protocol commands are omitted. `agent_mode` is `supported`, `unsupported`, or `text` for help/version. Unsupported means refused under `--agent`, even if the legacy command can run; it does not describe that command's legacy effects or authorize fallback. Help flags on all commands and root help remain text.
+
+Supported entries add a `capability` category, the same `source` as their agent envelopes, whether `read_only` policy permits the command, and static `requirements`/important `constraints` where applicable. `requirements` name an existing compatible archive or writable archive, writer LOCK or compatible owner, exact media reference/output, readable local auth state, or an explicitly supplied input/adapter. They are prerequisites, not observations that they are satisfied. `constraints` summarize mode restrictions; command help and the command-specific documentation remain authoritative for flags, argument validation, defaults and narrower limits. No attempt is made to serialize every validator as a schema.
+
+For example, `doctor` supports agent mode only offline; `media retry` requires a standalone writer LOCK and never delegates; `outbound send` requires an exact draft/revision/hash/key and supports text/contact/document/image/voice, while `send text` remains unsupported. A live capability may finish from a local retained duplicate or cached bytes without connecting. `read_only=true` for media download/transcription permits explicit output/adapter effects and is not a sandbox or a claim of no network. Historical observations, `synced`, local rows, cursor exhaustion and `source` never certify current liveness or remote completeness.
+
+The CLI release version, agent envelope version, SQLite migration version, diagnostic observation version and IPC/payload versions are independent. Within agent v1, fields and command/capability entries may be added without removing or changing existing meanings; incompatible envelope semantics require a new contract version. Consumers should tolerate additional object fields and catalog entries, check the contract version and exact requested command's mode, and refuse unknown modes/capabilities they cannot handle. Unknown `error.code` or uncertain effects must never cause an automatic retry or a switch to legacy mutation. Discovery is not an approval record; retained outbound idempotency and operation-specific inspection rules remain unchanged.
+
 ## Supported queries and data
 
 | Command | `data` | Full additions |
 | --- | --- | --- |
+| `capabilities` (unbound) | Static command/capability catalog and agent contract limits; account availability unknown | Same catalog |
 | `messages list/search` | `messages` array; search also reports `search_mode` (`fts5` or `like`) and effective `order` (`relevance`, `time_desc`, `time_asc`) | Each message's `full` content, caption, names, forwarding/star/download metadata, selected buttons |
 | `messages show` | One message DTO | Same message additions |
 | `changes list` | `changes` reference array and `introduced_at`; every page has `meta.page.next_cursor`, including empty/final pages | Same reference DTO |
