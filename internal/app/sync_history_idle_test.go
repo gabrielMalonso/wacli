@@ -190,3 +190,23 @@ func TestSyncReplaySignalsExtendIdleWindow(t *testing.T) {
 		})
 	}
 }
+
+func TestHistoryCallbackCompletionRestartsIdleWindow(t *testing.T) {
+	for _, evt := range []any{&events.Message{}, &events.HistorySync{}} {
+		t.Run(fmt.Sprintf("%T", evt), func(t *testing.T) {
+			a := newTestApp(t)
+			o := newHistoryObserver(nil, nil)
+			// The idle window already expired before this callback was admitted.
+			// A large interval avoids depending on polling or scheduler timing.
+			o.last = time.Now().Add(-2 * time.Hour)
+			_, finish := a.historyEventOptions(SyncOptions{historyObserver: o}, evt)
+			if _, closed := o.closeIfIdle(time.Hour); closed {
+				t.Fatal("idle window closed during an admitted callback")
+			}
+			finish()
+			if remaining, closed := o.closeIfIdle(time.Hour); closed || remaining <= 0 {
+				t.Fatal("callback completion did not restart the expired idle window")
+			}
+		})
+	}
+}
