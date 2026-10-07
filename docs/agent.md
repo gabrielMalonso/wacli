@@ -339,4 +339,6 @@ success or permission to automatically retry an uncertain action.
 
 ## Durable change consumption
 
+For fixture validation of continuous operation and the distinction between received events, retained state and remote completeness, see [continuous acceptance](continuous-acceptance.md). Its passkey/native-flow boundaries do not add agent capabilities or authorize fallback.
+
 Use [`changes list`](changes.md) to consume persisted message mutations and public SDK receipt observations. Start without `--cursor`, save `meta.page.next_cursor` after processing every page, and keep using it when `has_more=false` or `changes=[]` to see later commits after restart. Unlike list traversal, this feed retains event references; it does not freeze content or certify remote coverage. Limit/detail can change, account/store selection cannot. `invalid_cursor` and `cursor_expired` exit 2 without resetting; schema/read failures are sanitized `store_unavailable` with exit 4. Schema 33 is writable-only, no retroactive import or automatic truncation is performed, and clone/restore detection has explicit limits. Compact/full are identical reference DTOs and normal envelope caps remain.

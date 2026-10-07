@@ -65,6 +65,8 @@ wacli sync [--once] [--follow] [--idle-exit 30s] [--max-reconnect 5m] [--stale-t
 
 ## Missing messages after an offline interval
 
+The reproducible [continuous acceptance matrix](continuous-acceptance.md) exercises the local event/restart boundaries with fakes and SQLite and records what remains unproven remotely.
+
 A successful `sync --once`, even with `messages_stored=0` and a completed offline replay, does not prove that messages sent from another linked device are all present locally. The replay count describes the backlog announced for this connection; it is not an inventory of WhatsApp Web or the primary phone. A short idle interval can end before a later history notification arrives. The callback wait protects work already admitted, not future arrivals.
 
 Inspect the selected account's local chat/message IDs and retain `--events` diagnostics from an explicitly authorized sync. A longer observation window or an authorized `sync --follow` can capture later arrivals, but neither guarantees remote coverage. An empty search establishes only absence from that local query at that time, not definitive remote loss. App-state reconciliation debt is separate from message history; ordinary shutdown can record preventive debt without a recovery failure.

@@ -81,6 +81,7 @@ wacli polls list [--chat RECIPIENT] [--limit N] [--json]
 - Synced list rows and plain quick replies send the selected display text as a quoted reply to the original message.
 - This intentionally treats selection as a quoted text reply, not as a synthetic phone-tap event.
 - Native-flow quick replies are detected but not sent yet; wacli returns an explicit unsupported error instead of guessing the wire format.
+- The pinned SDK's response schema and send classification do not establish a compatible remote phone-tap payload; see [native-flow acceptance limits](continuous-acceptance.md#sdk-boundaries). Parsing a selectable control is not evidence that WACLI can dispatch it.
 - Sent selections are stored locally as `Selected: <display text>` and support JSON output for scripts.
 
 ## Status broadcasts
