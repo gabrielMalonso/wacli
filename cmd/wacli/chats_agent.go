@@ -77,7 +77,11 @@ func connectAndApplyAgentChatState(ctx context.Context, a *app.App, r app.ChatSt
 		failure := app.ChatStateFailure(r, "store_unavailable", nil)
 		return failure.Result, failure
 	}
-	if err := a.EnsureAuthed(ctx); err != nil {
+	ensureAuthed := a.EnsureAuthed
+	if r.Action == app.ChatStateMarkRead {
+		ensureAuthed = a.EnsureAuthedWithoutMigration
+	}
+	if err := ensureAuthed(ctx); err != nil {
 		failure := app.ChatStateFailure(r, "identity_unavailable", err)
 		return failure.Result, failure
 	}

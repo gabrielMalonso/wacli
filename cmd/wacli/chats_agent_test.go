@@ -865,3 +865,140 @@ func TestAgentMarkReadProductionBinaryHistoricalOwners(t *testing.T) {
 		})
 	}
 }
+
+// Model the real cached LID->PN resolver; no network or discovery is involved.
+type mappedAgentChatStateWA struct {
+	agentChatStateWA
+	resolutions, receipts atomic.Int64
+	unauthenticated       bool
+}
+
+func (f *mappedAgentChatStateWA) IsAuthed() bool { return !f.unauthenticated }
+func (f *mappedAgentChatStateWA) ResolveLIDToPN(_ context.Context, jid types.JID) types.JID {
+	f.resolutions.Add(1)
+	if jid.ToNonAD().String() == localReadLID {
+		return types.NewJID("15550000001", types.DefaultUserServer)
+	}
+	return jid
+}
+func (f *mappedAgentChatStateWA) MarkRead(context.Context, []types.MessageID, time.Time, types.JID, types.JID, types.AddressingMode) (types.ReceiptType, error) {
+	f.receipts.Add(1)
+	return "", errors.New("fixture forbids receipts")
+}
+
+func mappedAgentChatStateFixture(t *testing.T, readOnly bool) (*app.App, *mappedAgentChatStateWA, app.ChatStateRequest) {
+	t.Helper()
+	t.Setenv("WACLI_READONLY", "0")
+	f := &mappedAgentChatStateWA{}
+	dir, a := draftOwnerFixtureOptions(t, app.Options{ReadOnly: readOnly, WAFactory: func(wa.Options) (app.WAClient, error) {
+		f.opens.Add(1)
+		return f, nil
+	}})
+	return a, f, app.ChatStateRequest{Version: 1, StoreRef: dir, Requested: localReadLID, Action: app.ChatStateMarkRead}
+}
+
+func TestAgentMarkReadAliasOnlyHistoryRefusesWithoutMigration(t *testing.T) {
+	for _, standalone := range []bool{false, true} {
+		for _, requested := range []string{localReadPN, localReadLID} {
+			t.Run(strconv.FormatBool(standalone)+"/"+requested, func(t *testing.T) {
+				a, f, r := mappedAgentChatStateFixture(t, false)
+				r.Requested = requested
+				if err := a.DB().SetChatUnreadCount(localReadLID, 2); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := a.DB().GetLatestMessageInfo(localReadPN); !errors.Is(err, sql.ErrNoRows) {
+					t.Fatal("fixture must have no canonical anchor", err)
+				}
+				if info, err := a.DB().GetLatestMessageInfo(localReadLID); err != nil || info.MsgID != "m1" {
+					t.Fatal("fixture must have an alias anchor", info, err)
+				}
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+				defer cancel()
+				var result app.ChatStateResult
+				var err error
+				if standalone {
+					result, err = connectAndApplyAgentChatState(ctx, a, r)
+				} else {
+					if err := a.OpenWA(); err != nil {
+						t.Fatal(err)
+					}
+					if err := a.Connect(ctx, false, nil); err != nil {
+						t.Fatal(err)
+					}
+					result, err = a.ApplyAgentChatState(ctx, r)
+				}
+				alias, aliasErr := a.DB().GetLatestMessageInfo(localReadLID)
+				canonical, canonicalErr := a.DB().GetLatestMessageInfo(localReadPN)
+				chat, chatErr := a.DB().GetChat(localReadLID)
+				t.Logf("outcome=%s mirror=%s err=%v states=%d resolutions=%d receipts=%d alias=%q/%v canonical=%q/%v", result.Outcome, result.LocalMirror, err, f.states.Load(), f.resolutions.Load(), f.receipts.Load(), alias.MsgID, aliasErr, canonical.MsgID, canonicalErr)
+				var failure *app.ChatStateError
+				if !errors.As(err, &failure) || failure.Code != "not_dispatched" || result.Request != r || app.ValidateChatStateResult(r, result) != nil || result.Outcome != app.ChatStateNotDispatched || result.LocalMirror != app.ChatStateMirrorUnknown || f.states.Load() != 0 || f.receipts.Load() != 0 || f.resolutions.Load() != 0 || aliasErr != nil || alias.MsgID != "m1" || !errors.Is(canonicalErr, sql.ErrNoRows) || chatErr != nil || !chat.Unread || chat.UnreadCount != 2 {
+					t.Fatal("alias-only mark-read must refuse without migration or mutation", result, err, chat, chatErr)
+				}
+			})
+		}
+	}
+}
+
+func TestAgentChatStateStandalonePreservesLegacyMigration(t *testing.T) {
+	for _, action := range []app.ChatStateAction{app.ChatStateMarkRead, app.ChatStateMarkUnread, app.ChatStateArchive, app.ChatStateUnarchive} {
+		t.Run(string(action), func(t *testing.T) {
+			a, f, r := mappedAgentChatStateFixture(t, false)
+			r.Action = action
+			if action == app.ChatStateMarkRead {
+				at := time.Unix(1700000000, 0)
+				if err := a.DB().UpsertChat(localReadPN, "dm", "Synthetic", at); err != nil {
+					t.Fatal(err)
+				}
+				if err := a.DB().UpsertMessage(store.UpsertMessageParams{ChatJID: localReadPN, MsgID: "anchor", Timestamp: at}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			result, err := connectAndApplyAgentChatState(t.Context(), a, r)
+			if err != nil || result.Request != r || result.Outcome != app.ChatStateSDKCompleted || result.LocalMirror != app.ChatStateMirrorPersisted || f.states.Load() != 1 || f.receipts.Load() != 0 || f.opens.Load() != 1 || f.connects.Load() != 1 {
+				t.Fatal(result, err)
+			}
+			_, aliasErr := a.DB().GetMessage(localReadLID, "m1")
+			_, migratedErr := a.DB().GetMessage(localReadPN, "m1")
+			if action == app.ChatStateMarkRead {
+				if aliasErr != nil || !errors.Is(migratedErr, sql.ErrNoRows) || f.resolutions.Load() != 0 {
+					t.Fatal("valid PN anchor must not migrate alias history", aliasErr, migratedErr)
+				}
+			} else if !errors.Is(aliasErr, sql.ErrNoRows) || migratedErr != nil || f.resolutions.Load() == 0 {
+				t.Fatal("other actions must retain functional legacy migration", aliasErr, migratedErr)
+			}
+		})
+	}
+}
+
+func TestAgentMarkReadStandaloneAuthenticationGuards(t *testing.T) {
+	for _, mode := range []string{"canceled", "read-only", "wrong store", "unauthenticated", "closed app"} {
+		t.Run(mode, func(t *testing.T) {
+			a, f, r := mappedAgentChatStateFixture(t, mode == "read-only")
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			want, opens := "not_dispatched", int64(0)
+			switch mode {
+			case "canceled":
+				cancel()
+				want = "identity_unavailable"
+			case "read-only":
+				want = "read_only"
+			case "wrong store":
+				r.StoreRef = filepath.Join(r.StoreRef, "different")
+				want = "store_unavailable"
+			case "unauthenticated":
+				f.unauthenticated = true
+				want, opens = "identity_unavailable", 1
+			case "closed app":
+				a.Close()
+				want = "identity_unavailable"
+			}
+			result, err := connectAndApplyAgentChatState(ctx, a, r)
+			var failure *app.ChatStateError
+			if !errors.As(err, &failure) || failure.Code != want || result.Request != r || result.Outcome != app.ChatStateNotDispatched || result.LocalMirror != app.ChatStateMirrorUnknown || f.opens.Load() != opens || f.states.Load() != 0 || f.receipts.Load() != 0 || f.resolutions.Load() != 0 || f.connects.Load() != 0 {
+				t.Fatal("authentication guard failed", result, err, f.opens.Load())
+			}
+		})
+	}
+}
