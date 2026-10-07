@@ -9,6 +9,7 @@ Read when: you need the user-facing command map, global flags, store model, or l
 - Default store: `~/.local/state/wacli` on Linux, `~/.wacli` elsewhere.
 - Existing Linux `~/.wacli` stores are reused when no XDG store exists.
 - Override the store with `--store DIR` or `WACLI_STORE_DIR`.
+- Bind an invocation to an existing named account with [`-a NAME` / `--for-account NAME`](accounts.md#strict-invocation-binding): overrides env/default and refuses conflicting selectors. Legacy `--account NAME` remains available; global `accounts` commands run without binding.
 - Human-readable tables are the default.
 - Use `--json` for scriptable output.
 - Use [`--agent` with `--detail compact|full`](agent.md) for bounded, versioned offline agent queries and typed errors.

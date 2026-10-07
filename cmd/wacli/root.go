@@ -56,6 +56,7 @@ type rootFlags struct {
 	agentAccount          out.AgentAccount
 	storeDir              string
 	account               string
+	accountBinding        accountBinding
 	asJSON                bool
 	fullOutput            bool
 	events                bool
@@ -86,6 +87,7 @@ func execute(args []string) error {
 
 	rootCmd.PersistentFlags().StringVar(&flags.storeDir, "store", "", "store directory (default: $WACLI_STORE_DIR, XDG state dir on Linux, or ~/.wacli)")
 	rootCmd.PersistentFlags().StringVar(&flags.account, "account", "", "named account from config.yaml")
+	registerAccountBinding(rootCmd, &flags)
 	rootCmd.PersistentFlags().BoolVar(&flags.asJSON, "json", false, "output JSON instead of human-readable text")
 	rootCmd.PersistentFlags().BoolVar(&flags.agent, "agent", false, "output the versioned agent JSON contract (queries, media status/download/retry/transcribe, drafts, history recovery, outbound dispatch and explicit unread/archive state)")
 	rootCmd.PersistentFlags().StringVar(&flags.cursor, "cursor", "", "resume agent list or temporal search pagination")
@@ -122,6 +124,7 @@ func execute(args []string) error {
 	rootCmd.InitDefaultCompletionCmd()
 	intent := agentFlagIntent(rootCmd, args)
 	flags.agent = intent.agent
+	flags.accountBinding.agent = intent.agent
 	flags.agentCapability = intent.capability
 	if intent.capability == agentChatState {
 		requested, _ := store.NormalizeDraftTarget(intent.chat)
@@ -130,8 +133,14 @@ func execute(args []string) error {
 	// Resolve the command before installing Args wrappers or letting Cobra add
 	// hidden shell-completion commands. Find performs no parsing or hooks.
 	var agentFindErr error
+	selectedCommand, _, findErr := rootCmd.Find(args)
+	for c := selectedCommand; c != nil; c = c.Parent() {
+		if c.Name() == "accounts" {
+			flags.accountBinding.registryCommand = true
+		}
+	}
 	if intent.agent {
-		_, _, agentFindErr = rootCmd.Find(args)
+		agentFindErr = findErr
 	}
 	if intent.cursorSet && !intent.help {
 		c, _, findErr := rootCmd.Find(args)
@@ -155,9 +164,14 @@ func execute(args []string) error {
 		}
 		return rootCmd.Execute()
 	}(); err != nil {
+		if intent.bindingSet {
+			// Binding can fail between repeated bool flags. Use the established
+			// output intent rather than the partially parsed --agent value.
+			flags.agent = intent.agent
+		}
 		if intent.agent {
 			flags.agent = true
-			if flags.agentAccount.StoreRef == nil && intent.store != "" && intent.account == "" {
+			if flags.agentAccount.StoreRef == nil && intent.store != "" && intent.account == "" && !intent.bindingSet {
 				ref, absErr := filepath.Abs(intent.store)
 				if absErr == nil {
 					flags.agentAccount.StoreRef = &ref
@@ -285,6 +299,13 @@ func resolveStoreDir(flags *rootFlags) (string, error) {
 }
 
 func resolveStoreDirWithConfig(flags *rootFlags, configPath string) (string, error) {
+	if flags != nil && flags.accountBinding.name != "" {
+		ref := flags.accountBinding.storeRef
+		if flags.agent {
+			flags.agentAccount = out.AgentAccount{Name: flags.accountBinding.name, StoreRef: &ref}
+		}
+		return ref, nil
+	}
 	// Resolve an agent selection once so its envelope and opener cannot disagree
 	// if the default account configuration changes during the invocation.
 	if flags != nil && flags.agent && flags.agentAccount.StoreRef != nil {

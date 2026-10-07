@@ -41,9 +41,9 @@ const (
 // honor --. Recognize defined command names for action source without parsing
 // values or executing hooks.
 func agentFlagIntent(root *cobra.Command, args []string) (intent struct {
-	agent, detailSet, cursorSet, help bool
-	store, account, chat, chatAction  string
-	capability                        agentCapability
+	agent, detailSet, cursorSet, help, bindingSet bool
+	store, account, chat, chatAction              string
+	capability                                    agentCapability
 }) {
 	known := make(map[string]*pflag.Flag)
 	short := make(map[byte]*pflag.Flag)
@@ -128,6 +128,9 @@ func agentFlagIntent(root *cobra.Command, args []string) (intent struct {
 			intent.store = value
 		case "account":
 			intent.account = value
+		case "for-account":
+			intent.bindingSet = true
+			intent.account = value
 		case "chat":
 			intent.chat = value
 		}
@@ -188,6 +191,10 @@ func installAgentGuards(root *cobra.Command, flags *rootFlags) {
 	install(root)
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		if flags.agent {
+			var typed *out.AgentError
+			if errors.As(err, &typed) {
+				return err
+			}
 			return agentUsageError(err)
 		}
 		return err

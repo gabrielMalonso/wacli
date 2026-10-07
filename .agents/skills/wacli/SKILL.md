@@ -20,13 +20,15 @@ Bind `wacli_account` to the exact listed name requested by the task, then keep i
 ```bash
 wacli_account='example-account' # Replace with the reviewed name from data.accounts.
 : "${wacli_account:?Select an existing account}"
-wacli --account "$wacli_account" --read-only --agent auth status
-wacli --account "$wacli_account" --read-only --agent doctor
-wacli --account "$wacli_account" --read-only --agent messages list --limit 20
-wacli --account "$wacli_account" --read-only --agent messages search 'query' --sort time
+wacli -a "$wacli_account" --read-only --agent auth status
+wacli -a "$wacli_account" --read-only --agent doctor
+wacli -a "$wacli_account" --read-only --agent messages list --limit 20
+wacli -a "$wacli_account" --read-only --agent messages search 'query' --sort time
 ```
 
-For a manual archive, use an explicit `--store DIR` instead of `--account`; they cannot be combined. Do not guess paths: account config, XDG state roots and custom stores follow [account selection](../../../docs/accounts.md). `accounts show NAME --json` returns `data.store_dir`; agent envelopes identify the selected archive with `account.name` when applicable and `account.store_ref`.
+`-a NAME` / `--for-account NAME` requires the exact existing name, overrides env/default and fixes the resolved selection for this invocation. A different/empty `--account`, a different binding or any `--store` is refused before command effects, even with help/version; equal repetitions are allowed. Selection/config errors exit 4 in agent mode; invalid names/conflicts exit 2. Inspect and correct the selection explicitly, without fallback or pairing. Global `accounts` calls run without binding. Legacy `--account` keeps its previous selection behavior; selecting either way grants no mutation authorization.
+
+For a manual archive, use an explicit `--store DIR` instead of named selection; do not combine them. Do not guess paths: account config, XDG state roots, custom stores and binding limits follow [account selection](../../../docs/accounts.md). `accounts show NAME --json` returns `data.store_dir`; agent envelopes identify the selected archive with `account.name` when applicable and `account.store_ref`.
 
 ## Output, certainty and recovery
 
