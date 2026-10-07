@@ -181,7 +181,10 @@ func execute(args []string) error {
 			if !flags.agentRunStarted && !errors.As(err, &typed) {
 				err = agentUsageError(err)
 			}
-			if flags.agentCapability == agentHistoryRecovery {
+			var bindingSelection *accountBindingSelectionError
+			if errors.As(err, &bindingSelection) {
+				err = bindingSelection
+			} else if flags.agentCapability == agentHistoryRecovery {
 				err = classifyHistoryAgentError(err, flags.agentHistoryAttemptID)
 			} else if flags.agentCapability == agentOutboundSend {
 				err = classifyOutboundActionError(err, flags.agentOutboundRequest)
@@ -211,7 +214,10 @@ func writeRootError(flags rootFlags, err error) {
 		meta := agentMeta(&flags)
 		meta.Recovery = ""
 		typed := classifyAgentError(err)
-		if flags.agentCapability == agentHistoryRecovery {
+		var bindingSelection *accountBindingSelectionError
+		if errors.As(err, &bindingSelection) {
+			typed = bindingSelection.AgentError
+		} else if flags.agentCapability == agentHistoryRecovery {
 			typed = classifyHistoryAgentError(err, flags.agentHistoryAttemptID)
 		} else if flags.agentCapability == agentOutboundSend {
 			typed = classifyOutboundActionError(err, flags.agentOutboundRequest)

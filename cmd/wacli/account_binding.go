@@ -10,6 +10,12 @@ import (
 	"github.com/spf13/pflag"
 )
 
+// Binding resolution happens before action preflight. Keep its selection error
+// distinct so action-specific classifiers cannot rename it or imply dispatch.
+type accountBindingSelectionError struct{ *out.AgentError }
+
+func (e *accountBindingSelectionError) Unwrap() error { return e.AgentError }
+
 // accountBinding records parser-observed selectors, without retaining argv.
 // The first account and a sticky mismatch suffice to detect A/B/A conflicts.
 type accountBinding struct {
@@ -88,7 +94,7 @@ func registerAccountBinding(root *cobra.Command, flags *rootFlags) {
 		if err != nil {
 			selection := agentStoreError(err)
 			if b.agent {
-				return selection
+				return &accountBindingSelectionError{selection}
 			}
 			// Keep legacy exit/channel behavior without exposing config contents.
 			return fmt.Errorf("%s", selection.Message)

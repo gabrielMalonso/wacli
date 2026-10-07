@@ -166,6 +166,13 @@ func TestAccountBindingSelectionErrorsAndHelp(t *testing.T) {
 			}
 		}
 	}
+	// A parser-time selection refusal must not become an action preflight error.
+	for _, command := range [][]string{{"history", "backfill"}, {"outbound", "send"}, {"chats", "archive"}, {"media", "download"}, {"media", "retry"}, {"media", "transcribe"}, {"draft", "create"}} {
+		stdout, stderr, err := runAgentTest(t, append([]string{"--agent", "-a", "absent"}, command...)...)
+		if stdout != "" || commandExitCode(err) != 4 || decodeAgentTest(t, stderr).Error.Code != "store_unavailable" {
+			t.Fatal(command, err, stdout, stderr)
+		}
+	}
 	stdout, stderr, err := runAgentTest(t, "-a", "missing-store", "--agent", "messages", "list")
 	if stdout != "" || commandExitCode(err) != 4 || decodeAgentTest(t, stderr).Error.Code != "store_unavailable" {
 		t.Fatal(err, stderr)
