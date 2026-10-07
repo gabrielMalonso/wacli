@@ -240,7 +240,13 @@ func (a *App) addSyncEventHandler(ctx context.Context, opts SyncOptions, message
 		case *wa.AppStateKeyUnavailable:
 			a.warnEmptyAppStateKey(v)
 		case *events.LoggedOut:
-			syncDiagnosticRun(ctx).updateSync(func(s *SyncObservation) { s.StopReason = "logged_out" })
+			syncDiagnosticRun(ctx).updateSync(func(s *SyncObservation) {
+				// A copied late callback records logout separately in the connection slot;
+				// it must not replace a stop already observed as failed or cancelled.
+				if s.StoppedAt == nil {
+					s.StopReason = "logged_out"
+				}
+			})
 			// WhatsApp revoked this session (linked device removed on the phone,
 			// or a logout/ban). whatsmeow reconnects on Disconnected, so without
 			// this the follow loop spins forever against a dead session. Surface

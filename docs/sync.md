@@ -153,6 +153,8 @@ The existing `synced`/exit and `app_state.recovery_observations` contracts remai
 remains after a persistence failure. `stop_reason` is `idle`, `cancelled`,
 `deadline_exceeded`, `logged_out` or `failed`; idle/stopped is not completeness.
 Cancellation/logout can still keep the existing successful command exit status.
+A logout callback arriving after a stop keeps its separate connection observation
+without replacing the already observed failed/cancelled stop reason.
 Startup/connection errors and storage-limit failures do not certify normal sync.
 
 Checkpoints happen at start, binding to a connection execution, observed connection
