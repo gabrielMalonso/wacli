@@ -4,12 +4,18 @@ Read when: integrating a coding agent with bounded archive queries, explicit his
 
 `--agent` enables JSON contract **v1**. `--detail compact|full` chooses its public detail level; compact is the default. Flags work before or after the subcommand. `--agent --json` still returns v1. Existing `--json` envelopes, field names, list defaults, tables, and `--full` table behavior remain unchanged. `--detail` without `--agent` is an error; `--full` does not select full agent detail.
 
+Start with legacy account discovery, then bind the exact requested/listed name explicitly. The name below is illustrative, not a default; automated callers bind it from validated task input and the response without an interactive prompt:
+
 ```bash
-wacli --store /path/to/archive --agent messages list
-wacli messages search "invoice" --account personal --agent --limit 10
-wacli --account personal messages show --chat 123@s.whatsapp.net --id ABC --agent --detail full
-wacli --store /path/to/archive --agent doctor
+wacli --read-only accounts list --json || exit "$?"
+wacli_account='example-account' # Replace with the reviewed name from data.accounts.
+wacli --account "$wacli_account" --read-only --agent auth status
+wacli --account "$wacli_account" --read-only --agent messages list --limit 20
+wacli --account "$wacli_account" --read-only --agent messages search "invoice" --sort time --limit 10
+wacli --account "$wacli_account" --read-only --agent doctor
 ```
+
+Accounts use legacy JSON; help/version remain text. For a manual archive use `--store DIR` instead of `--account`, never both. The [quickstart](quickstart.md#4-search-and-read) shows selection of returned chat/message IDs and full recovery. For an authorized write, read [drafts](drafts.md) before [outbound](outbound.md); use [media](media.md) only for the file task at hand. Local exhaustion never certifies remote freshness/completeness, and an uncertain effect calls for inspection rather than automatic replay. Readonly rejects intentional archive/WhatsApp mutations; requested output, network download, explicit adapter and WAL bookkeeping exceptions remain, as described in [integrations](integrations.md#optional-mode-only-wrapper-example).
 
 ## Supported queries and data
 
@@ -23,7 +29,7 @@ wacli --store /path/to/archive --agent doctor
 | `media retry --chat JID --id ID --output PATH` | Explicit live recovery of one exact reference, dated phone/CDN observation, independent file publication and archive persistence | Untruncated filename |
 | `media transcribe --file PATH --adapter /absolute/executable` | Explicit local adapter processing: text, nullable language, completion/empty status, exact observed input path/bytes/SHA-256 | Bounded untruncated transcript |
 | `chats list` / `chats show` | `chats` array / one chat DTO | Archived, pinned, stored mute deadline |
-| `chats mark-unread/archive/unarchive --chat PHONE_OR_JID` | Explicit live action: requested scope, observed public account/target, SDK outcome and local mirror | Same result |
+| `chats mark-read/mark-unread/archive/unarchive --chat PHONE_OR_JID` | Explicit live action: requested scope, observed public account/target, SDK outcome and local mirror | Same result |
 | `contacts list/search` / `contacts show` | `contacts` array / one contact DTO | System name, tags, metadata update timestamp |
 | `contacts resolve` | `resolutions` array, one per input | Untruncated names |
 | `history coverage` | `coverage` array with local counts/dates/anchor status; opt-in `--evidence` adds independent `recovery_evidence` | Untruncated names; evidence options, anchors and checkpoint measurements |
@@ -208,7 +214,7 @@ wacli --store /path/to/archive --agent messages list --chat 123@s.whatsapp.net -
 wacli --store /path/to/archive --agent messages list --chat 123@s.whatsapp.net --cursor "$cursor" --limit 50 --detail full
 ```
 
-`--cursor` is accepted only with `--agent chats list`, `--agent messages list` or `--agent messages search QUERY --sort time`; other contexts fail before store/network effects. Flags can precede or follow the command. Message tokens are opaque, versioned, at most **512 bytes**, strictly decoded, and contain no credential or authorization. No server, secret, persistent token state or store UUID is needed. Tokens are not tamper-proof and must not be interpreted as access controls. Malformed, oversized, unsupported-version and mismatched tokens return `invalid_cursor` with exit 2; errors never reproduce the token or SQL.
+For message pagination, `--cursor` requires `--agent messages list` or `--agent messages search QUERY --sort time`. Other supported domains have their own scopes and bounds: [contacts](#contact-pagination), [chats](#local-chat-pagination), [draft list/cleanup preview](drafts.md) and [outbound list/show](outbound.md). Unsupported cursor contexts fail before store/network effects. Flags can precede or follow the command. Message tokens are opaque, versioned, at most **512 bytes**, strictly decoded, and contain no credential or authorization. No server, secret, persistent token state or store UUID is needed. Tokens are not tamper-proof and must not be interpreted as access controls. Malformed, oversized, unsupported-version and mismatched tokens return `invalid_cursor` with exit 2; errors never reproduce the token or SQL.
 
 The cursor binds the absolute selected `store_ref`, normalized requested chat, sorted effective chat JIDs (including locally verified PN/LID aliases), sender, exclusive before/after second bounds, from-me/them, forwarded/starred filters, order and cursor version. Absent time bounds differ from valid zero-second bounds. Agent chat/sender inputs normalize phone numbers to JIDs, trim surrounding whitespace and remove PN device components; sender remains a single exact stored-JID filter, without expanding sender aliases. Equivalent date spellings and JID spellings are accepted. Changing `--limit` within 1–200 or switching compact/full is safe and does not change the cursor scope. A different PN/LID alias set invalidates the cursor and requires restarting; changing the requested chat identity also requires restarting, even if its effective aliases overlap. The store reference remains a path, not inode/database identity: do not reuse cursors after replacing/restoring the archive at that path.
 

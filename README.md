@@ -78,6 +78,24 @@ This policy still permits requested [message export files](docs/messages.md#expo
 
 Write commands take a per-store lock. After a `sync --follow` process finishes startup, supported send commands plus the `chats` state commands (`mark-read`, `archive`, `pin`, `mute`, and their inverses) are delegated to it while it owns that lock. See [companion integrations](docs/integrations.md) for webhooks and safe read-only SQLite access.
 
+## Start an agent workflow
+
+Discover accounts with legacy JSON, then choose a listed name explicitly for bounded queries:
+
+```sh
+wacli --read-only accounts list --json
+# Bind to the exact requested name reviewed in data.accounts; this name is illustrative.
+wacli_account='example-account'
+wacli --account "$wacli_account" --read-only --agent auth status
+wacli --account "$wacli_account" --read-only --agent messages list --limit 20
+```
+
+Start with [account selection](docs/accounts.md) and the [agent contract](docs/agent.md) for supported commands, typed errors, compact/full recovery and pagination. Help/version remain text; `--json` and human tables remain available. Local results do not certify current connectivity, freshness or complete WhatsApp history. The read-only policy exceptions above still apply.
+
+For an authorized write, read [drafts](docs/drafts.md) to prepare/review an exact revision, then [outbound](docs/outbound.md) for explicit dispatch and retained evidence. A preview/hash records no approval; an uncertain result calls for inspection, not automatic replay. Use [media](docs/media.md) only when that task needs file observation, download or recovery.
+
+These checkout docs describe this fork's implementation. Installation and hosted-site links above remain upstream references; verify the installed binary's version and command help. [Fork maintenance](docs/fork-maintenance.md) defines the fork-only PR/push workflow and separate release authorization.
+
 ## Commands
 
 | Area | What it covers |
