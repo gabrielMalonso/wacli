@@ -154,7 +154,17 @@ func (a *App) MarkChatRead(ctx context.Context, jid types.JID, read bool) error 
 }
 
 func (a *App) markChatReadResolved(ctx context.Context, jid types.JID, chatJID string, read bool, beforeSend func() error) (ChatStateOutcome, ChatStateMirror, error) {
-	lastTS, lastKey := a.latestMessageRange(chatJID)
+	var lastTS time.Time
+	var lastKey *waCommon.MessageKey
+	if read {
+		var err error
+		lastTS, lastKey, err = a.strictReadMessageRange(chatJID)
+		if err != nil {
+			return ChatStateNotDispatched, ChatStateMirrorUnknown, err
+		}
+	} else {
+		lastTS, lastKey = a.latestMessageRange(chatJID)
+	}
 	return a.applyLocalChatStateWrite(ctx, beforeSend, func(boundary func()) ([]any, error) {
 		return a.wa.MarkChatAsRead(ctx, jid, read, lastTS, lastKey, boundary)
 	}, func() error {
@@ -167,6 +177,20 @@ func (a *App) markChatReadResolved(ctx context.Context, jid types.JID, chatJID s
 		}
 		return a.db.ClearChatUnreadThrough(chatJID, lastTS, ids)
 	})
+}
+
+// Capture once: a missing or unreadable anchor must never become a clock-based
+// SDK range or an unbounded local clear. Mark-unread keeps its existing policy.
+func (a *App) strictReadMessageRange(chatJID string) (time.Time, *waCommon.MessageKey, error) {
+	info, err := a.db.GetLatestMessageInfo(chatJID)
+	if err != nil {
+		return time.Time{}, nil, fmt.Errorf("load mark-read message boundary: %w", err)
+	}
+	key := messageKeyFromStore(info)
+	if info.Timestamp.Unix() <= 0 || key == nil || key.GetRemoteJID() != chatJID {
+		return time.Time{}, nil, fmt.Errorf("mark-read requires a stored message with a positive timestamp and valid message key")
+	}
+	return info.Timestamp, key, nil
 }
 
 func (a *App) applyLocalChatStateWrite(ctx context.Context, beforeSend func() error, send func(func()) ([]any, error), persist func() error) (ChatStateOutcome, ChatStateMirror, error) {

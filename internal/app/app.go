@@ -278,6 +278,18 @@ func (a *App) close() {
 }
 
 func (a *App) EnsureAuthed(ctx context.Context) error {
+	if err := a.EnsureAuthedWithoutMigration(ctx); err != nil {
+		return err
+	}
+	if a.opts.ReadOnly {
+		return nil
+	}
+	return a.migrateHistoricalLIDs(ctx)
+}
+
+// EnsureAuthedWithoutMigration checks the existing session without pairing or
+// normalizing historical rows. Callers that need legacy normalization use EnsureAuthed.
+func (a *App) EnsureAuthedWithoutMigration(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -285,10 +297,7 @@ func (a *App) EnsureAuthed(ctx context.Context) error {
 		return err
 	}
 	if a.wa.IsAuthed() {
-		if a.opts.ReadOnly {
-			return nil
-		}
-		return a.migrateHistoricalLIDs(ctx)
+		return nil
 	}
 	return fmt.Errorf("not authenticated; run `wacli auth`")
 }

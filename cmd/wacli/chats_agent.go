@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"time"
 
 	"github.com/openclaw/wacli/internal/app"
 	"github.com/openclaw/wacli/internal/lock"
@@ -15,6 +16,9 @@ import (
 func runAgentChatState(flags *rootFlags, opts chatStateOptions, action app.ChatStateAction) error {
 	if err := flags.requireWritable(); err != nil {
 		return &out.AgentError{Code: "read_only", Message: "Read-only policy rejects chat state mutations.", ExitCode: 2, Cause: err}
+	}
+	if opts.receipts || action == app.ChatStateMarkRead && (flags.timeout <= 0 || flags.timeout > 5*time.Minute) {
+		return agentUsageError(errors.New("agent mark-read excludes receipts and requires a positive timeout at most 5m"))
 	}
 	requested, err := store.NormalizeDraftTarget(opts.chat)
 	if err != nil || opts.pick != 0 {
@@ -73,7 +77,11 @@ func connectAndApplyAgentChatState(ctx context.Context, a *app.App, r app.ChatSt
 		failure := app.ChatStateFailure(r, "store_unavailable", nil)
 		return failure.Result, failure
 	}
-	if err := a.EnsureAuthed(ctx); err != nil {
+	ensureAuthed := a.EnsureAuthed
+	if r.Action == app.ChatStateMarkRead {
+		ensureAuthed = a.EnsureAuthedWithoutMigration
+	}
+	if err := ensureAuthed(ctx); err != nil {
 		failure := app.ChatStateFailure(r, "identity_unavailable", err)
 		return failure.Result, failure
 	}
