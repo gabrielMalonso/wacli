@@ -15,6 +15,7 @@ import (
 type ChatStateAction string
 
 const (
+	ChatStateMarkRead   ChatStateAction = "mark-read"
 	ChatStateMarkUnread ChatStateAction = "mark-unread"
 	ChatStateArchive    ChatStateAction = "archive"
 	ChatStateUnarchive  ChatStateAction = "unarchive"
@@ -50,7 +51,7 @@ func (r ChatStateRequest) Validate() error {
 		return fmt.Errorf("an explicit canonical phone/DM/group JID is required")
 	}
 	switch r.Action {
-	case ChatStateMarkUnread, ChatStateArchive, ChatStateUnarchive:
+	case ChatStateMarkRead, ChatStateMarkUnread, ChatStateArchive, ChatStateUnarchive:
 		return nil
 	default:
 		return fmt.Errorf("unsupported agent chat state action")
@@ -147,10 +148,15 @@ func (a *App) ApplyAgentChatState(ctx context.Context, r ChatStateRequest) (Chat
 	}
 	var outcome ChatStateOutcome
 	var mirror ChatStateMirror
-	if r.Action == ChatStateMarkUnread {
+	switch r.Action {
+	case ChatStateMarkRead:
+		outcome, mirror, err = a.markChatReadResolved(ctx, jid, i.ChatJID, true, beforeSend)
+	case ChatStateMarkUnread:
 		outcome, mirror, err = a.markChatReadResolved(ctx, jid, i.ChatJID, false, beforeSend)
-	} else {
-		outcome, mirror, err = a.archiveChatResolved(ctx, jid, i.ChatJID, r.Action == ChatStateArchive, beforeSend)
+	case ChatStateArchive:
+		outcome, mirror, err = a.archiveChatResolved(ctx, jid, i.ChatJID, true, beforeSend)
+	case ChatStateUnarchive:
+		outcome, mirror, err = a.archiveChatResolved(ctx, jid, i.ChatJID, false, beforeSend)
 	}
 	failure.Result.Outcome, failure.Result.LocalMirror = outcome, mirror
 	if err == nil {
