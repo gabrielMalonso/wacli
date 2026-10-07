@@ -252,3 +252,7 @@ wacli history fill --dry-run --kind group --limit 20
 wacli history backfill --chat 1234567890@s.whatsapp.net --requests 10 --count 50
 wacli history backfill --chat 123456789@g.us --requests 3 --wait 90s
 ```
+
+## Durable local change notifications
+
+Native/manual history imports generate [`changes list`](changes.md) references only when persisted message rows actually change. Historical source timestamps do not order the local feed; unchanged replay adds no message entry. The feed begins with schema 33 and does not reconstruct preexisting history or prove WhatsApp completeness. Existing authorship, PN/LID, edit/tombstone and backfill evidence rules remain authoritative. Embedded historical receipt arrays are outside feed receipt coverage.

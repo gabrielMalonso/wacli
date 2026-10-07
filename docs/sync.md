@@ -177,3 +177,7 @@ event precedes App cleanup; the finalized event and successful CLI summary inclu
 known drained callbacks and final replay restoration. Persistence failure is
 explicit even in a finalized event; finalized never promises durable success.
 These stderr events are transient diagnostics, not a durable consumer feed.
+
+## Durable local changes
+
+[`changes list`](changes.md) reads persisted message mutations and selected public SDK receipt observations without a writer LOCK or second connection. It resumes after restart using the returned cursor, including an empty/final page checkpoint. Webhooks/lifecycle events remain best-effort independent surfaces. The schema 33 feed starts when introduced into the archive, has no automatic retention, and does not change replay/idle, connected, freshness, completeness or bounded diagnostic meanings. Receipt retention failures/overflow produce sanitized `change_receipt_incomplete`; message/feed writes share SQLite transactions.

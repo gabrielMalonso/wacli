@@ -32,6 +32,7 @@ Read when: you need the user-facing command map, global flags, store model, or l
 - [accounts](accounts.md) - create and select named account stores.
 - [sync](sync.md) - sync messages, contacts, groups, channels, and optional media.
 - [messages](messages.md) - list, search, show, and contextualize stored messages.
+- [changes](changes.md) - consume durable local message mutations and receipt observations with restartable cursors.
 - [calls](calls.md) - list stored WhatsApp call events.
 - [draft](drafts.md) - prepare and inspect durable local revisions without sending.
 - [outbound](outbound.md) - dispatch an exact reviewed revision/hash and inspect retained evidence.

@@ -23,6 +23,7 @@ Accounts use legacy JSON; help/version remain text. For a manual archive use `--
 | --- | --- | --- |
 | `messages list/search` | `messages` array; search also reports `search_mode` (`fts5` or `like`) and effective `order` (`relevance`, `time_desc`, `time_asc`) | Each message's `full` content, caption, names, forwarding/star/download metadata, selected buttons |
 | `messages show` | One message DTO | Same message additions |
+| `changes list` | `changes` reference array and `introduced_at`; every page has `meta.page.next_cursor`, including empty/final pages | Same reference DTO |
 | `messages context` | `messages` array and `selected_id` | Same message additions |
 | `media status --chat JID --id ID` | One exact media reference, local file observations and dated retained unavailability; opt-in `--verify` and optional output observation | Untruncated filename |
 | `media download --chat JID --id ID --output PATH` | Verified explicit output, `cached` / `existing` / `downloaded`, bytes/hash/checks and `recorded=false` | Untruncated filename |
@@ -310,3 +311,7 @@ exit 4. Readonly schema errors require an explicit writable upgrade, never an
 automatic connection. A failed checkpoint may leave an older execution saved;
 current-run `persistence_unconfirmed` and correlation must not be read as durable
 success or permission to automatically retry an uncertain action.
+
+## Durable change consumption
+
+Use [`changes list`](changes.md) to consume persisted message mutations and public SDK receipt observations. Start without `--cursor`, save `meta.page.next_cursor` after processing every page, and keep using it when `has_more=false` or `changes=[]` to see later commits after restart. Unlike list traversal, this feed retains event references; it does not freeze content or certify remote coverage. Limit/detail can change, account/store selection cannot. `invalid_cursor` and `cursor_expired` exit 2 without resetting; schema/read failures are sanitized `store_unavailable` with exit 4. Schema 33 is writable-only, no retroactive import or automatic truncation is performed, and clone/restore detection has explicit limits. Compact/full are identical reference DTOs and normal envelope caps remain.

@@ -14,6 +14,7 @@ stored data or file permissions. They work alongside a writer such as
 | Local query | Source |
 | --- | --- |
 | `messages list/search/starred/show/context/export` | Local message archive |
+| `changes list` | [Durable local change feed](changes.md), including terminal checkpoints |
 | `chats list/show` (including channel chats) | Local chat archive |
 | `contacts search/show/resolve` | Local contacts, aliases, and persisted PN/LID mapping |
 | `groups list`, `groups participants list` | Local group snapshots |

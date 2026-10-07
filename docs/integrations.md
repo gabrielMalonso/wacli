@@ -8,6 +8,7 @@ Read when: building a local analytics, search, CRM, or agent-side companion tool
 
 - Use `--json` for one-shot command output from `chats`, `contacts`, `groups`, `messages`, `calls`, and `doctor`.
 - For supported agent queries/actions, use the [versioned `--agent` contract](agent.md) with typed errors, compact/full projections and local cursors. Accounts still use legacy `--json`; auth/sync events keep their separate stream. An unsupported agent action must not silently fall back to a mutation in another mode.
+- Use [`changes list`](changes.md) for durable local message mutations and receipt observations across process restarts. Save every page checkpoint, including empty/final pages; timestamps, lifecycle stdout and webhooks do not replace this log.
 - Use `--events` for line-delimited lifecycle events from long-running `auth`, `sync`, and `history backfill` commands.
 - Use `sync --webhook` for live-message delivery to another process or service.
 - Use a read-only SQLite connection to `<store>/wacli.db` for local analytics that need joins, cursors, or incremental scans.

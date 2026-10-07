@@ -3,8 +3,13 @@
 package store
 
 import (
+	"fmt"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/mattn/go-sqlite3"
 )
 
 func TestMessageIdentityUpdatesDoNotRewriteFTS(t *testing.T) {
@@ -19,23 +24,55 @@ func TestMessageIdentityUpdatesDoNotRewriteFTS(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	var before, after int
-	if err := db.sql.QueryRow(`SELECT total_changes()`).Scan(&before); err != nil {
+	checkpoint := feedPage(t, db, "", 20).NextCursor
+	var ftsWrites atomic.Int64
+	conn, err := db.sql.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Observe actual FTS shadow-table writes on the single fixture connection.
+	// Archive notifications are legitimate writes outside the search index.
+	err = conn.Raw(func(driver any) error {
+		sqlite, ok := driver.(*sqlite3.SQLiteConn)
+		if !ok {
+			return fmt.Errorf("unexpected fixture driver %T", driver)
+		}
+		sqlite.RegisterUpdateHook(func(_ int, database, table string, _ int64) {
+			if database == "main" && strings.HasPrefix(table, "messages_fts_") {
+				ftsWrites.Add(1)
+			}
+		})
+		return nil
+	})
+	conn.Close()
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.sql.Exec(`UPDATE messages SET sender_jid = ?, quoted_sender_jid = ? WHERE msg_id = ?`,
 		"15550000001@s.whatsapp.net", "15550000002@s.whatsapp.net", "identity"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.sql.QueryRow(`SELECT total_changes()`).Scan(&after); err != nil {
-		t.Fatal(err)
-	}
-	if writes := after - before; writes != 1 {
-		t.Fatalf("identity-only update wrote %d rows, want only the message row", writes)
+	if writes := ftsWrites.Load(); writes != 0 {
+		t.Fatalf("identity-only update wrote %d FTS shadow rows, want none", writes)
 	}
 	msgs, err := db.SearchMessages(SearchMessagesParams{Query: "needle", Limit: 10})
 	if err != nil || len(msgs) != 1 || msgs[0].SenderJID != "15550000001@s.whatsapp.net" {
 		t.Fatalf("search after identity update: %+v, %v", msgs, err)
+	}
+	message, err := db.GetMessage("100@g.us", "identity")
+	if err != nil || message.QuotedSenderJID != "15550000002@s.whatsapp.net" {
+		t.Fatalf("quoted identity after update: %+v, %v", message, err)
+	}
+	page := feedPage(t, db, checkpoint, 20)
+	if len(page.Changes) != 1 || page.Changes[0].Kind != "message_update" || page.Changes[0].ChatJID != "100@g.us" || page.Changes[0].ID != "identity" || page.Changes[0].SenderJID != message.SenderJID {
+		t.Fatalf("identity change notification: %+v", page)
+	}
+	// A real indexed-field update proves the observer detects FTS rewrites.
+	if _, err := db.sql.Exec(`UPDATE messages SET text = 'changed needle' WHERE msg_id = 'identity'`); err != nil {
+		t.Fatal(err)
+	}
+	if ftsWrites.Load() == 0 {
+		t.Fatal("indexed text update did not produce observable FTS writes")
 	}
 }
 

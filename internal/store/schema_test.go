@@ -246,6 +246,10 @@ func TestOpenRepairsRecordedMediaUnavailableMigrationMissingColumn(t *testing.T)
 		t.Fatalf("create legacy schema: %v", err)
 	}
 	for _, migration := range schemaMigrations {
+		// This fixture predates the feed; do not claim its objects already exist.
+		if migration.version >= 33 {
+			continue
+		}
 		if _, err := raw.Exec(`INSERT INTO schema_migrations(version, name, applied_at) VALUES(?, ?, 1)`, migration.version, migration.name); err != nil {
 			_ = raw.Close()
 			t.Fatalf("record migration %d: %v", migration.version, err)

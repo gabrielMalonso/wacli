@@ -6,7 +6,7 @@ Select the same named account with `--account NAME` in each invocation, or the s
 
 | Operation | Existing coordination |
 | --- | --- |
-| Local messages/chats/contacts, draft and outbound queries | Readonly archive access without the writer LOCK or a second WhatsApp connection; reads continue alongside WAL writers. |
+| Local messages/chats/contacts, changes, draft and outbound queries | Readonly archive access without the writer LOCK or a second WhatsApp connection; reads continue alongside WAL writers. |
 | `outbound send`, draft mutations, `history backfill` and supported legacy delegated operations | Direct writer LOCK, or the existing `sync --follow` owner's socket when the store is locked. The shared operation slot serializes these requests. |
 | Delegated archive/pin/mute changes | Existing app-state coordination, outside the send slot and send pacing. |
 | Commands without delegation, including `send status` | Require their existing direct LOCK; they can wait with `--lock-wait` or fail while another process owns it. |
