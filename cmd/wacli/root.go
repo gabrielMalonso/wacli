@@ -56,6 +56,7 @@ type rootFlags struct {
 	agentAccount          out.AgentAccount
 	storeDir              string
 	account               string
+	accountBinding        accountBinding
 	asJSON                bool
 	fullOutput            bool
 	events                bool
@@ -86,6 +87,7 @@ func execute(args []string) error {
 
 	rootCmd.PersistentFlags().StringVar(&flags.storeDir, "store", "", "store directory (default: $WACLI_STORE_DIR, XDG state dir on Linux, or ~/.wacli)")
 	rootCmd.PersistentFlags().StringVar(&flags.account, "account", "", "named account from config.yaml")
+	registerAccountBinding(rootCmd, &flags)
 	rootCmd.PersistentFlags().BoolVar(&flags.asJSON, "json", false, "output JSON instead of human-readable text")
 	rootCmd.PersistentFlags().BoolVar(&flags.agent, "agent", false, "output the versioned agent JSON contract (queries, media status/download/retry/transcribe, drafts, history recovery, outbound dispatch and explicit unread/archive state)")
 	rootCmd.PersistentFlags().StringVar(&flags.cursor, "cursor", "", "resume agent list or temporal search pagination")
@@ -121,7 +123,17 @@ func execute(args []string) error {
 	rootCmd.InitDefaultHelpCmd()
 	rootCmd.InitDefaultCompletionCmd()
 	intent := agentFlagIntent(rootCmd, args)
+	if intent.cobraArgs != nil {
+		args = intent.cobraArgs
+	}
+	if intent.bindingSet {
+		// Find must know that automatic helpers do not consume the next flag.
+		// Keep legacy discovery unchanged when no binding was requested.
+		rootCmd.InitDefaultHelpFlag()
+		rootCmd.InitDefaultVersionFlag()
+	}
 	flags.agent = intent.agent
+	flags.accountBinding.agent = intent.agent
 	flags.agentCapability = intent.capability
 	if intent.capability == agentChatState {
 		requested, _ := store.NormalizeDraftTarget(intent.chat)
@@ -130,8 +142,36 @@ func execute(args []string) error {
 	// Resolve the command before installing Args wrappers or letting Cobra add
 	// hidden shell-completion commands. Find performs no parsing or hooks.
 	var agentFindErr error
+	selectedCommand, commandArgs, findErr := rootCmd.Find(args)
+	registryCommand := func(cmd *cobra.Command) bool {
+		for c := cmd; c != nil; c = c.Parent() {
+			if c.Name() == "accounts" {
+				return true
+			}
+		}
+		return false
+	}
+	scopeCommand := selectedCommand
+	if intent.bindingSet && selectedCommand != nil && selectedCommand.Name() == "help" {
+		// Match Cobra's help target discovery, not the ancestors of "help".
+		scopeCommand, _, _ = rootCmd.Find(commandArgs)
+		original := selectedCommand.Args
+		selectedCommand.Args = func(c *cobra.Command, args []string) error {
+			// Positional help targets after -- are available only after parsing.
+			// Check them before the original help validator, hooks or help Run.
+			target, _, _ := rootCmd.Find(args)
+			if registryCommand(target) {
+				return fmt.Errorf("--for-account cannot be used with global accounts commands")
+			}
+			if original != nil {
+				return original(c, args)
+			}
+			return nil
+		}
+	}
+	flags.accountBinding.registryCommand = registryCommand(scopeCommand)
 	if intent.agent {
-		_, _, agentFindErr = rootCmd.Find(args)
+		agentFindErr = findErr
 	}
 	if intent.cursorSet && !intent.help {
 		c, _, findErr := rootCmd.Find(args)
@@ -155,9 +195,14 @@ func execute(args []string) error {
 		}
 		return rootCmd.Execute()
 	}(); err != nil {
+		if intent.bindingSet {
+			// Binding can fail between repeated bool flags. Use the established
+			// output intent rather than the partially parsed --agent value.
+			flags.agent = intent.agent
+		}
 		if intent.agent {
 			flags.agent = true
-			if flags.agentAccount.StoreRef == nil && intent.store != "" && intent.account == "" {
+			if flags.agentAccount.StoreRef == nil && intent.store != "" && intent.account == "" && !intent.bindingSet {
 				ref, absErr := filepath.Abs(intent.store)
 				if absErr == nil {
 					flags.agentAccount.StoreRef = &ref
@@ -167,7 +212,10 @@ func execute(args []string) error {
 			if !flags.agentRunStarted && !errors.As(err, &typed) {
 				err = agentUsageError(err)
 			}
-			if flags.agentCapability == agentHistoryRecovery {
+			var bindingSelection *accountBindingSelectionError
+			if errors.As(err, &bindingSelection) {
+				err = bindingSelection
+			} else if flags.agentCapability == agentHistoryRecovery {
 				err = classifyHistoryAgentError(err, flags.agentHistoryAttemptID)
 			} else if flags.agentCapability == agentOutboundSend {
 				err = classifyOutboundActionError(err, flags.agentOutboundRequest)
@@ -197,7 +245,10 @@ func writeRootError(flags rootFlags, err error) {
 		meta := agentMeta(&flags)
 		meta.Recovery = ""
 		typed := classifyAgentError(err)
-		if flags.agentCapability == agentHistoryRecovery {
+		var bindingSelection *accountBindingSelectionError
+		if errors.As(err, &bindingSelection) {
+			typed = bindingSelection.AgentError
+		} else if flags.agentCapability == agentHistoryRecovery {
 			typed = classifyHistoryAgentError(err, flags.agentHistoryAttemptID)
 		} else if flags.agentCapability == agentOutboundSend {
 			typed = classifyOutboundActionError(err, flags.agentOutboundRequest)
@@ -285,6 +336,13 @@ func resolveStoreDir(flags *rootFlags) (string, error) {
 }
 
 func resolveStoreDirWithConfig(flags *rootFlags, configPath string) (string, error) {
+	if flags != nil && flags.accountBinding.name != "" {
+		ref := flags.accountBinding.storeRef
+		if flags.agent {
+			flags.agentAccount = out.AgentAccount{Name: flags.accountBinding.name, StoreRef: &ref}
+		}
+		return ref, nil
+	}
 	// Resolve an agent selection once so its envelope and opener cannot disagree
 	// if the default account configuration changes during the invocation.
 	if flags != nil && flags.agent && flags.agentAccount.StoreRef != nil {

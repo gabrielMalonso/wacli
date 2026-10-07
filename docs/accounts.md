@@ -21,6 +21,29 @@ wacli --account work chats list
 wacli --account personal send text --to 1234567890 --message "hi"
 ```
 
+## Strict invocation binding
+
+Use `-a NAME` (or `--for-account NAME`) to bind one invocation to an **existing configured account**, with protection against additional conflicting selectors. First inspect the registry without binding; choose the exact name from that output:
+
+```bash
+wacli --read-only accounts list --json
+wacli_account='work' # Replace with the exact reviewed existing name.
+: "${wacli_account:?Select an existing account}"
+wacli -a "$wacli_account" --read-only --agent auth status
+wacli --for-account "$wacli_account" --read-only --agent messages list --limit 20
+wacli -a "$wacli_account" --read-only --json chats list
+```
+
+- The name is mandatory and uses the grammar below; whitespace is rejected, not trimmed. Missing/invalid config or an unknown name fails without fallback, creation or connection. Resolving an entry does not certify that its archive exists, has a compatible schema, is paired or is online.
+- The binding overrides `WACLI_STORE_DIR` and `default_account`. Name and resolved absolute store path are fixed once per invocation, even if config is subsequently remapped. This does not pin an inode or isolate data from changes by the same user.
+- Equal repetitions of the binding or `--account NAME` are allowed. Every parsed different or empty `--account`, a different binding (even another name for the same path), and **any** parsed `--store` including `--store=` are refused. A contradictory intermediate value is refused even if a later value would restore the name. Split, `=`, `-aNAME` and `-a=NAME` forms follow the CLI parser.
+- Validation occurs during flag parsing, before command arguments/hooks, stdin or archive effects, including for help/version. With `--agent`, argument/conflict errors exit 2 with `invalid_arguments`; selection/config failures exit 4 with `store_unavailable`, as one JSON line on stderr. Without `--agent`, existing human/legacy error channels and exits apply. Help/version without binding are unchanged.
+- Global `accounts` commands reject binding, including registry management: run them separately without `-a`. Flag-like strings consumed as another flag's value, and positional content after `--`, remain literal content.
+
+The same registry refusal applies to `help accounts` and its subcommands; run that help without binding. Help/version flags may precede or follow the selector. Hidden Cobra shell-completion requests keep their protocol: exit 0 and a directive such as `:0` can accompany a parsing diagnostic, and do not certify that the requested command was accepted or executed. Inspect diagnostics; `--agent` refuses these hidden completion requests.
+
+Binding selects an account; it does not authorize auth, sync, sending or other mutations. Output modes, supported agent commands, timeout, signals, locks and readonly policy remain unchanged. Readonly still permits requested export/download output, explicit adapters and SQLite bookkeeping; see [store reads](store.md#local-reads-by-default). No wrapper, alias installation or global default change is required.
+
 ## Config
 
 The default config path is `<base>/config.yaml`, where `<base>` is the default store root (`~/.wacli` on macOS and existing legacy Linux installs, otherwise `~/.local/state/wacli` on Linux).
@@ -39,7 +62,7 @@ Relative `store` paths resolve from the config directory. Absolute paths are all
 
 ## Selection Rules
 
-Store selection is intentionally explicit:
+With `-a`/`--for-account`, the strict rules above apply. Without it, existing selection remains:
 
 1. `--store DIR` uses that exact store and cannot be combined with `--account`.
 2. `--account NAME` resolves `NAME` from `config.yaml`.

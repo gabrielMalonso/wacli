@@ -41,9 +41,10 @@ const (
 // honor --. Recognize defined command names for action source without parsing
 // values or executing hooks.
 func agentFlagIntent(root *cobra.Command, args []string) (intent struct {
-	agent, detailSet, cursorSet, help bool
-	store, account, chat, chatAction  string
-	capability                        agentCapability
+	agent, detailSet, cursorSet, help, bindingSet bool
+	store, account, chat, chatAction              string
+	capability                                    agentCapability
+	cobraArgs                                     []string
 }) {
 	known := make(map[string]*pflag.Flag)
 	short := make(map[byte]*pflag.Flag)
@@ -62,7 +63,22 @@ func agentFlagIntent(root *cobra.Command, args []string) (intent struct {
 		}
 	}
 	collect(root)
+	// Cobra adds these flags later during execution. Use its metadata for
+	// intent discovery too, including a binding in a shorthand cluster (-haNAME),
+	// without installing flags on the legacy command tree.
+	helpers := &cobra.Command{Version: root.Version}
+	helpers.InitDefaultHelpFlag()
+	helpers.InitDefaultVersionFlag()
+	helpers.Flags().VisitAll(func(f *pflag.Flag) {
+		if known[f.Name] == nil {
+			known[f.Name] = f
+			if len(f.Shorthand) == 1 {
+				short[f.Shorthand[0]] = f
+			}
+		}
+	})
 	node := root
+	representedUntil := 0
 	for i := 0; i < len(args); i++ {
 		token := args[i]
 		if !strings.HasPrefix(token, "-") {
@@ -86,6 +102,7 @@ func agentFlagIntent(root *cobra.Command, args []string) (intent struct {
 		}
 		var f *pflag.Flag
 		value, hasValue := "", false
+		bindingCluster := false
 		if strings.HasPrefix(token, "--") {
 			name, val, found := strings.Cut(token[2:], "=")
 			f = known[name]
@@ -100,6 +117,8 @@ func agentFlagIntent(root *cobra.Command, args []string) (intent struct {
 					if j+1 < len(token) {
 						value = strings.TrimPrefix(token[j+1:], "=")
 						hasValue = true
+					} else {
+						bindingCluster = j > 1 && f.Name == "for-account"
 					}
 					break
 				}
@@ -114,6 +133,14 @@ func agentFlagIntent(root *cobra.Command, args []string) (intent struct {
 			} else if i+1 < len(args) {
 				i++
 				value = args[i]
+				if bindingCluster && value != "" {
+					// Find misses the separated value of a short cluster; pflag
+					// accepts its attached equivalent. Keep all other tokens exact.
+					// Empty stays separate: pflag interprets -ha= as value "=".
+					intent.cobraArgs = append(intent.cobraArgs, args[representedUntil:i-1]...)
+					intent.cobraArgs = append(intent.cobraArgs, token+"="+value)
+					representedUntil = i + 1
+				}
 			}
 		}
 		switch f.Name {
@@ -128,9 +155,15 @@ func agentFlagIntent(root *cobra.Command, args []string) (intent struct {
 			intent.store = value
 		case "account":
 			intent.account = value
+		case "for-account":
+			intent.bindingSet = true
+			intent.account = value
 		case "chat":
 			intent.chat = value
 		}
+	}
+	if intent.cobraArgs != nil {
+		intent.cobraArgs = append(intent.cobraArgs, args[representedUntil:]...)
 	}
 	return intent
 }
@@ -188,6 +221,10 @@ func installAgentGuards(root *cobra.Command, flags *rootFlags) {
 	install(root)
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		if flags.agent {
+			var typed *out.AgentError
+			if errors.As(err, &typed) {
+				return err
+			}
 			return agentUsageError(err)
 		}
 		return err
