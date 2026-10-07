@@ -108,6 +108,7 @@ func (a *App) historyEventOptions(opts SyncOptions, evt any) (SyncOptions, func(
 		// Typing and keepalive notifications do not hold this window open.
 		switch evt.(type) {
 		case *events.Message, *events.HistorySync, *events.Receipt, *events.UndecryptableMessage,
+			*events.OfflineSyncPreview, *events.OfflineSyncCompleted,
 			*events.CallOffer, *events.CallAccept, *events.CallPreAccept, *events.CallTransport,
 			*events.CallOfferNotice, *events.CallRelayLatency, *events.CallTerminate, *events.CallReject,
 			*events.AppState, *events.Star, *events.DeleteForMe,

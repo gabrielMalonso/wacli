@@ -1,17 +1,41 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/openclaw/wacli/internal/out"
+	"go.mau.fi/whatsmeow/proto/waHistorySync"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
 )
+
+func TestHistorySyncMetadataPreservesAbsentOptionalValues(t *testing.T) {
+	a := newTestApp(t)
+	a.wa = newFakeWA()
+	var output bytes.Buffer
+	a.opts.Events = out.NewEventWriter(&output, true)
+	var stored, lastEvent atomic.Int64
+	a.handleHistorySync(t.Context(), SyncOptions{}, &events.HistorySync{Data: &waHistorySync.HistorySync{SyncType: waHistorySync.HistorySync_RECENT.Enum()}}, &stored, &lastEvent, func(string, string) {})
+	var evt struct {
+		Event string                     `json:"event"`
+		Data  map[string]json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &evt); err != nil {
+		t.Fatal(err)
+	}
+	if evt.Event != "history_sync" || string(evt.Data["sync_type"]) != `"RECENT"` || string(evt.Data["conversations"]) != "0" || string(evt.Data["chunk_order"]) != "null" || string(evt.Data["progress"]) != "null" {
+		t.Fatalf("missing optional metadata was invented: %s", output.Bytes())
+	}
+}
 
 func TestSyncEventsOutputStaysNDJSONDuringProgress(t *testing.T) {
 	a := newTestApp(t)
@@ -24,7 +48,11 @@ func TestSyncEventsOutputStaysNDJSONDuringProgress(t *testing.T) {
 	for i := range ids {
 		ids[i] = "m" + string(rune('a'+i))
 	}
-	f.connectEvents = []any{historySyncWithTextMessages(chat, base, ids...)}
+	history := historySyncWithTextMessages(chat, base, ids...)
+	history.Data.SyncType = waHistorySync.HistorySync_RECENT.Enum()
+	history.Data.ChunkOrder = proto.Uint32(2)
+	history.Data.Progress = proto.Uint32(100)
+	f.connectEvents = []any{history}
 
 	raw := captureStderr(t, func() {
 		a.opts.Events = out.NewEventWriter(os.Stderr, true)
@@ -45,7 +73,7 @@ func TestSyncEventsOutputStaysNDJSONDuringProgress(t *testing.T) {
 		t.Fatalf("human progress leaked into --events stderr:\n%s", raw)
 	}
 
-	var sawProgress bool
+	var sawProgress, sawHistory bool
 	for line := range strings.SplitSeq(strings.TrimSpace(raw), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -61,9 +89,19 @@ func TestSyncEventsOutputStaysNDJSONDuringProgress(t *testing.T) {
 			}
 			sawProgress = true
 		}
+		if evt["event"] == "history_sync" {
+			data, ok := evt["data"].(map[string]any)
+			if !ok || data["conversations"] != float64(1) || data["sync_type"] != "RECENT" || data["chunk_order"] != float64(2) || data["progress"] != float64(100) {
+				t.Fatalf("unexpected history metadata: %#v", evt)
+			}
+			sawHistory = true
+		}
 	}
 	if !sawProgress {
 		t.Fatalf("expected progress event in:\n%s", raw)
+	}
+	if !sawHistory {
+		t.Fatalf("expected history metadata event in:\n%s", raw)
 	}
 }
 

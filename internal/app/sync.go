@@ -106,6 +106,13 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 	if (opts.Mode == SyncModeBootstrap || opts.Mode == SyncModeOnce) && opts.IdleExit <= 0 {
 		opts.IdleExit = 30 * time.Second
 	}
+	if opts.Mode != SyncModeFollow && opts.historyObserver == nil {
+		// Idle begins after admitted downloads/persistence finish, not when
+		// their callback starts. Reuse backfill's callback window and preserve
+		// its operation-specific observer when one was supplied.
+		opts.historyObserver = newHistoryObserver(opts.afterHistorySync, opts.historyStoreError)
+		defer a.removeHistoryObserver(opts.historyObserver)
+	}
 	if maxStaleThreshold := MaxStaleThreshold(); opts.StaleThreshold >= maxStaleThreshold {
 		return SyncResult{}, fmt.Errorf("stale threshold %s must be less than upstream auto-reconnect threshold %s", opts.StaleThreshold, maxStaleThreshold)
 	}

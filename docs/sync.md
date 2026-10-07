@@ -20,7 +20,7 @@ wacli sync [--once] [--follow] [--idle-exit 30s] [--max-reconnect 5m] [--stale-t
 
 - Default behavior follows continuously.
 - `--once` exits after sync becomes idle.
-- `--idle-exit` controls idle exit timing in once mode.
+- `--idle-exit` controls idle exit timing in once mode. Idle exit waits for admitted event callbacks, including history downloads and persistence, and starts a fresh idle window after their activity finishes. Cancellation, supplied context deadlines, logout and storage-limit exits still stop without this idle wait. A stalled callback requires interruption or an external deadline; the global `--timeout` flag applies to non-sync commands and does not bound sync. Cleanup still drains known local writers before closing the archive; a callback that ignores cancellation can delay cleanup.
 - `--max-reconnect 0` keeps reconnecting indefinitely.
 - If WhatsApp revokes the linked session, sync emits a terminal `logged_out` event, cancels any reconnect already in progress, and exits cleanly. Re-pair with `wacli auth logout` followed by `wacli auth --phone`.
 - `--max-messages N` stops before storing more than `N` total messages locally.
@@ -60,6 +60,16 @@ wacli sync [--once] [--follow] [--idle-exit 30s] [--max-reconnect 5m] [--stale-t
 - `--events` emits one NDJSON lifecycle event per stderr line for machine consumers. Routine human progress/status lines, interrupt prompts, and command errors are emitted as events while events are enabled.
 - `offline_sync_preview` reports the server's announced reconnect backlog with `total`, `messages`, `receipts`, `notifications`, and `app_data_changes`; `offline_sync_completed` reports the server's final `count`. Without `--events`, both print as status lines. Completion can arrive without a preview, including when there is no backlog.
 - These are server replay signals on stderr. Webhooks use a separate background queue, so completion does not mean queued HTTP deliveries have finished. Storage failures or webhook drops can also make delivery counts differ from the announced counts. Do not use these signals to classify individual webhook messages as replayed or live. Webhook payloads keep their existing shape.
+- Both offline replay signals extend the one-shot idle window. Sync does not wait indefinitely for an unobserved completion signal or for future history notifications.
+- `history_sync` retains `conversations` and adds `sync_type`, `chunk_order`, and `progress` from the downloaded/received SDK history blob; absent optional chunk/progress values are null. These describe that blob, not a per-chat coverage interval, successful persistence count or complete archive. In particular, `progress=100` is not a local completeness certificate.
+
+## Missing messages after an offline interval
+
+A successful `sync --once`, even with `messages_stored=0` and a completed offline replay, does not prove that messages sent from another linked device are all present locally. The replay count describes the backlog announced for this connection; it is not an inventory of WhatsApp Web or the primary phone. A short idle interval can end before a later history notification arrives. The callback wait protects work already admitted, not future arrivals.
+
+Inspect the selected account's local chat/message IDs and retain `--events` diagnostics from an explicitly authorized sync. A longer observation window or an authorized `sync --follow` can capture later arrivals, but neither guarantees remote coverage. An empty search establishes only absence from that local query at that time, not definitive remote loss. App-state reconciliation debt is separate from message history; ordinary shutdown can record preventive debt without a recovery failure.
+
+`history backfill` requests messages **before the oldest local anchor**. The pinned SDK's [history request builder](https://github.com/tulir/whatsmeow/blob/35ae40906e74/send.go#L571-L595) describes messages immediately before a supplied known message, not messages since disconnection. Backfill therefore does not automatically recover a newer missing interval. Sync does not invent a future message ID/anchor or automatically request/retry history to claim coverage. A later genuine local anchor can change the interval eligible for a separately authorized backfill. Missing history never authorizes resending an uncertain outbound message, replacing a session or relinking an account.
 
 ## App-state summary
 
