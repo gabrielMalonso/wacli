@@ -13,7 +13,7 @@ Discover this binary's static CLI/agent support before account selection:
 wacli --read-only capabilities --agent
 ```
 
-Run unbound, without account/store selectors. Discovery opens no config/store/session and reports `account_availability="unknown"`; static requirements and `read_only` policy are not evidence of readiness, authorization or zero external effects. Check the contract version and requested command's `agent_mode`; refuse unknown/unsupported modes rather than falling back to a mutation. Use command help and the [discovery contract](../../../docs/agent.md#static-capability-discovery) for restrictions and limits.
+Run unbound, without account/store selectors. Executing discovery rejects explicit selectors; textual help may ignore legacy `--account`/`--store` without resolving selection or accessing config/store, while `-a`/`--for-account` remains refused for discovery help. Discovery opens no config/store/session and reports `account_availability="unknown"`; static requirements and `read_only` policy are not evidence of readiness, authorization or zero external effects. Check the contract version and requested command's `agent_mode`; refuse unknown/unsupported modes rather than falling back to a mutation. Use command help and the [discovery contract](../../../docs/agent.md#static-capability-discovery) for restrictions and limits.
 
 ## Select an account and read
 
