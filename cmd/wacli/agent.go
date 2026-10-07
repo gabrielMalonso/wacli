@@ -214,7 +214,7 @@ func agentCommandCapability(cmd *cobra.Command) agentCapability {
 		return agentHistoryRecovery
 	case "outbound send":
 		return agentOutboundSend
-	case "chats mark-unread", "chats archive", "chats unarchive":
+	case "chats mark-read", "chats mark-unread", "chats archive", "chats unarchive":
 		return agentChatState
 	case "doctor":
 		connect, _ := cmd.Flags().GetBool("connect")
@@ -301,6 +301,9 @@ func validateAgentCommand(cmd *cobra.Command, args []string, flags *rootFlags) e
 		chat, _ := cmd.Flags().GetString("chat")
 		if _, err := store.NormalizeDraftTarget(chat); err != nil || cmd.Flags().Changed("pick") {
 			return usage(fmt.Errorf("--chat requires an explicit phone/DM/group JID; --pick is not supported with --agent"))
+		}
+		if path == "chats mark-read" && (cmd.Flags().Changed("receipts") || flags.timeout <= 0 || flags.timeout > 5*time.Minute) {
+			return usage(fmt.Errorf("agent mark-read excludes --receipts and requires --timeout positive and at most 5m"))
 		}
 	}
 	if path == "outbound send" {

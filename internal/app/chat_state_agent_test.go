@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openclaw/wacli/internal/store"
 	"github.com/openclaw/wacli/internal/wa"
 	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/proto/waCommon"
@@ -115,7 +116,7 @@ func TestAgentChatStateExactTargetsAndSDKShapes(t *testing.T) {
 		{"mapped LID", chatStatePeerLID, chatStatePeerPN, "INSERT INTO whatsmeow_lid_map VALUES('300','15550000001')"},
 		{"group", "123456-789@g.us", "123456-789@g.us", ""},
 	} {
-		for _, action := range []ChatStateAction{ChatStateMarkUnread, ChatStateArchive, ChatStateUnarchive} {
+		for _, action := range []ChatStateAction{ChatStateMarkRead, ChatStateMarkUnread, ChatStateArchive, ChatStateUnarchive} {
 			t.Run(target.name+"/"+string(action), func(t *testing.T) {
 				a, f, r := chatStateAgentFixture(t)
 				if target.mapping != "" {
@@ -133,6 +134,9 @@ func TestAgentChatStateExactTargetsAndSDKShapes(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
+				if action == ChatStateMarkRead {
+					seedAgentReadBoundary(t, a, target.stored)
+				}
 				result, err := a.ApplyAgentChatState(t.Context(), r)
 				if err != nil || ValidateChatStateResult(r, result) != nil || result.Outcome != ChatStateSDKCompleted || result.LocalMirror != ChatStateMirrorPersisted || result.Observation.Target.JID != target.stored || result.Observation.Account.PN != f.LinkedJID() {
 					t.Fatal(result, err)
@@ -144,15 +148,26 @@ func TestAgentChatStateExactTargetsAndSDKShapes(t *testing.T) {
 				if p.Type != appstate.WAPatchRegularLow || p.Mutations[0].Index[1] != r.Requested {
 					t.Fatal("SDK target was retargeted", p)
 				}
-				if action == ChatStateMarkUnread {
-					if p.Mutations[0].Value.GetMarkChatAsReadAction().GetRead() {
-						t.Fatal("read patch")
+				if action == ChatStateMarkRead || action == ChatStateMarkUnread {
+					v := p.Mutations[0].Value.GetMarkChatAsReadAction()
+					if v == nil || v.GetRead() != (action == ChatStateMarkRead) {
+						t.Fatal("read/unread patch", p)
+					}
+					if action == ChatStateMarkRead {
+						r := v.GetMessageRange()
+						if r.GetLastMessageTimestamp() != 1700000000 || len(r.GetMessages()) != 1 || r.GetMessages()[0].GetKey().GetID() != "anchor" || r.GetMessages()[0].GetKey().GetRemoteJID() != target.stored {
+							t.Fatal("strict boundary changed", r)
+						}
 					}
 				} else if p.Mutations[0].Value.GetArchiveChatAction().GetArchived() != (action == ChatStateArchive) || (len(p.Mutations) == 2) != (action == ChatStateArchive) {
 					t.Fatal("archive/unpin shape", p)
 				}
 				chat, err := a.DB().GetChat(target.stored)
-				if err != nil || !chat.Unread || chat.UnreadCount != 3 || chat.Archived != (action == ChatStateArchive) || chat.Pinned != (action == ChatStateMarkUnread) {
+				wantCount := 3
+				if action == ChatStateMarkRead {
+					wantCount = 0
+				}
+				if err != nil || chat.Unread != (action != ChatStateMarkRead) || chat.UnreadCount != wantCount || chat.Archived != (action == ChatStateArchive) || chat.Pinned != (action == ChatStateMarkUnread || action == ChatStateMarkRead) {
 					t.Fatal(chat, err)
 				}
 				required, err := a.DB().AppStateRecoveryRequired(string(appstate.WAPatchRegularLow))
@@ -165,110 +180,135 @@ func TestAgentChatStateExactTargetsAndSDKShapes(t *testing.T) {
 }
 
 func TestAgentChatStateObservesAfterRecoveryAndFreezesMirror(t *testing.T) {
-	a, f, r := chatStateAgentFixture(t)
-	r.Requested = chatStatePeerLID
-	historyIdentityFixture(t, a, "INSERT INTO whatsmeow_lid_map VALUES('300','15550000001')")
-	f.fetchHook = func(context.Context, string, bool, bool) ([]any, error) {
-		historyIdentityFixture(t, a, "UPDATE whatsmeow_lid_map SET pn='15550000002' WHERE lid='300'")
-		return nil, nil
-	}
-	f.sendHook = func(_ context.Context, boundary func()) ([]any, error) {
-		boundary()
-		historyIdentityFixture(t, a, "UPDATE whatsmeow_lid_map SET pn='15550000003' WHERE lid='300'")
-		return nil, nil
-	}
-	result, err := a.ApplyAgentChatState(t.Context(), r)
-	if err != nil || result.Observation.Target.PN != "15550000002@s.whatsapp.net" || f.patches[0].Mutations[0].Index[1] != chatStatePeerLID {
-		t.Fatal(result, err)
-	}
-	chat, err := a.DB().GetChat(result.Observation.Target.JID)
-	if err != nil || !chat.Archived || f.resolves.Load() != 0 {
-		t.Fatal(chat, err)
-	}
-	if _, err := a.DB().GetChat("15550000003@s.whatsapp.net"); err == nil {
-		t.Fatal("mirror resolved twice")
+	for _, action := range []ChatStateAction{ChatStateArchive, ChatStateMarkRead} {
+		t.Run(string(action), func(t *testing.T) {
+			a, f, r := chatStateAgentFixture(t)
+			r.Action = action
+			r.Requested = chatStatePeerLID
+			historyIdentityFixture(t, a, "INSERT INTO whatsmeow_lid_map VALUES('300','15550000001')")
+			f.fetchHook = func(context.Context, string, bool, bool) ([]any, error) {
+				historyIdentityFixture(t, a, "UPDATE whatsmeow_lid_map SET pn='15550000002' WHERE lid='300'")
+				return nil, nil
+			}
+			if action == ChatStateMarkRead {
+				seedAgentReadBoundary(t, a, "15550000002@s.whatsapp.net")
+			}
+			f.sendHook = func(_ context.Context, boundary func()) ([]any, error) {
+				boundary()
+				historyIdentityFixture(t, a, "UPDATE whatsmeow_lid_map SET pn='15550000003' WHERE lid='300'")
+				return nil, nil
+			}
+			result, err := a.ApplyAgentChatState(t.Context(), r)
+			if err != nil || result.Observation.Target.PN != "15550000002@s.whatsapp.net" || f.patches[0].Mutations[0].Index[1] != chatStatePeerLID {
+				t.Fatal(result, err)
+			}
+			chat, err := a.DB().GetChat(result.Observation.Target.JID)
+			if err != nil || (action == ChatStateArchive && !chat.Archived || action == ChatStateMarkRead && chat.Unread) || f.resolves.Load() != 0 {
+				t.Fatal(chat, err)
+			}
+			if _, err := a.DB().GetChat("15550000003@s.whatsapp.net"); err == nil {
+				t.Fatal("mirror resolved twice")
+			}
+		})
 	}
 }
 
 func TestAgentChatStateIdentityFailuresBeforeMutation(t *testing.T) {
-	for _, scenario := range []struct{ name, query, requested string }{
-		{"SQL error", "DROP TABLE whatsmeow_lid_map", chatStatePeerPN},
-		{"account changed", "UPDATE whatsmeow_device SET jid='15550000009@s.whatsapp.net'", chatStatePeerPN},
-		{"own LID changed", "UPDATE whatsmeow_device SET lid='801@lid'", chatStatePeerPN},
-		{"malformed own LID", "UPDATE whatsmeow_device SET lid='bad alias'", chatStatePeerPN},
-		{"own PN map contradicts", "INSERT INTO whatsmeow_lid_map VALUES('801','1234567890')", "1234567890@s.whatsapp.net"},
-		{"own LID map contradicts", "INSERT INTO whatsmeow_lid_map VALUES('800','15550000002')", "800@lid"},
-		{"ambiguous account", "INSERT INTO whatsmeow_device VALUES('15550000009@s.whatsapp.net',NULL)", chatStatePeerPN},
-		{"contradictory reverse", "DROP TABLE whatsmeow_lid_map; CREATE TABLE whatsmeow_lid_map(lid TEXT,pn TEXT); INSERT INTO whatsmeow_lid_map VALUES('301','15550000001'),('300','15550000001')", chatStatePeerLID},
-		{"malformed map", "INSERT INTO whatsmeow_lid_map VALUES('bad alias','15550000001')", chatStatePeerPN},
-	} {
-		t.Run(scenario.name, func(t *testing.T) {
-			a, f, r := chatStateAgentFixture(t)
-			historyIdentityFixture(t, a, scenario.query)
-			r.Requested = scenario.requested
-			_, err := a.ApplyAgentChatState(t.Context(), r)
-			assertChatStateFailure(t, err, "identity_unavailable", ChatStateNotDispatched)
-			if len(f.patches) != 0 || f.resolves.Load() != 0 {
-				t.Fatal("mutation or fallback on identity failure")
+	for _, action := range []ChatStateAction{ChatStateArchive, ChatStateMarkRead} {
+		t.Run(string(action), func(t *testing.T) {
+			for _, scenario := range []struct{ name, query, requested string }{
+				{"SQL error", "DROP TABLE whatsmeow_lid_map", chatStatePeerPN},
+				{"account changed", "UPDATE whatsmeow_device SET jid='15550000009@s.whatsapp.net'", chatStatePeerPN},
+				{"own LID changed", "UPDATE whatsmeow_device SET lid='801@lid'", chatStatePeerPN},
+				{"malformed own LID", "UPDATE whatsmeow_device SET lid='bad alias'", chatStatePeerPN},
+				{"own PN map contradicts", "INSERT INTO whatsmeow_lid_map VALUES('801','1234567890')", "1234567890@s.whatsapp.net"},
+				{"own LID map contradicts", "INSERT INTO whatsmeow_lid_map VALUES('800','15550000002')", "800@lid"},
+				{"ambiguous account", "INSERT INTO whatsmeow_device VALUES('15550000009@s.whatsapp.net',NULL)", chatStatePeerPN},
+				{"contradictory reverse", "DROP TABLE whatsmeow_lid_map; CREATE TABLE whatsmeow_lid_map(lid TEXT,pn TEXT); INSERT INTO whatsmeow_lid_map VALUES('301','15550000001'),('300','15550000001')", chatStatePeerLID},
+				{"malformed map", "INSERT INTO whatsmeow_lid_map VALUES('bad alias','15550000001')", chatStatePeerPN},
+			} {
+				t.Run(scenario.name, func(t *testing.T) {
+					a, f, r := chatStateAgentFixture(t)
+					r.Action = action
+					historyIdentityFixture(t, a, scenario.query)
+					r.Requested = scenario.requested
+					_, err := a.ApplyAgentChatState(t.Context(), r)
+					assertChatStateFailure(t, err, "identity_unavailable", ChatStateNotDispatched)
+					if len(f.patches) != 0 || f.resolves.Load() != 0 {
+						t.Fatal("mutation or fallback on identity failure")
+					}
+				})
 			}
 		})
 	}
 }
 
 func TestAgentChatStateUncertaintyAndMirrorFailure(t *testing.T) {
-	for _, mode := range []string{"before boundary error", "boundary timeout", "post fetch error", "SDK nil mirror failure", "SDK nil after cancellation"} {
-		t.Run(mode, func(t *testing.T) {
-			a, f, r := chatStateAgentFixture(t)
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			if err := a.DB().SetChatUnreadCount(r.Requested, 0); err != nil {
-				t.Fatal(err)
-			}
-			f.sendHook = func(ctx context.Context, boundary func()) ([]any, error) {
-				if mode == "before boundary error" {
-					return nil, errors.New("SDK preparation error")
-				}
-				boundary()
-				switch mode {
-				case "boundary timeout":
-					cancel()
-					return nil, ctx.Err()
-				case "post fetch error":
-					return nil, errors.New("post-send app-state fetch failed")
-				case "SDK nil mirror failure":
-					db, err := sql.Open("sqlite3", filepath.Join(a.StoreDir(), "wacli.db"))
-					if err != nil {
+	for _, action := range []ChatStateAction{ChatStateArchive, ChatStateMarkRead} {
+		t.Run(string(action), func(t *testing.T) {
+			for _, mode := range []string{"before boundary error", "boundary timeout", "post fetch error", "SDK nil mirror failure", "SDK nil after cancellation"} {
+				t.Run(mode, func(t *testing.T) {
+					a, f, r := chatStateAgentFixture(t)
+					r.Action = action
+					ctx, cancel := context.WithCancel(t.Context())
+					defer cancel()
+					if err := a.DB().SetChatUnreadCount(r.Requested, 0); err != nil {
 						t.Fatal(err)
 					}
-					defer db.Close()
-					_, err = db.Exec(`CREATE TRIGGER fail_archive BEFORE UPDATE OF archived ON chats BEGIN SELECT RAISE(ABORT,'SECRET_MIRROR_CAUSE'); END`)
-					if err != nil {
-						t.Fatal(err)
+					if action == ChatStateMarkRead {
+						seedAgentReadBoundary(t, a, r.Requested)
 					}
-				case "SDK nil after cancellation":
-					cancel()
-				}
-				return nil, nil
-			}
-			result, err := a.ApplyAgentChatState(ctx, r)
-			if mode == "SDK nil after cancellation" {
-				if err != nil || result.Outcome != ChatStateSDKCompleted || result.LocalMirror != ChatStateMirrorPersisted {
-					t.Fatal(result, err)
-				}
-			} else if mode == "SDK nil mirror failure" {
-				failure := assertChatStateFailure(t, err, "chat_state_local_mirror_unconfirmed", ChatStateSDKCompleted)
-				if failure.Result.LocalMirror != ChatStateMirrorUnconfirmed || failure.Result.Observation == nil {
-					t.Fatal(failure)
-				}
-			} else {
-				assertChatStateFailure(t, err, "chat_state_outcome_uncertain", ChatStateUncertain)
-			}
-			if len(f.patches) != 1 {
-				t.Fatal("application repeated mutation", f.patches)
-			}
-			required, err := a.DB().AppStateRecoveryRequired(string(appstate.WAPatchRegularLow))
-			if err != nil || !required {
-				t.Fatal("lost debt", required, err)
+					f.sendHook = func(ctx context.Context, boundary func()) ([]any, error) {
+						if mode == "before boundary error" {
+							return nil, errors.New("SDK preparation error")
+						}
+						boundary()
+						switch mode {
+						case "boundary timeout":
+							cancel()
+							return nil, ctx.Err()
+						case "post fetch error":
+							return nil, errors.New("post-send app-state fetch failed")
+						case "SDK nil mirror failure":
+							db, err := sql.Open("sqlite3", filepath.Join(a.StoreDir(), "wacli.db"))
+							if err != nil {
+								t.Fatal(err)
+							}
+							defer db.Close()
+							column := "archived"
+							if action == ChatStateMarkRead {
+								column = "unread_count"
+							}
+							_, err = db.Exec("CREATE TRIGGER fail_mirror BEFORE UPDATE OF " + column + " ON chats BEGIN SELECT RAISE(ABORT,'SECRET_MIRROR_CAUSE'); END")
+							if err != nil {
+								t.Fatal(err)
+							}
+						case "SDK nil after cancellation":
+							cancel()
+						}
+						return nil, nil
+					}
+					result, err := a.ApplyAgentChatState(ctx, r)
+					if mode == "SDK nil after cancellation" {
+						if err != nil || result.Outcome != ChatStateSDKCompleted || result.LocalMirror != ChatStateMirrorPersisted {
+							t.Fatal(result, err)
+						}
+					} else if mode == "SDK nil mirror failure" {
+						failure := assertChatStateFailure(t, err, "chat_state_local_mirror_unconfirmed", ChatStateSDKCompleted)
+						if failure.Result.LocalMirror != ChatStateMirrorUnconfirmed || failure.Result.Observation == nil {
+							t.Fatal(failure)
+						}
+					} else {
+						assertChatStateFailure(t, err, "chat_state_outcome_uncertain", ChatStateUncertain)
+					}
+					if len(f.patches) != 1 {
+						t.Fatal("application repeated mutation", f.patches)
+					}
+					required, err := a.DB().AppStateRecoveryRequired(string(appstate.WAPatchRegularLow))
+					if err != nil || !required {
+						t.Fatal("lost debt", required, err)
+					}
+				})
 			}
 		})
 	}
@@ -276,6 +316,8 @@ func TestAgentChatStateUncertaintyAndMirrorFailure(t *testing.T) {
 
 func TestAgentChatStateSerializationAndPreflight(t *testing.T) {
 	a, f, r := chatStateAgentFixture(t)
+	r.Action = ChatStateMarkRead
+	seedAgentReadBoundary(t, a, r.Requested)
 	started, release := make(chan struct{}), make(chan struct{})
 	f.fetchHook = func(ctx context.Context, _ string, _ bool, _ bool) ([]any, error) {
 		close(started)
@@ -304,7 +346,7 @@ func TestAgentChatStateSerializationAndPreflight(t *testing.T) {
 		bad := r
 		switch mode {
 		case "invalid":
-			bad.Action = "mark-read"
+			bad.Action = "pin"
 		case "store":
 			bad.StoreRef = filepath.Join(a.StoreDir(), "other")
 		case "disconnected":
@@ -348,5 +390,79 @@ func TestAgentChatStateUnknownOwnAliasAndLegacyPolicy(t *testing.T) {
 	assertChatStateFailure(t, err, "identity_unavailable", ChatStateNotDispatched)
 	if len(f.patches) != 1 {
 		t.Fatal("invalid device alias dispatched")
+	}
+}
+
+func seedAgentReadBoundary(t *testing.T, a *App, chat string) {
+	t.Helper()
+	if err := a.DB().UpsertChat(chat, "unknown", "Synthetic", time.Unix(1700000000, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.DB().UpsertMessage(store.UpsertMessageParams{ChatJID: chat, MsgID: "anchor", Timestamp: time.Unix(1700000000, 0), Text: "old", SenderJID: chatStatePeerPN}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAgentMarkReadRefusesUntrustedMirrorBoundary(t *testing.T) {
+	for _, mode := range []string{"missing", "alias only", "SELECT error", "zero timestamp", "invalid key"} {
+		t.Run(mode, func(t *testing.T) {
+			a, f, r := chatStateAgentFixture(t)
+			r.Action = ChatStateMarkRead
+			if err := a.DB().SetChatUnreadCount(r.Requested, 2); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "alias only" {
+				r.Requested = chatStatePeerLID
+				historyIdentityFixture(t, a, "INSERT INTO whatsmeow_lid_map VALUES('300','15550000001')")
+				seedAgentReadBoundary(t, a, chatStatePeerLID)
+			} else if mode != "missing" {
+				seedAgentReadBoundary(t, a, r.Requested)
+			}
+			switch mode {
+			case "SELECT error":
+				evidenceFixtureSQL(t, a, `ALTER TABLE messages RENAME COLUMN sender_name TO synthetic_missing_sender_name`)
+			case "zero timestamp":
+				evidenceFixtureSQL(t, a, `UPDATE messages SET ts=0`)
+			case "invalid key":
+				evidenceFixtureSQL(t, a, `UPDATE messages SET msg_id=' '`)
+			}
+			result, err := a.ApplyAgentChatState(t.Context(), r)
+			failure := assertChatStateFailure(t, err, "not_dispatched", ChatStateNotDispatched)
+			if failure.Result.LocalMirror != ChatStateMirrorUnknown || result.Observation == nil || result.Observation.Target.JID != chatStatePeerPN || len(f.patches) != 0 || len(f.readReceiptCalls) != 0 || f.resolves.Load() != 0 {
+				t.Fatal(result, err)
+			}
+			chat, err := a.DB().GetChat(chatStatePeerPN)
+			if err != nil || !chat.Unread || chat.UnreadCount != 2 {
+				t.Fatal(chat, err)
+			}
+		})
+	}
+}
+
+func TestAgentMarkReadPreservesSameSecondArrival(t *testing.T) {
+	a, f, r := chatStateAgentFixture(t)
+	r.Action = ChatStateMarkRead
+	seedAgentReadBoundary(t, a, r.Requested)
+	if err := a.DB().SetChatUnreadCount(r.Requested, 1); err != nil {
+		t.Fatal(err)
+	}
+	f.sendHook = func(_ context.Context, boundary func()) ([]any, error) {
+		boundary()
+		if err := a.DB().UpsertMessage(store.UpsertMessageParams{ChatJID: r.Requested, MsgID: "during-call", Timestamp: time.Unix(1700000000, 0), Text: "new"}); err != nil {
+			return nil, err
+		}
+		return nil, a.DB().IncrementChatUnread(r.Requested)
+	}
+	result, err := a.ApplyAgentChatState(t.Context(), r)
+	if err != nil || result.Outcome != ChatStateSDKCompleted || result.LocalMirror != ChatStateMirrorPersisted {
+		t.Fatal(result, err)
+	}
+	chat, err := a.DB().GetChat(r.Requested)
+	if err != nil || !chat.Unread || chat.UnreadCount != 1 || len(f.patches) != 1 || len(f.readReceiptCalls) != 0 {
+		t.Fatal(chat, err)
+	}
+	rangeInfo := f.patches[0].Mutations[0].Value.GetMarkChatAsReadAction().GetMessageRange()
+	if rangeInfo.GetMessages()[0].GetKey().GetID() != "anchor" {
+		t.Fatal(rangeInfo)
 	}
 }

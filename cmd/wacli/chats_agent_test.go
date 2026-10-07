@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -179,6 +182,14 @@ func agentChatStateOwnerFixture(t *testing.T, connect bool) (string, *app.App, *
 		}
 		return f, nil
 	}})
+	// The strict mirror is PN-scoped. Retain the original alias-only read
+	// fixture too, without relying on history migration to supply this anchor.
+	if err := a.DB().UpsertChat(localReadPN, "dm", "Synthetic", time.Unix(1700000000, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.DB().UpsertMessage(store.UpsertMessageParams{ChatJID: localReadPN, MsgID: "anchor", Timestamp: time.Unix(1700000000, 0), Text: "old"}); err != nil {
+		t.Fatal(err)
+	}
 	if connect {
 		if err := a.OpenWA(); err != nil {
 			t.Fatal(err)
@@ -196,7 +207,7 @@ func chatStateCLIArgs(r app.ChatStateRequest) []string {
 
 func TestAgentChatStatePreflightBeforeEffects(t *testing.T) {
 	t.Setenv("WACLI_READONLY", "0")
-	for _, action := range []string{"mark-unread", "archive", "unarchive"} {
+	for _, action := range []string{"mark-read", "mark-unread", "archive", "unarchive"} {
 		for _, extra := range [][]string{{"--chat", "PRIVATE_NAME"}, {"--chat", localReadPN, "--pick", "0"}, {"--chat", "123@newsletter"}, {"--read-only"}, {"--chat", localReadPN, "--timeout", "PRIVATE_TIMEOUT"}, {"--PRIVATE_FLAG=x"}, {"--chat", localReadPN, "PRIVATE_POSITIONAL"}, {}} {
 			t.Run(action+"/"+strings.Join(extra, "/"), func(t *testing.T) {
 				dir := filepath.Join(t.TempDir(), "missing")
@@ -219,7 +230,7 @@ func TestAgentChatStatePreflightBeforeEffects(t *testing.T) {
 			})
 		}
 	}
-	for _, action := range []string{"mark-read", "pin", "unpin", "mute", "unmute", "cleanup"} {
+	for _, action := range []string{"pin", "unpin", "mute", "unmute", "cleanup"} {
 		_, stderr, err := runAgentTest(t, "--agent", "chats", action)
 		if err == nil || decodeAgentTest(t, stderr).Error.Code != "unsupported_command" {
 			t.Fatal(action, stderr, err)
@@ -278,9 +289,9 @@ func exerciseAgentChatStateCLI(t *testing.T, binary string) {
 		t.Fatal(stderr, err)
 	}
 	t.Setenv("WACLI_READONLY", "0")
-	for _, action := range []app.ChatStateAction{app.ChatStateMarkUnread, app.ChatStateArchive, app.ChatStateUnarchive} {
+	for _, action := range []app.ChatStateAction{app.ChatStateMarkRead, app.ChatStateMarkUnread, app.ChatStateArchive, app.ChatStateUnarchive} {
 		r.Action = action
-		if action == app.ChatStateMarkUnread {
+		if action == app.ChatStateMarkUnread || action == app.ChatStateMarkRead {
 			r.Requested = localReadLID
 		} else {
 			r.Requested = "+15550000001"
@@ -300,7 +311,7 @@ func exerciseAgentChatStateCLI(t *testing.T, binary string) {
 			t.Fatal(stdout)
 		}
 	}
-	if f.states.Load() != 3 || f.opens.Load() != 1 || f.connects.Load() != 1 {
+	if f.states.Load() != 4 || f.opens.Load() != 1 || f.connects.Load() != 1 {
 		t.Fatal("new connection/retry", f.states.Load(), f.opens.Load(), f.connects.Load())
 	}
 	// Local context reading is independent of the writer and does not clear unread.
@@ -309,7 +320,7 @@ func exerciseAgentChatStateCLI(t *testing.T, binary string) {
 		t.Fatal(stderr, err)
 	}
 	chat, err := a.DB().GetChat(localReadPN)
-	if err != nil || !chat.Unread || chat.Archived || chat.Pinned || f.states.Load() != 3 {
+	if err != nil || !chat.Unread || chat.Archived || chat.Pinned || f.states.Load() != 4 {
 		t.Fatalf("chat=%+v err=%v", chat, err)
 	}
 }
@@ -325,6 +336,7 @@ func TestAgentChatStateProductionBinaryOwner(t *testing.T) {
 
 func TestAgentChatStateStandaloneLifecycle(t *testing.T) {
 	_, a, f, r := agentChatStateOwnerFixture(t, false)
+	r.Action = app.ChatStateMarkRead
 	f.disconnectHook = func() {
 		f.emit(&events.Archive{JID: types.NewJID("15550000002", types.DefaultUserServer), Action: &waSyncAction.ArchiveChatAction{Archived: proto.Bool(true)}})
 	}
@@ -354,6 +366,7 @@ func TestAgentChatStateOwnerPolicyAndUnavailable(t *testing.T) {
 	for _, mode := range []string{"readonly", "disconnected", "lock without socket"} {
 		t.Run(mode, func(t *testing.T) {
 			dir, a, f, r := agentChatStateOwnerFixture(t, mode != "readonly")
+			r.Action = app.ChatStateMarkRead
 			lk, err := lock.Acquire(dir)
 			if err != nil {
 				t.Fatal(err)
@@ -389,6 +402,7 @@ func TestAgentChatStateIPCOldUntypedCrossScopeAndCaps(t *testing.T) {
 	for _, mode := range []string{"old error", "untyped success", "cross action", "cross store", "cross target", "bad capability", "bad result", "oversized reply", "EOF"} {
 		t.Run(mode, func(t *testing.T) {
 			dir, a, _, r := agentChatStateOwnerFixture(t, true)
+			r.Action = app.ChatStateMarkRead
 			var calls atomic.Int64
 			execute := func(ctx context.Context, req sendDelegateRequest) (sendDelegateResponse, error) {
 				calls.Add(1)
@@ -453,6 +467,7 @@ func TestAgentChatStateIPCOldUntypedCrossScopeAndCaps(t *testing.T) {
 	for _, mode := range []string{"version", "action", "legacy kind", "outbound kind", "extra legacy field", "scope store", "raw cap", "unknown field", "two JSON objects"} {
 		t.Run("request/"+mode, func(t *testing.T) {
 			_, a, f, r := agentChatStateOwnerFixture(t, true)
+			r.Action = app.ChatStateMarkRead
 			s, c := net.Pipe()
 			defer c.Close()
 			_ = c.SetDeadline(time.Now().Add(time.Second))
@@ -461,7 +476,7 @@ func TestAgentChatStateIPCOldUntypedCrossScopeAndCaps(t *testing.T) {
 			case "version":
 				req.Version = 2
 			case "action":
-				r.Action = "mark-read"
+				r.Action = "pin"
 			case "legacy kind":
 				req.Kind = chatStateKind
 				req.To, req.ChatStateAction = r.Requested, "archive"
@@ -511,6 +526,7 @@ func TestAgentChatStateIPCOldUntypedCrossScopeAndCaps(t *testing.T) {
 
 func TestAgentChatStateOutputFailureRetainsKnowledge(t *testing.T) {
 	_, a, _, r := agentChatStateOwnerFixture(t, true)
+	r.Action = app.ChatStateMarkRead
 	result, err := a.ApplyAgentChatState(t.Context(), r)
 	if err != nil {
 		t.Fatal(err)
@@ -525,6 +541,7 @@ func TestAgentChatStateOutputFailureRetainsKnowledge(t *testing.T) {
 
 func TestAgentChatStateLostReplyLateMirrorNoReplay(t *testing.T) {
 	dir, a, f, r := agentChatStateOwnerFixture(t, true)
+	r.Action = app.ChatStateMarkRead
 	started, release := make(chan struct{}), make(chan struct{})
 	f.stateHook = func(_ context.Context, _ appstate.PatchInfo, boundary func()) ([]any, error) {
 		boundary()
@@ -550,7 +567,7 @@ func TestAgentChatStateLostReplyLateMirrorNoReplay(t *testing.T) {
 	close(release)
 	stop() // Drain owner execution instead of polling the local mirror.
 	chat, err := a.DB().GetChat(localReadPN)
-	if err != nil || !chat.Archived || f.states.Load() != 1 {
+	if err != nil || chat.Unread || f.states.Load() != 1 {
 		t.Fatal("late mirror/replay", chat, err, f.states.Load())
 	}
 }
@@ -618,7 +635,8 @@ func TestAgentChatStateIndependentSendAndSerializedState(t *testing.T) {
 // Use only fixture SQL, never a linked-device store, to inject a mirror failure.
 func TestAgentChatStateIPCSDKCompletedMirrorFailureSanitized(t *testing.T) {
 	dir, a, f, r := agentChatStateOwnerFixture(t, true)
-	if err := a.DB().SetChatArchived(r.Requested, false); err != nil {
+	r.Action = app.ChatStateMarkRead
+	if err := a.DB().SetChatUnreadCount(r.Requested, 1); err != nil {
 		t.Fatal(err)
 	}
 	f.stateHook = func(_ context.Context, _ appstate.PatchInfo, boundary func()) ([]any, error) {
@@ -628,7 +646,7 @@ func TestAgentChatStateIPCSDKCompletedMirrorFailureSanitized(t *testing.T) {
 			return nil, err
 		}
 		defer db.Close()
-		_, err = db.Exec(`CREATE TRIGGER fail_mirror BEFORE UPDATE OF archived ON chats BEGIN SELECT RAISE(ABORT,'SECRET_SQL_CAUSE'); END`)
+		_, err = db.Exec(`CREATE TRIGGER fail_mirror BEFORE UPDATE OF unread_count ON chats BEGIN SELECT RAISE(ABORT,'SECRET_SQL_CAUSE'); END`)
 		return nil, err
 	}
 	stop, err := startSendDelegateServer(t.Context(), a, sendSpacing{})
@@ -644,5 +662,343 @@ func TestAgentChatStateIPCSDKCompletedMirrorFailureSanitized(t *testing.T) {
 	}
 	if failure.Code != "chat_state_local_mirror_unconfirmed" || failure.ChatState.Outcome != "sdk_completed" || strings.Contains(raw.String(), "SECRET") || f.states.Load() != 1 {
 		t.Fatal(raw.String(), err)
+	}
+}
+
+func TestAgentMarkReadAdditionalPreflight(t *testing.T) {
+	t.Setenv("WACLI_READONLY", "0")
+	for _, extra := range [][]string{{"--receipts"}, {"--receipts=false"}, {"--timeout", "0"}, {"--timeout", "-1s"}, {"--timeout", "5m1s"}, {"--events"}} {
+		t.Run(strings.Join(extra, "/"), func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "missing")
+			args := append([]string{"--agent", "--store", dir, "chats", "mark-read", "--chat", localReadPN}, extra...)
+			stdout, stderr, err := runAgentTest(t, args...)
+			e := decodeAgentTest(t, stderr)
+			if err == nil || stdout != "" || commandExitCode(err) != 2 || e.Meta.Source != "live" || e.Error.Code != "invalid_arguments" || e.Error.ChatState == nil || e.Error.ChatState.Action != "mark-read" || e.Error.ChatState.Outcome != "not_dispatched" {
+				t.Fatal(stdout, stderr, err)
+			}
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Fatal("preflight touched store", err)
+			}
+		})
+	}
+	t.Setenv("WACLI_READONLY", "1")
+	dir := filepath.Join(t.TempDir(), "missing")
+	_, stderr, err := runAgentTest(t, "--agent", "--store", dir, "chats", "mark-read", "--chat", localReadPN)
+	e := decodeAgentTest(t, stderr)
+	if err == nil || e.Error.Code != "read_only" || e.Error.ChatState.Action != "mark-read" || e.Meta.Source != "live" {
+		t.Fatal(stderr, err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("env policy touched store", err)
+	}
+}
+
+func TestAgentMarkReadRunnerDefendsReceiptsAndTimeout(t *testing.T) {
+	t.Setenv("WACLI_READONLY", "0")
+	for _, mode := range []string{"receipts", "zero timeout", "long timeout"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "missing")
+			flags := &rootFlags{agent: true, storeDir: dir, timeout: time.Second}
+			opts := chatStateOptions{chat: localReadPN}
+			switch mode {
+			case "receipts":
+				opts.receipts = true
+			case "zero timeout":
+				flags.timeout = 0
+			case "long timeout":
+				flags.timeout = 6 * time.Minute
+			}
+			err := runAgentChatState(flags, opts, app.ChatStateMarkRead)
+			if err == nil || classifyChatStateAgentError(err, nil).Code != "invalid_arguments" {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Fatal("runner touched store", err)
+			}
+		})
+	}
+}
+
+func TestAgentMarkReadProductionBinaryStandalone(t *testing.T) {
+	binary := os.Getenv("WACLI_CHAT_STATE_E2E_BINARY")
+	if binary == "" {
+		t.Skip("set WACLI_CHAT_STATE_E2E_BINARY to a freshly built local binary")
+	}
+	for _, mode := range []string{"readonly", "receipts=false", "missing authentication"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "synthetic-unpaired")
+			args := []string{"--agent", "--store", dir, "chats", "mark-read", "--chat", localReadPN}
+			switch mode {
+			case "readonly":
+				args = append(args, "--read-only")
+			case "receipts=false":
+				args = append(args, "--receipts=false")
+			}
+			stdout, stderr, err := runDraftBinary(t, binary, args, false)
+			e := decodeAgentTest(t, stderr)
+			want := map[string]string{"readonly": "read_only", "receipts=false": "invalid_arguments", "missing authentication": "identity_unavailable"}[mode]
+			if err == nil || stdout != "" || e.Meta.Source != "live" || e.Error.Code != want || e.Error.ChatState.Action != "mark-read" || e.Error.ChatState.Outcome != "not_dispatched" || e.Error.ChatState.LocalMirror != "unknown" {
+				t.Fatal(stdout, stderr, err)
+			}
+			if mode != "missing authentication" {
+				if _, err := os.Stat(dir); !os.IsNotExist(err) {
+					t.Fatal("preflight touched store", err)
+				}
+			}
+		})
+	}
+}
+
+// Copy only this helper into historical sources: their actual decoder and
+// executor reject the new request before an App or WhatsApp client is needed.
+func TestAgentChatStateHistoricalOwnerHelper(t *testing.T) {
+	dir := os.Getenv("WACLI_CHAT_STATE_HISTORICAL_STORE")
+	if dir == "" {
+		t.Skip("historical owner subprocess helper")
+	}
+	var calls atomic.Int64
+	stop, err := startSendDelegateServerForStore(t.Context(), dir, sendSpacing{}, func(ctx context.Context, req sendDelegateRequest) (sendDelegateResponse, error) {
+		calls.Add(1)
+		return executeDelegatedSend(ctx, nil, req)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	if _, err := os.Stdout.WriteString("R23_HISTORICAL_READY\n"); err != nil {
+		t.Fatal(err)
+	}
+	var signal [1]byte
+	if n, err := os.Stdin.Read(signal[:]); err != nil || n != 1 {
+		t.Fatal("missing client completion signal", n, err)
+	}
+	stop() // Drain the historical handler before asserting its invocation count.
+	if got := strconv.FormatInt(calls.Load(), 10); got != os.Getenv("WACLI_CHAT_STATE_HISTORICAL_CALLS") {
+		t.Fatal("historical executor invocation count", got)
+	}
+}
+
+func TestAgentMarkReadProductionBinaryHistoricalOwners(t *testing.T) {
+	binary := os.Getenv("WACLI_CHAT_STATE_E2E_BINARY")
+	raw := os.Getenv("WACLI_CHAT_STATE_HISTORICAL_OWNERS")
+	if binary == "" || raw == "" {
+		t.Skip("set the production CLI and typed/untyped historical test binaries")
+	}
+	var owners map[string]string
+	if err := json.Unmarshal([]byte(raw), &owners); err != nil || len(owners) != 2 || owners["typed"] == "" || owners["untyped"] == "" {
+		t.Fatal("invalid historical fixture executables", err)
+	}
+	for _, kind := range []string{"typed", "untyped"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := shortPresenceDelegateStoreDir(t)
+			lk, err := lock.Acquire(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = lk.Release() })
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			t.Cleanup(cancel)
+			owner := exec.CommandContext(ctx, owners[kind], "-test.v", "-test.timeout=8s", "-test.run=^TestAgentChatStateHistoricalOwnerHelper$")
+			wantCalls := "0"
+			if kind == "untyped" {
+				wantCalls = "1"
+			}
+			owner.Env = append(os.Environ(), "WACLI_CHAT_STATE_HISTORICAL_STORE="+dir, "WACLI_CHAT_STATE_HISTORICAL_CALLS="+wantCalls)
+			stdin, err := owner.StdinPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			stdout, err := owner.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ownerErr strings.Builder
+			owner.Stderr = &ownerErr
+			if err := owner.Start(); err != nil {
+				t.Fatal(err)
+			}
+			ready, drained := make(chan struct{}), make(chan struct{})
+			var ownerOut strings.Builder
+			go func() {
+				defer close(drained)
+				scanner := bufio.NewScanner(stdout)
+				for scanner.Scan() {
+					line := scanner.Text()
+					ownerOut.WriteString(line + "\n")
+					if line == "R23_HISTORICAL_READY" {
+						close(ready)
+					}
+				}
+			}()
+			t.Cleanup(func() {
+				_, _ = stdin.Write([]byte{1})
+				_ = stdin.Close()
+				<-drained
+				if err := owner.Wait(); err != nil {
+					t.Error("historical helper failed", err, ownerOut.String(), ownerErr.String())
+				}
+				t.Log("historical production handler:", ownerOut.String())
+			})
+			select {
+			case <-ready:
+			case <-drained:
+				t.Fatal("historical owner did not become ready", ownerOut.String())
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			stdoutText, stderr, err := runDraftBinary(t, binary, []string{"--agent", "--store", dir, "--timeout", "2s", "chats", "mark-read", "--chat", localReadPN}, false)
+			e := decodeAgentTest(t, stderr)
+			wantCode, wantOutcome, wantExit := "invalid_arguments", "not_dispatched", 2
+			if kind == "untyped" {
+				wantCode, wantOutcome, wantExit = "chat_state_outcome_uncertain", "uncertain", 1
+			}
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != wantExit || stdoutText != "" || e.Meta.Source != "live" || e.Error.Code != wantCode || e.Error.ChatState == nil || e.Error.ChatState.Requested != localReadPN || e.Error.ChatState.Action != "mark-read" || e.Error.ChatState.Outcome != wantOutcome || e.Error.ChatState.LocalMirror != "unknown" {
+				t.Fatal(stdoutText, stderr, err)
+			}
+			for _, name := range []string{"session.db", "wacli.db"} {
+				if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+					t.Fatal("client attempted standalone fallback", name, err)
+				}
+			}
+			t.Log("new production mark-read client:", stderr)
+		})
+	}
+}
+
+// Model the real cached LID->PN resolver; no network or discovery is involved.
+type mappedAgentChatStateWA struct {
+	agentChatStateWA
+	resolutions, receipts atomic.Int64
+	unauthenticated       bool
+}
+
+func (f *mappedAgentChatStateWA) IsAuthed() bool { return !f.unauthenticated }
+func (f *mappedAgentChatStateWA) ResolveLIDToPN(_ context.Context, jid types.JID) types.JID {
+	f.resolutions.Add(1)
+	if jid.ToNonAD().String() == localReadLID {
+		return types.NewJID("15550000001", types.DefaultUserServer)
+	}
+	return jid
+}
+func (f *mappedAgentChatStateWA) MarkRead(context.Context, []types.MessageID, time.Time, types.JID, types.JID, types.AddressingMode) (types.ReceiptType, error) {
+	f.receipts.Add(1)
+	return "", errors.New("fixture forbids receipts")
+}
+
+func mappedAgentChatStateFixture(t *testing.T, readOnly bool) (*app.App, *mappedAgentChatStateWA, app.ChatStateRequest) {
+	t.Helper()
+	t.Setenv("WACLI_READONLY", "0")
+	f := &mappedAgentChatStateWA{}
+	dir, a := draftOwnerFixtureOptions(t, app.Options{ReadOnly: readOnly, WAFactory: func(wa.Options) (app.WAClient, error) {
+		f.opens.Add(1)
+		return f, nil
+	}})
+	return a, f, app.ChatStateRequest{Version: 1, StoreRef: dir, Requested: localReadLID, Action: app.ChatStateMarkRead}
+}
+
+func TestAgentMarkReadAliasOnlyHistoryRefusesWithoutMigration(t *testing.T) {
+	for _, standalone := range []bool{false, true} {
+		for _, requested := range []string{localReadPN, localReadLID} {
+			t.Run(strconv.FormatBool(standalone)+"/"+requested, func(t *testing.T) {
+				a, f, r := mappedAgentChatStateFixture(t, false)
+				r.Requested = requested
+				if err := a.DB().SetChatUnreadCount(localReadLID, 2); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := a.DB().GetLatestMessageInfo(localReadPN); !errors.Is(err, sql.ErrNoRows) {
+					t.Fatal("fixture must have no canonical anchor", err)
+				}
+				if info, err := a.DB().GetLatestMessageInfo(localReadLID); err != nil || info.MsgID != "m1" {
+					t.Fatal("fixture must have an alias anchor", info, err)
+				}
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+				defer cancel()
+				var result app.ChatStateResult
+				var err error
+				if standalone {
+					result, err = connectAndApplyAgentChatState(ctx, a, r)
+				} else {
+					if err := a.OpenWA(); err != nil {
+						t.Fatal(err)
+					}
+					if err := a.Connect(ctx, false, nil); err != nil {
+						t.Fatal(err)
+					}
+					result, err = a.ApplyAgentChatState(ctx, r)
+				}
+				alias, aliasErr := a.DB().GetLatestMessageInfo(localReadLID)
+				canonical, canonicalErr := a.DB().GetLatestMessageInfo(localReadPN)
+				chat, chatErr := a.DB().GetChat(localReadLID)
+				t.Logf("outcome=%s mirror=%s err=%v states=%d resolutions=%d receipts=%d alias=%q/%v canonical=%q/%v", result.Outcome, result.LocalMirror, err, f.states.Load(), f.resolutions.Load(), f.receipts.Load(), alias.MsgID, aliasErr, canonical.MsgID, canonicalErr)
+				var failure *app.ChatStateError
+				if !errors.As(err, &failure) || failure.Code != "not_dispatched" || result.Request != r || app.ValidateChatStateResult(r, result) != nil || result.Outcome != app.ChatStateNotDispatched || result.LocalMirror != app.ChatStateMirrorUnknown || f.states.Load() != 0 || f.receipts.Load() != 0 || f.resolutions.Load() != 0 || aliasErr != nil || alias.MsgID != "m1" || !errors.Is(canonicalErr, sql.ErrNoRows) || chatErr != nil || !chat.Unread || chat.UnreadCount != 2 {
+					t.Fatal("alias-only mark-read must refuse without migration or mutation", result, err, chat, chatErr)
+				}
+			})
+		}
+	}
+}
+
+func TestAgentChatStateStandalonePreservesLegacyMigration(t *testing.T) {
+	for _, action := range []app.ChatStateAction{app.ChatStateMarkRead, app.ChatStateMarkUnread, app.ChatStateArchive, app.ChatStateUnarchive} {
+		t.Run(string(action), func(t *testing.T) {
+			a, f, r := mappedAgentChatStateFixture(t, false)
+			r.Action = action
+			if action == app.ChatStateMarkRead {
+				at := time.Unix(1700000000, 0)
+				if err := a.DB().UpsertChat(localReadPN, "dm", "Synthetic", at); err != nil {
+					t.Fatal(err)
+				}
+				if err := a.DB().UpsertMessage(store.UpsertMessageParams{ChatJID: localReadPN, MsgID: "anchor", Timestamp: at}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			result, err := connectAndApplyAgentChatState(t.Context(), a, r)
+			if err != nil || result.Request != r || result.Outcome != app.ChatStateSDKCompleted || result.LocalMirror != app.ChatStateMirrorPersisted || f.states.Load() != 1 || f.receipts.Load() != 0 || f.opens.Load() != 1 || f.connects.Load() != 1 {
+				t.Fatal(result, err)
+			}
+			_, aliasErr := a.DB().GetMessage(localReadLID, "m1")
+			_, migratedErr := a.DB().GetMessage(localReadPN, "m1")
+			if action == app.ChatStateMarkRead {
+				if aliasErr != nil || !errors.Is(migratedErr, sql.ErrNoRows) || f.resolutions.Load() != 0 {
+					t.Fatal("valid PN anchor must not migrate alias history", aliasErr, migratedErr)
+				}
+			} else if !errors.Is(aliasErr, sql.ErrNoRows) || migratedErr != nil || f.resolutions.Load() == 0 {
+				t.Fatal("other actions must retain functional legacy migration", aliasErr, migratedErr)
+			}
+		})
+	}
+}
+
+func TestAgentMarkReadStandaloneAuthenticationGuards(t *testing.T) {
+	for _, mode := range []string{"canceled", "read-only", "wrong store", "unauthenticated", "closed app"} {
+		t.Run(mode, func(t *testing.T) {
+			a, f, r := mappedAgentChatStateFixture(t, mode == "read-only")
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			want, opens := "not_dispatched", int64(0)
+			switch mode {
+			case "canceled":
+				cancel()
+				want = "identity_unavailable"
+			case "read-only":
+				want = "read_only"
+			case "wrong store":
+				r.StoreRef = filepath.Join(r.StoreRef, "different")
+				want = "store_unavailable"
+			case "unauthenticated":
+				f.unauthenticated = true
+				want, opens = "identity_unavailable", 1
+			case "closed app":
+				a.Close()
+				want = "identity_unavailable"
+			}
+			result, err := connectAndApplyAgentChatState(ctx, a, r)
+			var failure *app.ChatStateError
+			if !errors.As(err, &failure) || failure.Code != want || result.Request != r || result.Outcome != app.ChatStateNotDispatched || result.LocalMirror != app.ChatStateMirrorUnknown || f.opens.Load() != opens || f.states.Load() != 0 || f.receipts.Load() != 0 || f.resolutions.Load() != 0 || f.connects.Load() != 0 {
+				t.Fatal("authentication guard failed", result, err, f.opens.Load())
+			}
+		})
 	}
 }

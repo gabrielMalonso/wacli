@@ -2,7 +2,7 @@
 
 Read when: listing known chats, filtering chat state, archiving/pinning/muting/marking chats, or pruning stale local chat rows.
 
-`wacli chats` reads chat rows from `wacli.db`. It can use session-backed PN/LID mappings to make historical `@lid` chat rows display as phone-number chats when possible. State commands normally send WhatsApp app-state patches through the authenticated session and update the local index after WhatsApp accepts the change. Explicit receipt mode uses the independent network receipt path described below.
+`wacli chats` reads chat rows from `wacli.db`. It can use session-backed PN/LID mappings to make historical `@lid` chat rows display as phone-number chats when possible. State commands normally send WhatsApp app-state patches through the authenticated session and update the local index after the SDK call completes. Explicit receipt mode uses the independent network receipt path described below.
 
 Archive and pin persistence reads the SDK's public local ChatSettings cache for the exact observed JID at its ordered persistence turn. This also preserves the SDK's unpin on archive, even if a callback arrives after a newer replay. Missing settings or a cache read error leave recovery debt instead of guessing a value or another identity. The cache is not a fresh remote-state guarantee; unread remains driven by its separate events and read boundaries. Recovery reads state and never repeats a user's mutation.
 
@@ -36,7 +36,7 @@ No OFFSET, schema or index is added. SQL returns limit+1 rows to Go, but SQLite 
 
 ## Explicit agent state changes
 
-`--agent` permits only `mark-unread`, `archive` and `unarchive`, with explicit phone/DM/group JID and no names or `--pick`. They use the existing app-state recovery/semaphore, outside owner send pacing/queueing; legacy mark-read/unread queue behavior below is unchanged. Results distinguish SDK completion, uncertain invocation and local mirror persistence without confirming current remote state. Read-only flag/env rejects these actions before effects. See [the agent contract](agent.md#explicit-unread-archive-actions) for identity, deadlines, IPC errors and late persistence.
+`--agent` permits only `mark-read`, `mark-unread`, `archive` and `unarchive`, with explicit phone/DM/group JID and no names or `--pick` (including zero). Agent mark-read is app-state only and rejects `--receipts` by presence, including false; its timeout must be positive and at most 5m (default 5m). It requires one valid stored message anchor in the exact frozen mirror chat; missing/unreadable/invalid anchors refuse before mutation and local clear, even for empty/already-read chats. It never searches another alias or substitutes the current clock. They use the existing app-state recovery/semaphore, outside owner send pacing/queueing; legacy mark-read/unread queue behavior below is unchanged. Results distinguish SDK completion, uncertain invocation and local mirror persistence without confirming current remote state, sender notification or human reading. Boundary refusal is `not_dispatched/unknown` (exit 1); earlier connection/recovery is not rollback. Read-only flag/env rejects these actions before effects. See [the agent contract](agent.md#explicit-read-unread-archive-actions) for identity, deadlines, IPC errors and late persistence.
 
 ## Notes
 
@@ -47,7 +47,7 @@ No OFFSET, schema or index is added. SQL returns limit+1 rows to Go, but SQLite 
 - `list --json` and `show --json` include `archived`, `pinned`, `muted_until`, `unread`, and `unread_count`; `unread` is true for counted unread messages and marker-only unread chats, while `unread_count` only counts unread messages.
 - `list --unread` matches counted and marker-only unread chats; `list --no-unread` excludes both.
 - Replayed read signals reduce the unread count only through the messages they cover; older reads cannot restore already-read messages. Known message IDs distinguish arrivals in the same second, using their local insertion order. Without a known ID boundary, messages at the cutoff second remain unread. Content-free system events, reactions, and revocations do not add to live unread counts.
-- `mark-unread` sets the unread marker without inventing an unread count; `mark-read` clears the marker and count through its captured message boundary; arrivals beyond it remain unread.
+- `mark-unread` sets the unread marker without inventing an unread count; plain `mark-read` clears the marker and count through one captured local message boundary; arrivals beyond it, including later insertions in the same second, remain unread. A missing/unreadable anchor, nonpositive timestamp or invalid message key now refuses the operation before its mutation and local clear, including in empty or already-read chats. Connection/recovery may already have persisted other state; refusal is not rollback. No clock-based boundary is substituted. Receipt mode keeps its separate selection policy below.
 - Reading a chat on the phone clears it here too while `sync` is connected. WhatsApp reports that read as a `read-self` receipt only while read receipts are turned off; with them on it arrives as an ordinary read receipt sent by this account, and both are honoured.
 - `show` accepts the stored JID. If a phone JID maps to a historical `@lid` row, it can show that row too.
 - Legacy state commands use `--chat` and resolve names, phone numbers, groups, and JIDs like send commands. Use `--pick N` for ambiguous matches.
@@ -85,6 +85,7 @@ wacli chats list --pinned
 wacli chats show --jid 1234567890@s.whatsapp.net
 wacli chats mute --chat "+1 555 123 4567" --duration 8h
 wacli chats mark-read --chat family --pick 1
+wacli --agent chats mark-read --chat +15550000001 --timeout 2m
 wacli chats mark-read --chat family --pick 1 --receipts --json
 wacli chats cleanup --days 365 --dry-run
 ```
