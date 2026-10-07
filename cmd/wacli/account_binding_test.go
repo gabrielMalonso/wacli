@@ -391,3 +391,168 @@ func TestAccountBindingStdinBytesAndEarlyRefusal(t *testing.T) {
 		t.Fatal(err, stdout, stderr)
 	}
 }
+
+func TestAccountBindingHelpVersionOrder(t *testing.T) {
+	cfg, _, _ := accountBindingFixture(t)
+	validConfig, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []string{"valid", "absent", "invalid-config"} {
+		if state == "invalid-config" {
+			if err := os.WriteFile(cfg, []byte("PRIVATE_BINDING_CONFIG: [broken"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		name := "fixture-a"
+		if state == "absent" {
+			name = "absent"
+		}
+		for _, selector := range [][]string{{"-a", name}, {"-a" + name}, {"-a=" + name}, {"--for-account", name}, {"--for-account=" + name}} {
+			for _, helper := range []string{"--help", "--help=true", "-h", "--version", "--version=true", "version"} {
+				for _, before := range []bool{true, false} {
+					for _, agent := range []bool{false, true} {
+						args := append(append([]string{}, selector...), helper)
+						if before {
+							args = append([]string{helper}, selector...)
+						}
+						if agent {
+							args = append([]string{"--agent"}, args...)
+						}
+						t.Run(state+"/"+strings.Join(args, " "), func(t *testing.T) {
+							stdout, stderr, err := runAgentTest(t, args...)
+							if state == "valid" {
+								if err != nil || stdout == "" || stderr != "" || strings.Contains(stdout, "schema_version") {
+									t.Fatalf("text help/version: %v stdout=%q stderr=%q", err, stdout, stderr)
+								}
+							} else if agent {
+								if commandExitCode(err) != 4 || stdout != "" || len(strings.Split(strings.TrimSpace(stderr), "\n")) != 1 || decodeAgentTest(t, stderr).Error.Code != "store_unavailable" {
+									t.Fatalf("selection refusal: %v stdout=%q stderr=%q", err, stdout, stderr)
+								}
+							} else if commandExitCode(err) != 1 || stdout != "" || stderr == "" || strings.Contains(stderr, "schema_version") {
+								t.Fatalf("legacy selection refusal: %v stdout=%q stderr=%q", err, stdout, stderr)
+							}
+							if strings.Contains(stderr, "PRIVATE_BINDING_CONFIG") || strings.Contains(stderr, cfg) {
+								t.Fatal("selection error exposed private config", stderr)
+							}
+						})
+					}
+				}
+			}
+		}
+	}
+	if err := os.WriteFile(cfg, validConfig, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, helper := range []string{"--help", "-h", "--version"} {
+		for _, conflict := range [][]string{{"--account="}, {"--account=fixture-b", "--account=fixture-a"}, {"--store="}, {"--for-account=fixture-b"}} {
+			args := append([]string{"--agent", helper, "-a", "fixture-a"}, conflict...)
+			stdout, stderr, err := runAgentTest(t, args...)
+			if commandExitCode(err) != 2 || stdout != "" || decodeAgentTest(t, stderr).Error.Code != "invalid_arguments" {
+				t.Errorf("conflict before helper %v: %v stdout=%q stderr=%q", args, err, stdout, stderr)
+			}
+		}
+	}
+}
+
+func TestAccountBindingHelpRegistryTarget(t *testing.T) {
+	cfg, a, b := accountBindingFixture(t)
+	before := snapshotLocalStore(t, filepath.Dir(cfg))
+	beforeA, beforeB := snapshotLocalStore(t, a), snapshotLocalStore(t, b)
+	for _, action := range []string{"", "list", "show", "use", "remove", "add"} {
+		target := []string{"accounts"}
+		if action != "" {
+			target = append(target, action)
+		}
+		for _, route := range [][]string{
+			append(append([]string{"-a", "fixture-a", "help"}, target...), "--help=false"),
+			append([]string{"help", "-afixture-a"}, target...),
+			append(append([]string{"help"}, target...), "--for-account=fixture-a"),
+			append([]string{"-afixture-a", "help", "--"}, target...),
+			append(append([]string{"-afixture-a", "help"}, target...), "--help"),
+			append([]string{"-hafixture-a", "help"}, target...),
+		} {
+			for _, agent := range []bool{false, true} {
+				args := append([]string{}, route...)
+				if agent {
+					args = append([]string{"--agent"}, args...)
+				}
+				t.Run(strings.Join(args, " "), func(t *testing.T) {
+					stdout, stderr, err := runAgentTest(t, args...)
+					if agent {
+						if commandExitCode(err) != 2 || stdout != "" || decodeAgentTest(t, stderr).Error.Code != "invalid_arguments" {
+							t.Fatalf("registry help refusal: %v stdout=%q stderr=%q", err, stdout, stderr)
+						}
+					} else if commandExitCode(err) != 1 || stdout != "" || stderr == "" {
+						t.Fatalf("legacy registry help refusal: %v stdout=%q stderr=%q", err, stdout, stderr)
+					}
+				})
+			}
+		}
+	}
+	if !reflect.DeepEqual(before, snapshotLocalStore(t, filepath.Dir(cfg))) || !reflect.DeepEqual(beforeA, snapshotLocalStore(t, a)) || !reflect.DeepEqual(beforeB, snapshotLocalStore(t, b)) {
+		t.Fatal("help target lookup modified registry/archive")
+	}
+}
+
+func TestAccountBindingHelpAndCompletionNeighbors(t *testing.T) {
+	cfg, a, b := accountBindingFixture(t)
+	before := snapshotLocalStore(t, filepath.Dir(cfg))
+	beforeA, beforeB := snapshotLocalStore(t, a), snapshotLocalStore(t, b)
+	for _, args := range [][]string{
+		{"--help"}, {"--version"}, {"help", "accounts", "remove"}, {"--agent", "help", "accounts", "use"},
+		{"--help", "--account=fixture-a"},
+		{"--agent", "-afixture-a", "help", "--detail", "accounts", "messages"},
+		{"--agent", "-afixture-a", "help", "--", "--for-account=fixture-b", "messages"},
+		{"--agent", "help", "--", "-afixture-a", "accounts"},
+		{"--json", "auth", "--qr-format", "--for-account", "--help"},
+	} {
+		stdout, stderr, err := runAgentTest(t, args...)
+		if err != nil || stdout == "" || stderr != "" || strings.Contains(stdout, "schema_version") {
+			t.Errorf("literal/unbound help %v: %v stdout=%q stderr=%q", args, err, stdout, stderr)
+		}
+	}
+	// Keep the legacy discovery limitation; metadata repair is opt-in only.
+	stdout, stderr, err := runAgentTest(t, "--help", "--account", "fixture-a")
+	if commandExitCode(err) != 1 || stdout != "" || !strings.Contains(stderr, `unknown command "fixture-a"`) {
+		t.Errorf("unbound split behavior changed: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	for _, name := range []string{"__complete", "__completeNoDesc"} {
+		for _, target := range [][]string{{"-afixture-a", "accounts", "use", ""}, {"-a", "absent", "auth", "status", ""}} {
+			args := append([]string{name}, target...)
+			stdout, stderr, err := runAgentTest(t, args...)
+			if err != nil || stdout != ":0\n" || !strings.Contains(stderr, "Completion ended with directive:") || (target[1] == "absent" && !strings.Contains(stderr, "[Error]")) {
+				t.Errorf("completion protocol %v: %v stdout=%q stderr=%q", args, err, stdout, stderr)
+			}
+			stdout, stderr, err = runAgentTest(t, append([]string{"--agent"}, args...)...)
+			if commandExitCode(err) != 2 || stdout != "" || decodeAgentTest(t, stderr).Error.Code != "invalid_arguments" {
+				t.Errorf("agent completion refusal %v: %v stdout=%q stderr=%q", args, err, stdout, stderr)
+			}
+		}
+	}
+	// Instrument the registry command itself: protocol completion must not
+	// invoke its Args, hooks or Run, even when it discovers that command.
+	for _, name := range []string{"__complete", "__completeNoDesc"} {
+		for _, target := range [][]string{{"-afixture-a", "accounts", "use", ""}, {"-a", "absent", "auth", "status", ""}} {
+			flags := rootFlags{}
+			calls := 0
+			root := &cobra.Command{Use: "wacli", SilenceErrors: true, SilenceUsage: true}
+			root.PersistentFlags().StringVar(&flags.account, "account", "", "")
+			root.PersistentFlags().StringVar(&flags.storeDir, "store", "", "")
+			registerAccountBinding(root, &flags)
+			accounts := &cobra.Command{Use: "accounts"}
+			accounts.AddCommand(&cobra.Command{Use: "use", Args: func(*cobra.Command, []string) error { calls++; return nil }, PreRun: func(*cobra.Command, []string) { calls++ }, Run: func(*cobra.Command, []string) { calls++ }})
+			root.AddCommand(accounts)
+			var stdout, stderr bytes.Buffer
+			root.SetOut(&stdout)
+			root.SetErr(&stderr)
+			root.SetArgs(append([]string{name}, target...))
+			if err := root.Execute(); err != nil || calls != 0 || stdout.String() != ":0\n" {
+				t.Errorf("completion executed registry validator/hook/run: %v calls=%d stdout=%q stderr=%q", err, calls, stdout.String(), stderr.String())
+			}
+		}
+	}
+	if !reflect.DeepEqual(before, snapshotLocalStore(t, filepath.Dir(cfg))) || !reflect.DeepEqual(beforeA, snapshotLocalStore(t, a)) || !reflect.DeepEqual(beforeB, snapshotLocalStore(t, b)) {
+		t.Fatal("help/completion executed a registry/archive effect")
+	}
+}

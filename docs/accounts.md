@@ -40,6 +40,8 @@ wacli -a "$wacli_account" --read-only --json chats list
 - Validation occurs during flag parsing, before command arguments/hooks, stdin or archive effects, including for help/version. With `--agent`, argument/conflict errors exit 2 with `invalid_arguments`; selection/config failures exit 4 with `store_unavailable`, as one JSON line on stderr. Without `--agent`, existing human/legacy error channels and exits apply. Help/version without binding are unchanged.
 - Global `accounts` commands reject binding, including registry management: run them separately without `-a`. Flag-like strings consumed as another flag's value, and positional content after `--`, remain literal content.
 
+The same registry refusal applies to `help accounts` and its subcommands; run that help without binding. Help/version flags may precede or follow the selector. Hidden Cobra shell-completion requests keep their protocol: exit 0 and a directive such as `:0` can accompany a parsing diagnostic, and do not certify that the requested command was accepted or executed. Inspect diagnostics; `--agent` refuses these hidden completion requests.
+
 Binding selects an account; it does not authorize auth, sync, sending or other mutations. Output modes, supported agent commands, timeout, signals, locks and readonly policy remain unchanged. Readonly still permits requested export/download output, explicit adapters and SQLite bookkeeping; see [store reads](store.md#local-reads-by-default). No wrapper, alias installation or global default change is required.
 
 ## Config

@@ -123,6 +123,12 @@ func execute(args []string) error {
 	rootCmd.InitDefaultHelpCmd()
 	rootCmd.InitDefaultCompletionCmd()
 	intent := agentFlagIntent(rootCmd, args)
+	if intent.bindingSet {
+		// Find must know that automatic helpers do not consume the next flag.
+		// Keep legacy discovery unchanged when no binding was requested.
+		rootCmd.InitDefaultHelpFlag()
+		rootCmd.InitDefaultVersionFlag()
+	}
 	flags.agent = intent.agent
 	flags.accountBinding.agent = intent.agent
 	flags.agentCapability = intent.capability
@@ -133,12 +139,34 @@ func execute(args []string) error {
 	// Resolve the command before installing Args wrappers or letting Cobra add
 	// hidden shell-completion commands. Find performs no parsing or hooks.
 	var agentFindErr error
-	selectedCommand, _, findErr := rootCmd.Find(args)
-	for c := selectedCommand; c != nil; c = c.Parent() {
-		if c.Name() == "accounts" {
-			flags.accountBinding.registryCommand = true
+	selectedCommand, commandArgs, findErr := rootCmd.Find(args)
+	registryCommand := func(cmd *cobra.Command) bool {
+		for c := cmd; c != nil; c = c.Parent() {
+			if c.Name() == "accounts" {
+				return true
+			}
+		}
+		return false
+	}
+	scopeCommand := selectedCommand
+	if intent.bindingSet && selectedCommand != nil && selectedCommand.Name() == "help" {
+		// Match Cobra's help target discovery, not the ancestors of "help".
+		scopeCommand, _, _ = rootCmd.Find(commandArgs)
+		original := selectedCommand.Args
+		selectedCommand.Args = func(c *cobra.Command, args []string) error {
+			// Positional help targets after -- are available only after parsing.
+			// Check them before the original help validator, hooks or help Run.
+			target, _, _ := rootCmd.Find(args)
+			if registryCommand(target) {
+				return fmt.Errorf("--for-account cannot be used with global accounts commands")
+			}
+			if original != nil {
+				return original(c, args)
+			}
+			return nil
 		}
 	}
+	flags.accountBinding.registryCommand = registryCommand(scopeCommand)
 	if intent.agent {
 		agentFindErr = findErr
 	}

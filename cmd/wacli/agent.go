@@ -62,6 +62,20 @@ func agentFlagIntent(root *cobra.Command, args []string) (intent struct {
 		}
 	}
 	collect(root)
+	// Cobra adds these flags later during execution. Use its metadata for
+	// intent discovery too, including a binding in a shorthand cluster (-haNAME),
+	// without installing flags on the legacy command tree.
+	helpers := &cobra.Command{Version: root.Version}
+	helpers.InitDefaultHelpFlag()
+	helpers.InitDefaultVersionFlag()
+	helpers.Flags().VisitAll(func(f *pflag.Flag) {
+		if known[f.Name] == nil {
+			known[f.Name] = f
+			if len(f.Shorthand) == 1 {
+				short[f.Shorthand[0]] = f
+			}
+		}
+	})
 	node := root
 	for i := 0; i < len(args); i++ {
 		token := args[i]
