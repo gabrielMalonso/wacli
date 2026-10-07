@@ -164,14 +164,16 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
 func writeSyncResult(w io.Writer, asJSON bool, result appPkg.SyncResult, state appPkg.AppStateDiagnostics) error {
 	if asJSON {
 		return out.WriteJSON(w, struct {
-			Synced         bool                       `json:"synced"`
-			MessagesStored int64                      `json:"messages_stored"`
-			AppState       appPkg.AppStateDiagnostics `json:"app_state"`
-		}{true, result.MessagesStored, state})
+			Synced         bool                          `json:"synced"`
+			MessagesStored int64                         `json:"messages_stored"`
+			AppState       appPkg.AppStateDiagnostics    `json:"app_state"`
+			Observations   appPkg.DiagnosticObservations `json:"observations"`
+		}{true, result.MessagesStored, state, result.ObservationsSnapshot()})
 	}
 	fmt.Fprintf(w, "Messages stored: %d\n", result.MessagesStored)
 	tw := newTableWriter(w)
 	writeAppStateRows(tw, state)
+	writeObservationRows(tw, result.ObservationsSnapshot())
 	_ = tw.Flush()
 	writeAppStateHint(w, state)
 	return nil

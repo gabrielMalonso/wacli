@@ -25,8 +25,8 @@ func loggedOutPending(loggedOut <-chan struct{}) bool {
 
 // stopLoggedOut emits the terminal stop for a revoked session and returns the
 // final result.
-func (a *App) stopLoggedOut(messagesStored *atomic.Int64) (SyncResult, error) {
-	a.emitOrPrint("stopping", map[string]any{
+func (a *App) stopLoggedOut(ctx context.Context, messagesStored *atomic.Int64) (SyncResult, error) {
+	a.emitOrPrintSync(ctx, "stopping", map[string]any{
 		"messages_synced": messagesStored.Load(),
 		"reason":          "logged_out",
 	}, "\nStopping sync (logged out).\n")
@@ -37,16 +37,16 @@ func (a *App) runSyncFollow(ctx context.Context, maxReconnect time.Duration, pre
 	for {
 		select {
 		case <-ctx.Done():
-			a.emitOrPrint("stopping", map[string]any{"messages_synced": messagesStored.Load()}, "\nStopping sync.\n")
+			a.emitOrPrintSync(ctx, "stopping", map[string]any{"messages_synced": messagesStored.Load()}, "\nStopping sync.\n")
 			return SyncResult{MessagesStored: messagesStored.Load()}, nil
 		case req := <-staleReconnect:
 			if loggedOutPending(loggedOut) {
-				return a.stopLoggedOut(messagesStored)
+				return a.stopLoggedOut(ctx, messagesStored)
 			}
 			if epoch := connectionEpoch.Load(); epoch > 0 && req.lastSuccess.Before(time.Unix(0, epoch)) {
 				continue
 			}
-			a.emitOrPrint("stale", map[string]any{
+			a.emitOrPrintSync(ctx, "stale", map[string]any{
 				"threshold":     req.threshold.String(),
 				"idle_duration": req.idle.String(),
 				"error_count":   req.errorCount,
@@ -58,20 +58,20 @@ func (a *App) runSyncFollow(ctx context.Context, maxReconnect time.Duration, pre
 			connectionEpoch.Store(nowUTC().UnixNano())
 			loggedOutDuringReconnect, err := a.reconnectWhileWatchingLogout(ctx, maxReconnect, presenceMode, loggedOut)
 			if loggedOutDuringReconnect {
-				return a.stopLoggedOut(messagesStored)
+				return a.stopLoggedOut(ctx, messagesStored)
 			}
 			if err != nil {
 				return SyncResult{MessagesStored: messagesStored.Load()}, err
 			}
 		case <-disconnected:
 			if loggedOutPending(loggedOut) {
-				return a.stopLoggedOut(messagesStored)
+				return a.stopLoggedOut(ctx, messagesStored)
 			}
-			a.emitOrPrint("reconnecting", nil, "Reconnecting...\n")
+			a.emitOrPrintSync(ctx, "reconnecting", nil, "Reconnecting...\n")
 			connectionEpoch.Store(nowUTC().UnixNano())
 			loggedOutDuringReconnect, err := a.reconnectWhileWatchingLogout(ctx, maxReconnect, presenceMode, loggedOut)
 			if loggedOutDuringReconnect {
-				return a.stopLoggedOut(messagesStored)
+				return a.stopLoggedOut(ctx, messagesStored)
 			}
 			if err != nil {
 				return SyncResult{MessagesStored: messagesStored.Load()}, err
@@ -79,7 +79,7 @@ func (a *App) runSyncFollow(ctx context.Context, maxReconnect time.Duration, pre
 		case <-loggedOut:
 			// Session revoked (see the LoggedOut handler). Stop cleanly instead
 			// of reconnecting forever against a dead session.
-			return a.stopLoggedOut(messagesStored)
+			return a.stopLoggedOut(ctx, messagesStored)
 		}
 	}
 }
@@ -94,16 +94,16 @@ func (a *App) runSyncUntilIdle(ctx context.Context, idleExit, maxReconnect time.
 	for {
 		select {
 		case <-ctx.Done():
-			a.emitOrPrint("stopping", map[string]any{"messages_synced": messagesStored.Load()}, "\nStopping sync.\n")
+			a.emitOrPrintSync(ctx, "stopping", map[string]any{"messages_synced": messagesStored.Load()}, "\nStopping sync.\n")
 			return SyncResult{MessagesStored: messagesStored.Load()}, nil
 		case <-disconnected:
 			if loggedOutPending(loggedOut) {
-				return a.stopLoggedOut(messagesStored)
+				return a.stopLoggedOut(ctx, messagesStored)
 			}
-			a.emitOrPrint("reconnecting", nil, "Reconnecting...\n")
+			a.emitOrPrintSync(ctx, "reconnecting", nil, "Reconnecting...\n")
 			loggedOutDuringReconnect, err := a.reconnectWhileWatchingLogout(ctx, maxReconnect, presenceMode, loggedOut)
 			if loggedOutDuringReconnect {
-				return a.stopLoggedOut(messagesStored)
+				return a.stopLoggedOut(ctx, messagesStored)
 			}
 			if err != nil {
 				return SyncResult{MessagesStored: messagesStored.Load()}, err
@@ -111,7 +111,7 @@ func (a *App) runSyncUntilIdle(ctx context.Context, idleExit, maxReconnect time.
 		case <-loggedOut:
 			// Session revoked (see the LoggedOut handler). Stop cleanly instead
 			// of reconnecting forever against a dead session.
-			return a.stopLoggedOut(messagesStored)
+			return a.stopLoggedOut(ctx, messagesStored)
 		case <-ticker.C:
 			last := time.Unix(0, lastEvent.Load())
 			if time.Since(last) >= idleExit {
@@ -120,7 +120,7 @@ func (a *App) runSyncUntilIdle(ctx context.Context, idleExit, maxReconnect time.
 						continue
 					}
 				}
-				a.emitOrPrint("idle_exit", map[string]any{
+				a.emitOrPrintSync(ctx, "idle_exit", map[string]any{
 					"idle_duration":   idleExit.String(),
 					"messages_synced": messagesStored.Load(),
 				}, "\nIdle for %s, exiting.\n", idleExit)

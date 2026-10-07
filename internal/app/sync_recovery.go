@@ -117,7 +117,7 @@ func (a *App) recoverAppStateCollection(ctx context.Context, name string, recove
 	defer cancelRecovery()
 	err = a.recoverMismatchingAppState(recoveryCtx, collection, tracker, func(id types.MessageID) {
 		if a.eventsEnabled() {
-			a.emitEvent("app_state_recovery_requested", map[string]any{"name": name, "id": string(id)})
+			a.emitSyncObservationEvent(ctx, "app_state_recovery_requested", map[string]any{"name": name, "id": string(id)})
 		} else {
 			fmt.Fprintf(os.Stderr, "\rRequested app state %s recovery (id %s)\n", name, id)
 		}

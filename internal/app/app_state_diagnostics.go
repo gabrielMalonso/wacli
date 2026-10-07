@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/openclaw/wacli/internal/store"
 	"github.com/openclaw/wacli/internal/wa"
@@ -21,7 +22,8 @@ const (
 )
 
 // AppStateDiagnostics describes retained local debt, never remote integrity or freshness.
-// RecoveryObservations is null for doctor: recovery outcomes are not persisted.
+// RecoveryObservations retains its invocation-local legacy meaning. Doctor uses
+// the separate versioned observations.sync slot for historical recovery facts.
 type AppStateDiagnostics struct {
 	Reconciliation       AppStateReconciliation        `json:"reconciliation"`
 	PendingCollections   []string                      `json:"pending_collections"`
@@ -101,10 +103,16 @@ const (
 // Outcomes retain each observed kind, so a later success cannot erase a failure.
 // No attempt count, raw error, payload, or unlimited attempt history is retained.
 type AppStateRecoveryObservation struct {
-	Collection string                    `json:"collection"`
-	Phase      AppStateRecoveryPhase     `json:"phase"`
-	Outcomes   []AppStateRecoveryOutcome `json:"outcomes"`
-	ErrorCodes []string                  `json:"error_codes"`
+	Collection      string                    `json:"collection"`
+	Phase           AppStateRecoveryPhase     `json:"phase"`
+	Outcomes        []AppStateRecoveryOutcome `json:"outcomes"`
+	ErrorCodes      []string                  `json:"error_codes"`
+	FirstObservedAt *time.Time                `json:"first_observed_at,omitempty"`
+	LastObservedAt  *time.Time                `json:"last_observed_at,omitempty"`
+	CompletedAt     *time.Time                `json:"completed_at,omitempty"`
+	FailedAt        *time.Time                `json:"failed_at,omitempty"`
+	CancelledAt     *time.Time                `json:"cancelled_at,omitempty"`
+	UnconfirmedAt   *time.Time                `json:"unconfirmed_at,omitempty"`
 }
 
 var diagnosticAppStateCollections = [...]string{"critical_block", "critical_unblock_low", "regular", "regular_high", "regular_low"}
@@ -113,13 +121,16 @@ var diagnosticAppStateOutcomes = [...]AppStateRecoveryOutcome{AppStateRecoveryCo
 var diagnosticAppStateErrorCodes = [...]string{"cancelled", "deadline_exceeded", "lthash_mismatch", "key_unavailable", "recovery_failed", "completion_unconfirmed"}
 
 type appStateRecoveryFacts struct {
-	outcomes [len(diagnosticAppStateOutcomes)]bool
-	codes    [len(diagnosticAppStateErrorCodes)]bool
+	first, last time.Time
+	dates       [len(diagnosticAppStateOutcomes)]time.Time
+	outcomes    [len(diagnosticAppStateOutcomes)]bool
+	codes       [len(diagnosticAppStateErrorCodes)]bool
 }
 
 type appStateRecoveryRun struct {
-	mu    sync.Mutex
-	facts [len(diagnosticAppStateCollections)][len(diagnosticAppStatePhases)]appStateRecoveryFacts
+	diagnostic *diagnosticRun
+	mu         sync.Mutex
+	facts      [len(diagnosticAppStateCollections)][len(diagnosticAppStatePhases)]appStateRecoveryFacts
 }
 
 type appStateRecoveryRunKey struct{}
@@ -151,11 +162,22 @@ func recordAppStateRecovery(ctx context.Context, collection string, phase AppSta
 		}
 	}
 	run.mu.Lock()
-	defer run.mu.Unlock()
 	facts := &run.facts[c][p]
+	changed := !facts.outcomes[slices.Index(diagnosticAppStateOutcomes[:], outcome)]
+	at := nowUTC()
+	if facts.first.IsZero() {
+		facts.first = at
+	}
+	facts.last = at
+	facts.dates[slices.Index(diagnosticAppStateOutcomes[:], outcome)] = at
 	facts.outcomes[slices.Index(diagnosticAppStateOutcomes[:], outcome)] = true
 	if code != "" {
+		changed = changed || !facts.codes[slices.Index(diagnosticAppStateErrorCodes[:], code)]
 		facts.codes[slices.Index(diagnosticAppStateErrorCodes[:], code)] = true
+	}
+	run.mu.Unlock()
+	if changed && run.diagnostic != nil {
+		run.diagnostic.updateSync(func(*SyncObservation) {})
 	}
 }
 
@@ -170,6 +192,8 @@ func (r *appStateRecoveryRun) snapshot() []AppStateRecoveryObservation {
 		for p, phase := range diagnosticAppStatePhases {
 			facts := r.facts[c][p]
 			observation := AppStateRecoveryObservation{Collection: collection, Phase: phase, Outcomes: []AppStateRecoveryOutcome{}, ErrorCodes: []string{}}
+			observation.FirstObservedAt, observation.LastObservedAt = observationTime(facts.first), observationTime(facts.last)
+			observation.CompletedAt, observation.FailedAt, observation.CancelledAt, observation.UnconfirmedAt = observationTime(facts.dates[0]), observationTime(facts.dates[1]), observationTime(facts.dates[2]), observationTime(facts.dates[3])
 			for i, observed := range facts.outcomes {
 				if observed {
 					observation.Outcomes = append(observation.Outcomes, diagnosticAppStateOutcomes[i])
@@ -187,4 +211,11 @@ func (r *appStateRecoveryRun) snapshot() []AppStateRecoveryObservation {
 		}
 	}
 	return observations
+}
+
+func observationTime(at time.Time) *time.Time {
+	if at.IsZero() {
+		return nil
+	}
+	return &at
 }

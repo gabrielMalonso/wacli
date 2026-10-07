@@ -57,6 +57,7 @@ func ClearSessionRevoked(storeDir string) error {
 // One observer owns marker writes for the client lifetime. Revocation remains
 // terminal for that client, including delayed Connected callbacks.
 type sessionObservation struct {
+	diagnostic     *diagnosticRun
 	mu             sync.Mutex
 	storeDir       string
 	revoked        bool
@@ -177,6 +178,12 @@ func (s *sessionObservation) waitForLogin(ctx context.Context) error {
 }
 
 func (a *App) observeSessionState(state *sessionObservation, evt any) {
+	defer func() {
+		state.mu.Lock()
+		revoked := state.revoked
+		state.mu.Unlock()
+		state.diagnostic.observeConnection(evt, revoked)
+	}()
 	if err := state.observe(evt); err != nil {
 		a.emitWarning("session_state_persistence_failed",
 			fmt.Sprintf("warning: failed to persist session state: %v", err),

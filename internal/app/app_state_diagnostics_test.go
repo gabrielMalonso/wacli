@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/openclaw/wacli/internal/out"
+	"github.com/openclaw/wacli/internal/store"
 	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -76,6 +77,20 @@ func TestSyncAppStateDiagnostics(t *testing.T) {
 			a.Close()
 			a.Close() // Explicit close plus deferred close remains idempotent.
 			state := result.AppStateSnapshot()
+			ro, readErr := store.OpenReadOnly(filepath.Join(a.StoreDir(), "wacli.db"))
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			retained := ReadDiagnosticObservations(ro)
+			_ = ro.Close()
+			if retained.Error != nil || retained.Sync == nil || retained.Sync.CleanupAt == nil {
+				t.Fatal("recovery checkpoint not retained after cleanup")
+			}
+			rawSaved, _ := json.Marshal(retained.Sync.RecoveryObservations)
+			rawRun, _ := json.Marshal(state.RecoveryObservations)
+			if string(rawSaved) != string(rawRun) {
+				t.Fatal("restart lost dated recovery outcomes")
+			}
 			if state.Reconciliation != AppStateReconciliationRequired || !slices.Equal(state.PendingCollections, []string{"regular", "regular_high", "regular_low"}) {
 				t.Fatalf("missing post-close preventive debt: %+v", state)
 			}
@@ -184,6 +199,8 @@ func TestSyncAppStateSnapshotIncludesRecoveryDrainedDuringClose(t *testing.T) {
 	a := newTestApp(t)
 	a.opts.Events = out.NewEventWriter(io.Discard, true)
 	run := &appStateRecoveryRun{}
+	run.diagnostic = newDiagnosticRun(a, SyncModeOnce, run)
+	a.appStateRecoveryOnClose = run
 	result := SyncResult{recovery: run, storeDir: a.StoreDir()}
 	synctest.Test(t, func(t *testing.T) {
 		started, release := make(chan struct{}), make(chan struct{})
@@ -214,6 +231,10 @@ func TestSyncAppStateSnapshotIncludesRecoveryDrainedDuringClose(t *testing.T) {
 		synctest.Wait()
 		<-closed
 	})
+	observed := result.ObservationsSnapshot()
+	if observed.Sync == nil || observed.Sync.CleanupAt == nil || len(observed.Sync.RecoveryObservations) == 0 {
+		t.Fatal("snapshot did not include drained recovery")
+	}
 	state := result.AppStateSnapshot()
 	requireRecoveryObservation(t, state, "regular_low", appStateRecoveryFullSync, AppStateRecoveryCompleted, "")
 	if len(state.PendingCollections) != 3 {

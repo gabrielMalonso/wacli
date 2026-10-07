@@ -144,3 +144,34 @@ wacli sync --follow --stale-threshold 2m --events 2>events.ndjson
 wacli sync --follow --webhook https://example.com/wacli --webhook-secret "$WACLI_WEBHOOK_SECRET"
 wacli sync --follow --webhook https://example.com/wacli --webhook-events message,receipt,chat_presence
 ```
+
+## Historical execution checkpoints
+
+Sync summaries add the versioned `observations` described in [doctor](doctor.md#retained-connection-and-sync-observations).
+The existing `synced`/exit and `app_state.recovery_observations` contracts remain;
+`observations.sync` identifies this invocation even if a saved older checkpoint
+remains after a persistence failure. `stop_reason` is `idle`, `cancelled`,
+`deadline_exceeded`, `logged_out` or `failed`; idle/stopped is not completeness.
+Cancellation/logout can still keep the existing successful command exit status.
+Startup/connection errors and storage-limit failures do not certify normal sync.
+
+Checkpoints happen at start, binding to a connection execution, observed connection
+transitions, history blobs, replay signals, new recovery outcomes/codes, stop and
+post-drain cleanup. No diagnostic write is added per message, keepalive, or
+HEARTBEAT tick, and no new worker or connection is started. Recovery uses the
+existing five collections × seven phases (at most 35 observations), retaining
+all completed/failed/cancelled/unconfirmed kinds and fixed diagnostic codes in
+that execution. `first_observed_at` and `last_observed_at` bound observations;
+`completed_at`, `failed_at`, `cancelled_at`, `unconfirmed_at` retain the most recent
+date of each kind. Later completion cannot erase an earlier failure or uncertainty.
+A new Sync replaces the old Sync slot rather than accumulating executions.
+Preventive shutdown replay debt stays separate and can exist with zero failures.
+
+With `--events`, `sync_started`, `sync_stopped` and
+`sync_observations_finalized` add execution correlation. Connection, history,
+replay, idle/stop/reconnect/progress and app-state recovery-request lifecycle
+signals add `execution_id` and `observed_at` to their existing data. The stopped
+event precedes App cleanup; the finalized event and successful CLI summary include
+known drained callbacks and final replay restoration. Persistence failure is
+explicit even in a finalized event; finalized never promises durable success.
+These stderr events are transient diagnostics, not a durable consumer feed.

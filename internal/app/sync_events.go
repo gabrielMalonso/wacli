@@ -181,10 +181,11 @@ func (a *App) addSyncEventHandler(ctx context.Context, opts SyncOptions, message
 					"recovery":         recovery,
 				})
 		case *events.OfflineSyncPreview:
+			syncDiagnosticRun(ctx).updateSync(func(s *SyncObservation) { s.OfflinePreviewAt = diagnosticTime() })
 			lastEvent.Store(nowUTC().UnixNano())
 			// Emitted right after connecting when the server is about to send
 			// what this device missed while it was down.
-			a.emitOrPrint("offline_sync_preview", map[string]any{
+			a.emitOrPrintSync(ctx, "offline_sync_preview", map[string]any{
 				"total":            v.Total,
 				"messages":         v.Messages,
 				"receipts":         v.Receipts,
@@ -192,15 +193,20 @@ func (a *App) addSyncEventHandler(ctx context.Context, opts SyncOptions, message
 				"app_data_changes": v.AppDataChanges,
 			}, "\nReplaying offline backlog: %d message(s), %d event(s) total.\n", v.Messages, v.Total)
 		case *events.OfflineSyncCompleted:
+			syncDiagnosticRun(ctx).updateSync(func(s *SyncObservation) {
+				s.OfflineCompletedAt = diagnosticTime()
+				count := v.Count
+				s.OfflineCompletedCount = &count
+			})
 			lastEvent.Store(nowUTC().UnixNano())
-			a.emitOrPrint("offline_sync_completed", map[string]any{
+			a.emitOrPrintSync(ctx, "offline_sync_completed", map[string]any{
 				"count": v.Count,
 			}, "\nOffline backlog replayed (%d event(s)).\n", v.Count)
 		case *events.Connected:
 			// Group changes made while disconnected may not all come back as
 			// events: ask for every group's info afresh.
 			a.forgetAllGroupInfo()
-			a.emitOrPrint("connected", nil, "\nConnected.\n")
+			a.emitOrPrintSync(ctx, "connected", nil, "\nConnected.\n")
 			ps.mu.Lock()
 			if !ps.cleanupStarted && opts.PresenceMode.SendsAvailablePresence() {
 				a.sendPresenceBounded(types.PresenceAvailable)
@@ -215,7 +221,7 @@ func (a *App) addSyncEventHandler(ctx context.Context, opts SyncOptions, message
 			}
 			ps.mu.Unlock()
 		case *events.Disconnected:
-			a.emitOrPrint("disconnected", nil, "\nDisconnected.\n")
+			a.emitOrPrintSync(ctx, "disconnected", nil, "\nDisconnected.\n")
 			select {
 			case disconnected <- struct{}{}:
 			default:
@@ -234,11 +240,12 @@ func (a *App) addSyncEventHandler(ctx context.Context, opts SyncOptions, message
 		case *wa.AppStateKeyUnavailable:
 			a.warnEmptyAppStateKey(v)
 		case *events.LoggedOut:
+			syncDiagnosticRun(ctx).updateSync(func(s *SyncObservation) { s.StopReason = "logged_out" })
 			// WhatsApp revoked this session (linked device removed on the phone,
 			// or a logout/ban). whatsmeow reconnects on Disconnected, so without
 			// this the follow loop spins forever against a dead session. Surface
 			// the logout and signal the loop to stop instead of reconnecting.
-			a.emitOrPrint("logged_out", map[string]any{
+			a.emitOrPrintSync(ctx, "logged_out", map[string]any{
 				"reason":      v.Reason.String(),
 				"reason_code": int(v.Reason),
 				"on_connect":  v.OnConnect,
@@ -599,7 +606,7 @@ func (a *App) handleLiveSyncMessage(ctx context.Context, opts SyncOptions, v *ev
 		if incrementUnread {
 			a.incrementLiveUnread(ctx, pm)
 		}
-		a.emitSyncProgress(messagesStored.Add(1))
+		a.emitSyncProgress(ctx, messagesStored.Add(1))
 		if enqueueWebhook != nil {
 			enqueueWebhook(pm)
 		}
@@ -711,7 +718,8 @@ func (a *App) handleHistorySync(ctx context.Context, opts SyncOptions, v *events
 	}
 	var unhandledWarnings historyUnhandledPayloadWarnings
 	defer unhandledWarnings.flush(a)
-	a.emitOrPrint("history_sync", map[string]any{
+	observeHistorySync(ctx, v.Data)
+	a.emitOrPrintSync(ctx, "history_sync", map[string]any{
 		"conversations": len(v.Data.Conversations),
 		"sync_type":     v.Data.GetSyncType().String(),
 		"chunk_order":   v.Data.ChunkOrder,
@@ -803,7 +811,7 @@ func (a *App) handleHistorySync(ctx context.Context, opts SyncOptions, v *events
 			}
 			if err := storeErr; err == nil {
 				unhandledWarnings.observe(a, pm)
-				a.emitSyncProgress(messagesStored.Add(1))
+				a.emitSyncProgress(ctx, messagesStored.Add(1))
 				if sender != "" && (pm.Poll != nil || pm.PollAdd != nil || pm.PollVote != nil) {
 					pendingPolls = append(pendingPolls, historyPollSideEffect{pm: pm, evt: pollEvt, hist: m.Message})
 				}
@@ -827,7 +835,7 @@ func (a *App) handleHistorySync(ctx context.Context, opts SyncOptions, v *events
 		a.handleHistoryPollSideEffectsBatch(flushCtx, pendingPolls)
 	}
 	if !a.eventsEnabled() {
-		a.emitOrPrint("progress", map[string]any{"messages_synced": messagesStored.Load()}, "\rSynced %d messages...", messagesStored.Load())
+		a.emitOrPrintSync(ctx, "progress", map[string]any{"messages_synced": messagesStored.Load()}, "\rSynced %d messages...", messagesStored.Load())
 	}
 }
 
@@ -909,11 +917,11 @@ func (a *App) storeHistoryUnreadCount(ctx context.Context, chatID string, conv *
 	}
 }
 
-func (a *App) emitSyncProgress(total int64) {
+func (a *App) emitSyncProgress(ctx context.Context, total int64) {
 	if total <= 0 || total%25 != 0 {
 		return
 	}
-	a.emitOrPrint("progress", map[string]any{"messages_synced": total}, "\rSynced %d messages...", total)
+	a.emitOrPrintSync(ctx, "progress", map[string]any{"messages_synced": total}, "\rSynced %d messages...", total)
 }
 
 func (a *App) storeParsedMessageForSync(ctx context.Context, pm wa.ParsedMessage, limits ...*syncStorageLimits) error {

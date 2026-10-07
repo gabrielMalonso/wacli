@@ -91,6 +91,9 @@ type SyncResult struct {
 }
 
 func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, syncErr error) {
+	if a.opts.ReadOnly {
+		return SyncResult{}, fmt.Errorf("read-only mode: command would sync WhatsApp")
+	}
 	run := &appStateRecoveryRun{}
 	ctx = context.WithValue(ctx, appStateRecoveryRunKey{}, run)
 	defer func() { result.recovery, result.storeDir = run, a.StoreDir() }()
@@ -100,6 +103,18 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 	if opts.Mode == "" {
 		opts.Mode = SyncModeFollow
 	}
+	run.diagnostic = newDiagnosticRun(a, opts.Mode, run)
+	a.waMu.Lock()
+	a.appStateRecoveryOnClose = run
+	a.waMu.Unlock()
+	defer func() {
+		result.recovery, result.storeDir = run, a.StoreDir()
+		run.diagnostic.finishSync(syncErr, ctx.Err(), result.MessagesStored)
+		if a.eventsEnabled() {
+			a.emitSyncObservationEvent(ctx, "sync_stopped", map[string]any{"observations": result.ObservationsSnapshot()})
+		}
+	}()
+	a.emitSyncObservationEvent(ctx, "sync_started", nil)
 	if opts.PresenceMode == "" {
 		opts.PresenceMode = SyncPresenceModeNormal
 	}
@@ -134,6 +149,10 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 	if err := a.OpenWA(); err != nil {
 		return SyncResult{}, err
 	}
+	run.diagnostic.updateSync(func(s *SyncObservation) {
+		run.diagnostic.connectionRun = a.sessionState.diagnostic
+		s.ConnectionExecutionID = a.sessionState.diagnostic.connection.ExecutionID
+	})
 	a.waMu.Lock()
 	a.appStateReplayOnClose = true
 	a.appStateRecoveryOnClose = run

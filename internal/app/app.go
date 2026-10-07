@@ -210,6 +210,7 @@ func (a *App) OpenWA() error {
 	}
 	if a.sessionState == nil {
 		state := newSessionObservation(a.opts.StoreDir)
+		state.diagnostic = newDiagnosticRun(a, "", nil)
 		a.sessionState = state
 		observer := newOutboundObserver(a, a.wa)
 		a.outboundEvents = observer
@@ -272,6 +273,12 @@ func (a *App) close() {
 				}
 				a.emitWarning("app_state_recovery_marker_failed", fmt.Sprintf("warning: preserve app state replay on close: %v", err), nil)
 			}
+		}
+		if sessionState != nil {
+			sessionState.diagnostic.close()
+		}
+		if recoveryRun != nil {
+			recoveryRun.diagnostic.close()
 		}
 		_ = a.db.Close()
 	}

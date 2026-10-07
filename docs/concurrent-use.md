@@ -32,3 +32,9 @@ wacli --account personal outbound show --key 'scheduled-2026-10-04' --account-ji
 These are separate invocations; placeholders refer to previously prepared drafts and the frozen own PN. Keep each command's stdout, stderr and exit status with that task. Inspect the returned operation ID, or its exact key plus frozen own PN, after uncertainty. Reusing the same retained binding returns its known result and IDs without another application send invocation, including when pending or uncertain. A new key can duplicate a remote message; archive loss or rollback can remove the retained protection. Do not automatically resend to resolve uncertainty. The SDK may retransmit the same message/ID during or after the original call, including after an uncertain result.
 
 Legacy sends retain their existing bounded application retry and output contracts; they do not gain frozen revision/hash/key idempotency or retained uncertain-operation lookup. `accepted` is not delivery or reading evidence. Separate requests still share the account's WhatsApp conversation state, read markers, archive/pin/mute settings and local history. There is no transaction spanning requests, the network and both databases, no conversation reservation, and no worker assignment or consumer processing checkpoint.
+
+Offline doctor reads bounded [historical checkpoints](doctor.md#retained-connection-and-sync-observations)
+through readonly SQLite while an owner holds LOCK and writes WAL. LOCK, socket,
+authentication and HEARTBEAT are separate observations; none make a saved login
+or unfinalized Sync checkpoint proof of current liveness. Readability failure
+stays unknown and never grants a second writer/connection or automatic retry.
