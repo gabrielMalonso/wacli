@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -67,6 +68,15 @@ func open(path string, readOnly bool) (*DB, error) {
 	if err := s.init(); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if exists, err := s.tableExists("messages"); err != nil || exists {
+		if err == nil {
+			err = validateChangeSchema(context.Background(), db)
+		}
+		if err != nil {
+			_ = db.Close()
+			return nil, err
+		}
 	}
 	if err := sqliteutil.ChmodFiles(path, 0o600); err != nil {
 		_ = db.Close()

@@ -90,7 +90,7 @@ func execute(args []string) error {
 	registerAccountBinding(rootCmd, &flags)
 	rootCmd.PersistentFlags().BoolVar(&flags.asJSON, "json", false, "output JSON instead of human-readable text")
 	rootCmd.PersistentFlags().BoolVar(&flags.agent, "agent", false, "output the versioned agent JSON contract (queries, media status/download/retry/transcribe, drafts, history recovery, outbound dispatch and explicit unread/archive state)")
-	rootCmd.PersistentFlags().StringVar(&flags.cursor, "cursor", "", "resume agent list or temporal search pagination")
+	rootCmd.PersistentFlags().StringVar(&flags.cursor, "cursor", "", "resume changes list or agent list/temporal search pagination")
 	rootCmd.PersistentFlags().StringVar(&flags.detail, "detail", "compact", "agent detail: compact|full (requires --agent)")
 	rootCmd.PersistentFlags().BoolVar(&flags.fullOutput, "full", false, "disable truncation in table output")
 	rootCmd.PersistentFlags().BoolVar(&flags.events, "events", false, "emit machine-readable NDJSON lifecycle events on stderr")
@@ -104,6 +104,7 @@ func execute(args []string) error {
 	rootCmd.AddCommand(newAuthCmd(&flags))
 	rootCmd.AddCommand(newSyncCmd(&flags))
 	rootCmd.AddCommand(newMessagesCmd(&flags))
+	rootCmd.AddCommand(newChangesCmd(&flags))
 	rootCmd.AddCommand(newCallsCmd(&flags))
 	rootCmd.AddCommand(newSendCmd(&flags))
 	rootCmd.AddCommand(newPollCmd(&flags))
@@ -175,8 +176,9 @@ func execute(args []string) error {
 	}
 	if intent.cursorSet && !intent.help {
 		c, _, findErr := rootCmd.Find(args)
-		if !intent.agent || findErr != nil || (c.CommandPath() != "wacli messages list" && c.CommandPath() != "wacli messages search" && c.CommandPath() != "wacli chats list" && c.CommandPath() != "wacli contacts list" && c.CommandPath() != "wacli contacts search" && c.CommandPath() != "wacli draft list" && c.CommandPath() != "wacli draft cleanup preview" && c.CommandPath() != "wacli outbound list" && c.CommandPath() != "wacli outbound show") {
-			err := agentUsageError(fmt.Errorf("--cursor requires --agent messages list, --agent messages search --sort time, --agent chats list or --agent contacts list/search or --agent draft list/cleanup preview or --agent outbound list/show"))
+		changesCursor := findErr == nil && c.CommandPath() == "wacli changes list"
+		if !changesCursor && (!intent.agent || findErr != nil || (c.CommandPath() != "wacli messages list" && c.CommandPath() != "wacli messages search" && c.CommandPath() != "wacli chats list" && c.CommandPath() != "wacli contacts list" && c.CommandPath() != "wacli contacts search" && c.CommandPath() != "wacli draft list" && c.CommandPath() != "wacli draft cleanup preview" && c.CommandPath() != "wacli outbound list" && c.CommandPath() != "wacli outbound show")) {
+			err := agentUsageError(fmt.Errorf("--cursor requires --agent messages list, --agent messages search --sort time, --agent chats list or --agent contacts list/search or --agent draft list/cleanup preview or --agent outbound list/show or changes list"))
 			writeRootError(flags, err)
 			return err
 		}

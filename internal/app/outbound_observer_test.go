@@ -172,6 +172,15 @@ func TestOutboundEventGroupParticipantAliases(t *testing.T) {
 		t.Fatal(partial, participants, err)
 	}
 	sdk.DangerousInternals().HandleGroupedReceipt(*partial, &participants[0])
+	feed := appChanges(t, a, "")
+	if len(feed.Changes) != 2 {
+		t.Fatalf("grouped receipt feed %+v", feed)
+	}
+	for _, change := range feed.Changes {
+		if change.Receipt == nil || change.Receipt.SenderAlt != first.SenderAlt.String() || change.Receipt.ActorJID == first.SenderAlt.String() || change.FromMe == nil || *change.FromMe != partial.IsFromMe {
+			t.Fatalf("altered SDK observation %+v", change)
+		}
+	}
 	// Independently exercise a stale own flag with the actual participant intact.
 	f.emit(first)
 	e := outboundEventEntry(t, a, o)
@@ -398,10 +407,22 @@ func TestOutboundEventBoundsFailuresAndLateCallbacks(t *testing.T) {
 		t.Fatal("cap bypassed")
 	}
 	var warning struct {
-		Data struct{ Examined, Skipped int }
+		Data struct {
+			Code              string
+			Examined, Skipped int
+		}
 	}
-	if err := json.Unmarshal(bytes.TrimSpace(log.Bytes()), &warning); err != nil || warning.Data.Examined != 200 || warning.Data.Skipped != 3 {
-		t.Fatal(warning, err, log.String())
+	decoder := json.NewDecoder(bytes.NewReader(log.Bytes()))
+	for decoder.More() {
+		if err := decoder.Decode(&warning); err != nil {
+			t.Fatal(err, log.String())
+		}
+		if warning.Data.Code == "outbound_evidence_incomplete" {
+			break
+		}
+	}
+	if warning.Data.Code != "outbound_evidence_incomplete" || warning.Data.Examined != 200 || warning.Data.Skipped != 3 {
+		t.Fatal(warning, log.String())
 	}
 	log.Reset()
 	looked, released := make(chan struct{}), make(chan struct{})

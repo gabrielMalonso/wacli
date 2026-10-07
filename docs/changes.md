@@ -1,0 +1,58 @@
+# Durable archive changes
+
+Read when: consuming local WhatsApp archive mutations across agent/process restarts.
+
+```bash
+wacli --account example-account --read-only --agent changes list --limit 20
+wacli --account example-account --read-only --agent changes list --cursor "$saved_cursor" --limit 200
+wacli --store /path/to/archive --json changes list --limit 50
+```
+
+Select the intended account explicitly. `changes list` always opens only the existing `wacli.db` read-only, including without `--read-only`. It never acquires writer `LOCK`, initializes/migrates a store, reads `session.db`, opens a WhatsApp client, refreshes identities, or delegates to an owner. Each page reads one SQLite snapshot and sees committed WAL changes alongside a writer. Normal SQLite WAL/SHM bookkeeping remains possible. An old/unversioned/newer or incompatible store fails with sanitized `store_unavailable` (agent exit 4); an explicit authorized writer upgrade is required for schema **33**. Do not run auth/sync automatically to repair a query error: those commands may connect.
+
+## Start, end and restart
+
+Without `--cursor`, reading starts at the beginning of the **retained local feed**, including previously consumed entries. There is no implicit “now”, timestamp filter, chat filter, wait/follow mode or stored consumer position. The limit is 1–200; human/legacy JSON defaults to 50, agent to 20. Page size and compact/full detail can change on continuation.
+
+Every successful page returns a nonempty opaque `next_cursor`, **including an empty or final page**. `has_more=false` means no additional entries in that read's snapshot; future commits can still appear using that same cursor. Persist the cursor after processing the corresponding page. If the consumer crashes before saving it, reading with the previous cursor repeats retained entries, with the same `event_id`. Atomically updating the consumer's own state/checkpoint or deduplicating by archive plus `event_id` is the consumer's responsibility. No remote exactly-once, delivery guarantee, workflow routing or processing acknowledgement is implied.
+
+Legacy `--json` returns the existing `{success,data,error}` envelope with `data={changes,has_more,next_cursor,introduced_at}`. Tables print event ID/kind/chat/message ID followed by `has_more` and `next_cursor`. With `--agent`, `data={changes,introduced_at}` and navigation is in `meta.page={returned,has_more,next_cursor}`. `meta.source=local`, freshness/completeness remain `unknown`, and compact/full return the same reference DTO. Legacy outputs of other commands remain unchanged.
+
+`introduced_at` dates the feed's writable introduction into this file, not WhatsApp availability or historical coverage. A newly upgraded archive has an empty feed even when old messages exist. Replayed historical messages only generate entries when the existing ingestion rules actually change persisted state.
+
+## Retained references and receipt observations
+
+Each change contains stable `event_id`, local `recorded_at`, `kind`, exact `chat_jid` and message `id`, optional stored `from_me`, `sender_jid`, and `tombstone` when applicable. Mapping entries have no message flags; receipts have no tombstone flag. These flags describe the persisted row/received event; they do not repair an old sender attribution or prove account authorship. IDs/JIDs are public correlation fields. No text, captions, media bytes/keys/hashes/direct paths, local file paths, SQL, protobuf or private causes are copied into the log or public errors.
+
+| Kind | Meaning |
+| --- | --- |
+| `message_insert` | A new row in `messages`; this includes native/manual history and the existing local sent-message projection. |
+| `message_update` | A row actually changed, including a supported edit, sender/quote identity or stored metadata/media enrichment. |
+| `message_tombstone` | An inserted/changed row has `deleted_at`, including revoke, delete-for-me and payload purge. Later enrichment of a tombstone can produce another such entry. |
+| `message_delete` | A row was physically removed, including local retention/cleanup, chat deletion or PN/LID key migration. It is not proof of remote WhatsApp deletion. |
+| `identity_mapping` | Existing verified LID-to-PN repair rewrites relevant message identities; `previous_chat_jid` contains the old LID and `chat_jid` the PN, with empty `id`. |
+| `receipt` | A retained SDK receipt observation, independent of whether the message exists locally or matches a retained outbound operation. |
+
+Message identity is the exact stored `(chat_jid,id)` tuple, not rowid or an invented globally unique WhatsApp ID. The same ID in different chats remains distinct. PN/LID repair retains its mapping entry and normal destination insert/update plus source deletion in the same transaction; sender/quote rewrites also generate updates. Consumers can use the retained mapping to reconcile keys. A missing mapping stays unknown; the reader never expands aliases or infers a phone number from a LID.
+
+Coverage is the `messages` table, related PN/LID repair and the selected receipt callbacks. Separate location/poll/vote/star tables, status broadcasts, contacts/chat metadata, call records, drafts/outbound facts and diagnostics are outside this minimum feed unless their existing paths also change a `messages` row. In particular, a location/star write after a message insert has no separate feed notification.
+
+The feed is a **notification log**, not versioned message content. Read the current row with exact `messages show --chat JID --id ID`; it may have changed again or been physically removed by then. Tombstones remain directly readable until removed. Unchanged SDK/history duplicates add no message entry. Same-second edits or other replays that really change state add an entry under the existing upsert rules. Ordering is local SQLite mutation order, not remote causality or WhatsApp message chronology. One SDK event may commit multiple independent existing domain writes; the feed covers each `messages` statement in its own transaction, without making those separate commits atomic as a whole.
+
+Receipt `receipt={type,actor_jid,actor_device,sender_alt?,recipient_alt?,message_sender?,event_at}` retains the received public scope. The SDK's empty delivered type is spelled `delivered`; supported types are `delivered`, `read`, `read-self`, `played`, `played-self`, and `sender`. `from_me` is the SDK event flag, not proof that the referenced message is outgoing. Actor/chat and optional PN/LID aliases are preserved as received, without discovery or corroboration. Grouped SDK parsing can inherit alias/FromMe fields; their presence is not a verified mapping or participant-wide result. Self/device, group, broadcast and played observations do not establish recipient delivery/read. Use [outbound](outbound.md) for its separately guarded evidence semantics.
+
+Exact receipt duplicates are suppressed by `(chat,id,type,actor,device,from_me,sender_alt,recipient_alt,message_sender,event_at)` at whole-second SDK timestamp precision. A later timestamp or enriched/different public scope is a new observation. The first 200 IDs in a callback are considered, empty IDs skipped, with one separate two-second processing context and one atomic receipt batch. The admitted client-lifetime handler runs alongside sync and standalone connected operations and drains before archive/LOCK release. Control/error/unknown types, malformed empty chat/actor, and historical embedded receipt arrays are outside this coverage. No observation is promised before the handler exists, while disconnected/offline, after cancellation/exit, or when the SDK does not emit an event. Overflow/persistence failure emits sanitized `change_receipt_incomplete` with counts/boolean; that warning is best-effort, not a durable loss ledger or a complete-prefix assertion. Existing unread-self and outbound evidence persist independently and retain their original guarantees; no send/retry is authorized by missing observations.
+
+## Atomicity, retention and file continuity
+
+SQLite triggers append message changes inside the mutation's transaction, including direct SQL paths used by production purge/cleanup/media/identity repair. No-op updates add nothing. A rollback removes both mutation and feed entries. A failed feed append aborts the relevant message statement; a failed receipt batch rolls back its entries. Errors still flow through the existing write paths, including their explicit secondary-history warnings after a send. Receipt insertion is itself the durable observation; it does not atomically change existing chat unread or outbound evidence. Commit-response uncertainty does not authorize replay of an external effect. The feed uses the archive's existing WAL/synchronous policy: it promises SQLite transaction coherence, not power-loss survival or atomicity with network/`session.db`.
+
+There is **no automatic feed retention, truncation, GC or consumer-ack system**. Entries and receipt dedup keys grow for the lifetime of the archive, even after message cleanup. Existing sync DB-size limits still measure archive growth; message-count limits do not cap the log. Payload purge removes message content, while the feed keeps public correlation references. Do not manually truncate/change feed tables, triggers, identity or SQLite sequences, and do not use an old writer to bypass schema compatibility. Missing required feed objects fail the query; reopening a normal archive with a missing required object refuses the writer rather than silently continuing.
+
+The cursor binds its version/operation to the resolved store reference, selected account name (when present), random identity retained in this SQLite file and last returned event's sequence/random ID. Changing account selection, moving/cloning to another path or replacing the file with another identity rejects it as `invalid_cursor` (agent exit 2). Even selecting the same path once by name and once manually changes the selection scope. The cursor contains no credentials, is not a secret/authentication token, and must be passed unchanged.
+
+A missing or changed retained anchor gives `cursor_expired` (agent exit 2), including a restored divergent branch reusing its sequence. No automatic reset occurs: inspect continuity before deliberately restarting from the retained beginning. The reader cannot detect every clone/restore/rollback: a byte clone restored at the same path with the same identity and unchanged anchor is indistinguishable; rollback before any event cursor or changes lost after an unchanged anchor may escape detection. Deleting an earlier prefix while retaining the anchor is unsupported and cannot be diagnosed universally. Keep external backup provenance and reconcile consumer checkpoints when restoring. The feed does not certify archive/session continuity, WhatsApp completeness, current connection, freshness, “since offline” recovery or the two bounded connection/Sync diagnostic snapshots.
+
+## Offline validation
+
+Synthetic real SQLite/production-path fixtures cover committed changes, rollback and feed-write failure, no-op replay, native history edits, tombstones, stored enrichment, physical removal, PN/LID repair, receipt batch dedup/rollback/cancellation/limits, actual reopen and file/selection isolation, anchor divergence/truncation and readonly WAL reads under writer LOCK. Old archives are refused without writes and upgrades do not backfill old rows. No real account, patient archive, WhatsApp connection or remote success is exercised.

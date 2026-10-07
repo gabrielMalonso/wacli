@@ -97,6 +97,7 @@ func (o *outboundObserver) event(state *sessionObservation, evt any) {
 	switch v := evt.(type) {
 	case *events.Receipt:
 		batch.receipt(v)
+		o.app.recordReceiptChange(ctx, v)
 	case *events.Message:
 		batch.liveEcho(v)
 	}

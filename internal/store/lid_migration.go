@@ -93,6 +93,13 @@ func (d *DB) MigrateLIDToPN(lidJID, pnJID string) error {
 		}
 	}()
 
+	// Retain the proven rewrite with its message mutations in the same commit.
+	if _, err := tx.Exec(`INSERT INTO archive_changes(kind,chat_jid,msg_id,previous_chat_jid)
+		SELECT 'identity_mapping',?,'',? WHERE EXISTS(
+		 SELECT 1 FROM messages WHERE chat_jid=? OR sender_jid=? OR quoted_sender_jid=?)`,
+		pnJID, lidJID, lidJID, lidJID, lidJID); err != nil {
+		return err
+	}
 	if err := migrateLIDChatToPN(tx, lidJID, pnJID); err != nil {
 		return err
 	}
