@@ -103,10 +103,11 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 	if opts.Mode == "" {
 		opts.Mode = SyncModeFollow
 	}
-	run.diagnostic = newDiagnosticRun(a, opts.Mode, run)
+	// Fence older failed starts before the new run's first retention attempt.
 	a.waMu.Lock()
 	a.appStateRecoveryOnClose = run
 	a.waMu.Unlock()
+	run.diagnostic = newDiagnosticRun(a, opts.Mode, run)
 	defer func() {
 		result.recovery, result.storeDir = run, a.StoreDir()
 		run.diagnostic.finishSync(syncErr, ctx.Err(), result.MessagesStored)

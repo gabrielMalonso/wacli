@@ -86,3 +86,30 @@ func TestDiagnosticSnapshotMigrationExplicitOnly(t *testing.T) {
 		t.Fatal("migration invented observations")
 	}
 }
+
+func TestDiagnosticRetentionRecoveryCAS(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "wacli.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	first, second, third := strings.Repeat("1", 32), strings.Repeat("2", 32), strings.Repeat("3", 32)
+	if previous, err := db.DiagnosticSnapshotExecutionID(t.Context(), "sync"); err != nil || previous != "" {
+		t.Fatal("absent slot was not observed")
+	}
+	if err := db.RecoverDiagnosticSnapshot(t.Context(), "sync", first, "", []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecoverDiagnosticSnapshot(t.Context(), "sync", second, first, []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.StartDiagnosticSnapshot(t.Context(), "sync", third, []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecoverDiagnosticSnapshot(t.Context(), "sync", second, first, []byte(`{}`)); err == nil {
+		t.Fatal("recovery overwrote newer slot")
+	}
+	if id, err := db.DiagnosticSnapshotExecutionID(t.Context(), "sync"); err != nil || id != third {
+		t.Fatal("newer execution lost")
+	}
+}

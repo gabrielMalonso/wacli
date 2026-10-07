@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 )
@@ -23,6 +24,37 @@ func (d *DB) StartDiagnosticSnapshot(ctx context.Context, slot, id string, paylo
 		return fmt.Errorf("invalid diagnostic snapshot")
 	}
 	_, err := d.sql.ExecContext(ctx, `INSERT INTO diagnostic_snapshots(slot, execution_id, payload) VALUES(?,?,?) ON CONFLICT(slot) DO UPDATE SET execution_id=excluded.execution_id,payload=excluded.payload`, slot, id, payload)
+	return err
+}
+
+// DiagnosticSnapshotExecutionID captures the slot before an attempted start.
+// Empty means observed absence; an error must not become that empty token.
+func (d *DB) DiagnosticSnapshotExecutionID(ctx context.Context, slot string) (string, error) {
+	var id string
+	err := d.sql.QueryRowContext(ctx, `SELECT execution_id FROM diagnostic_snapshots WHERE slot=?`, slot).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
+// RecoverDiagnosticSnapshot retries retention at a later checkpoint only against
+// the observed prior execution or this run's own possible lost start reply.
+// A newer retained execution must never be replaced by old cleanup.
+func (d *DB) RecoverDiagnosticSnapshot(ctx context.Context, slot, id, previousID string, payload []byte) error {
+	if !validDiagnosticSnapshot(slot, id, payload) || previousID != "" && len(previousID) != 32 {
+		return errors.New("invalid diagnostic snapshot")
+	}
+	result, err := d.sql.ExecContext(ctx, `INSERT INTO diagnostic_snapshots(slot,execution_id,payload) VALUES(?,?,?)
+ ON CONFLICT(slot) DO UPDATE SET execution_id=excluded.execution_id,payload=excluded.payload
+ WHERE diagnostic_snapshots.execution_id=? OR diagnostic_snapshots.execution_id=excluded.execution_id`, slot, id, payload, previousID)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err == nil && count != 1 {
+		return errors.New("diagnostic execution not retained")
+	}
 	return err
 }
 

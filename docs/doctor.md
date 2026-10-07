@@ -35,7 +35,15 @@ Human output and legacy/agent JSON add `observations` version 1, always labelled
 last connection execution and last Sync execution, each with its own random
 `execution_id`, start/checkpoint dates and optional stop/cleanup dates. Opening
 `doctor --connect` can replace the connection slot; it does not replace Sync or
-its recovery facts. `sync.connection_execution_id` references the connection
+its recovery facts. With `--connect`, the report also adds `invocation_connection`,
+explicitly identifying this invocation's in-memory connection checkpoint/ID and
+`persistence_unconfirmed`, even if `observations.connection` still describes an
+older execution. This is separate from saved historical evidence and remains a
+dated checkpoint, not a liveness guarantee. Human output uses `INVOCATION_` rows;
+offline legacy/agent doctor has no invocation connection and keeps its unknown
+current connectivity. A persistence warning carries sanitized `slot`,
+`execution_id` and `observed_at`, and human warnings identify the same slot/ID.
+`sync.connection_execution_id` references the connection
 execution used by that run, which may differ from the latest connection slot.
 The archive/store selection scopes these observations; no JIDs, message bodies,
 phone numbers, raw SDK/SQL errors or secret material are added to these snapshots.
@@ -79,7 +87,10 @@ Snapshots are best effort under the archive's existing WAL/synchronous policy,
 not FULL durability guarantees or transactions across `session.db` and `wacli.db`.
 A failed write emits sanitized `diagnostics_persistence_unconfirmed`; current-run
 summary/events mark `persistence_unconfirmed=true`. It remains true for that run
-even if later writes succeed. Offline doctor can only read the last saved
+even if later writes succeed. A later checkpoint can recover a failed start
+only into an absent slot or against the previously observed execution (or its
+own ID); a newer execution blocks that recovery. This adds no background retries.
+Offline doctor can only read the last saved
 checkpoint, possibly from an older execution, and cannot recover facts that were
 never saved. Compare execution IDs and dates; absence does not prove no activity.
 Each slot is capped at 64 KiB; replacing a slot discards its older execution.

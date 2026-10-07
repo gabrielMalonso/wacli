@@ -71,13 +71,15 @@ type SyncObservation struct {
 // Writes are synchronous, bounded checkpoints under the existing writer/owner.
 // No heartbeat worker or message-by-message diagnostic writes are introduced.
 type diagnosticRun struct {
-	mu            sync.Mutex
-	app           *App
-	connection    *ConnectionObservation
-	sync          *SyncObservation
-	recovery      *appStateRecoveryRun
-	connectionRun *diagnosticRun // connection lifetime used by this Sync; immutable after binding
-	closed        bool
+	mu                  sync.Mutex
+	app                 *App
+	connection          *ConnectionObservation
+	sync                *SyncObservation
+	recovery            *appStateRecoveryRun
+	connectionRun       *diagnosticRun // connection lifetime used by this Sync; immutable after binding
+	closed              bool
+	started             bool
+	previousExecutionID *string
 }
 
 func newDiagnosticRun(a *App, mode SyncMode, recovery *appStateRecoveryRun) *diagnosticRun {
@@ -119,9 +121,33 @@ func (r *diagnosticRun) persistLocked(start bool) {
 	if err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		if start {
+			previous, readErr := r.app.db.DiagnosticSnapshotExecutionID(ctx, slot)
+			if readErr == nil {
+				r.previousExecutionID = &previous
+			}
 			err = r.app.db.StartDiagnosticSnapshot(ctx, slot, id, raw)
+		} else if !r.started {
+			current := true
+			if r.recovery != nil {
+				r.app.waMu.Lock()
+				current = r.app.appStateRecoveryOnClose == r.recovery
+				r.app.waMu.Unlock()
+			}
+			if current {
+				// Without a readable prior token, only an absent slot or our own ID can match.
+				previous := ""
+				if r.previousExecutionID != nil {
+					previous = *r.previousExecutionID
+				}
+				err = r.app.db.RecoverDiagnosticSnapshot(ctx, slot, id, previous, raw)
+			} else {
+				err = errors.New("diagnostic execution superseded")
+			}
 		} else {
 			err = r.app.db.SaveDiagnosticSnapshot(ctx, slot, id, raw)
+		}
+		if err == nil {
+			r.started = true
 		}
 		cancel()
 	}
@@ -135,7 +161,7 @@ func (r *diagnosticRun) persistLocked(start bool) {
 			r.sync.PersistenceUnconfirmed = true
 		}
 		if first {
-			r.app.emitWarning("diagnostics_persistence_unconfirmed", "warning: connection/sync diagnostics could not be retained; saved checkpoints may be older or absent", nil)
+			r.app.emitWarning("diagnostics_persistence_unconfirmed", "warning: "+slot+" diagnostics for execution "+id+" could not be retained; saved checkpoints may be older or absent", map[string]any{"slot": slot, "execution_id": id, "observed_at": nowUTC()})
 		}
 	}
 }
@@ -387,4 +413,25 @@ func (a *App) emitSyncObservationEvent(ctx context.Context, event string, data m
 }
 func (a *App) emitOrPrintSync(ctx context.Context, event string, data map[string]any, format string, args ...any) {
 	a.emitOrPrint(event, a.syncEventData(ctx, data), format, args...)
+}
+
+// InvocationConnectionObservation copies this App's observed client facts even
+// when its persisted slot is older or absent. It never implies current liveness.
+func (a *App) InvocationConnectionObservation() *ConnectionObservation {
+	if a == nil {
+		return nil
+	}
+	a.waMu.Lock()
+	state := a.sessionState
+	a.waMu.Unlock()
+	if state == nil || state.diagnostic == nil {
+		return nil
+	}
+	r := state.diagnostic
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	raw, _ := json.Marshal(r.connection)
+	var observed ConnectionObservation
+	_ = json.Unmarshal(raw, &observed)
+	return &observed
 }
