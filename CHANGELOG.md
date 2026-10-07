@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Sync: prevent ordinary one-shot/bootstrap idle exit from cancelling admitted history downloads or persistence; reuse the existing callback observer and count offline replay signals as activity. Keep explicit cancellation, limits and legacy result fields unchanged. Add history blob type/chunk/progress to lifecycle diagnostics and clarify that replay completion, empty local search and backward backfill do not certify or automatically recover a newer offline gap. Fixture validation only; no remote completeness guarantee or identified cause for the reported live absence.
+
 - Accounts: correct strict-binding discovery when help/version precede a split selector, preserving typed selection errors; apply the registry refusal to `help accounts` targets, including subcommands. Keep unbound legacy behavior and Cobra's shell-completion protocol unchanged; completion exit 0 is not a command acceptance/dispatch result.
 
 - Accounts: add opt-in `-a NAME` / `--for-account NAME` to bind an invocation to an existing configured account, resolve selection once and reject every conflicting account/store selector before command effects, including help/version. Refuse global registry commands under binding; preserve legacy `--account`, output modes, readonly and operation policies. No wrapper, installation, config/schema/dependency change or automatic auth/sync.

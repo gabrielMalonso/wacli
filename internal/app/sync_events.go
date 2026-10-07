@@ -181,6 +181,7 @@ func (a *App) addSyncEventHandler(ctx context.Context, opts SyncOptions, message
 					"recovery":         recovery,
 				})
 		case *events.OfflineSyncPreview:
+			lastEvent.Store(nowUTC().UnixNano())
 			// Emitted right after connecting when the server is about to send
 			// what this device missed while it was down.
 			a.emitOrPrint("offline_sync_preview", map[string]any{
@@ -191,6 +192,7 @@ func (a *App) addSyncEventHandler(ctx context.Context, opts SyncOptions, message
 				"app_data_changes": v.AppDataChanges,
 			}, "\nReplaying offline backlog: %d message(s), %d event(s) total.\n", v.Messages, v.Total)
 		case *events.OfflineSyncCompleted:
+			lastEvent.Store(nowUTC().UnixNano())
 			a.emitOrPrint("offline_sync_completed", map[string]any{
 				"count": v.Count,
 			}, "\nOffline backlog replayed (%d event(s)).\n", v.Count)
@@ -709,7 +711,12 @@ func (a *App) handleHistorySync(ctx context.Context, opts SyncOptions, v *events
 	}
 	var unhandledWarnings historyUnhandledPayloadWarnings
 	defer unhandledWarnings.flush(a)
-	a.emitOrPrint("history_sync", map[string]any{"conversations": len(v.Data.Conversations)}, "\nProcessing history sync (%d conversations)...\n", len(v.Data.Conversations))
+	a.emitOrPrint("history_sync", map[string]any{
+		"conversations": len(v.Data.Conversations),
+		"sync_type":     v.Data.GetSyncType().String(),
+		"chunk_order":   v.Data.ChunkOrder,
+		"progress":      v.Data.Progress,
+	}, "\nProcessing history sync (%d conversations)...\n", len(v.Data.Conversations))
 	a.storeHistoryCallLogRecords(ctx, v, lastEvent)
 	account := a.historySenderAccount(ctx)
 	for _, conv := range v.Data.Conversations {

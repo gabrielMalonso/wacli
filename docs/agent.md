@@ -246,6 +246,8 @@ These are live local search pages with the same limits described above, without 
 
 For local queries, `meta.source` is `local`; `completeness` and `freshness` are **unknown** in v1. Local message bounds, row counts and anchor status describe only the archive. Coverage `ready` means a local anchor exists, not complete history. Missing timestamps are null. `last_message_at` is a message date, never a synchronization date. `last_activity_at` is the heartbeat date (possibly stale); a lock or heartbeat does not prove connectivity. Offline `connected` is always **unknown**.
 
+An empty local search after successful sync/offline replay is still only a local observation. `history backfill` paginates before its oldest local anchor and does not automatically target a newer offline gap. Keep coverage unknown, retain authorized sync lifecycle evidence, and never resend an uncertain operation to fill a missing archive row; see [missing offline messages](sync.md#missing-messages-after-an-offline-interval).
+
 | Exit | Error code | Meaning |
 | --- | --- | --- |
 | 0 | — | Successful query |
