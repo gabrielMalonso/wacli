@@ -47,7 +47,7 @@ Other commands, including mutations outside these explicit actions, media backfi
 
 All archive queries use the existing read-only opener, validate the archive schema without migration, and work while the writer lock is held. They never initialize a missing archive. Authentication status reads the public session JID and local revocation observation, without loading credentials or opening a WhatsApp client; an existing directory without a session reports unauthenticated. Offline doctor requires a readable current-schema archive; archive or auth-source failures are sanitized error envelopes with exit 4 and no auth data. Inspect session state separately with `auth status --agent` even if `wacli.db` is unreadable, or run legacy `doctor --json` (without `--agent` or `--connect`) to retain its diagnostic report and exit 0, including archive/auth-source errors in `store_error`. Legacy `authenticated=false` accompanied by an auth-source error is not a confirmed unauthenticated observation; known auth/JID data survives an archive-only failure. Neither command connects.
 
-Offline doctor's `app_state` is identical in compact/full: `reconciliation=required|none_recorded|unknown`, sorted/distinct `pending_collections` (`[]` only for a successful empty query, `null` when unavailable), and optional sanitized `error.code="recovery_state_unavailable"`. A recovery-query-only failure is embedded without changing exits; existing archive/schema/auth-source failures still exit 4. This debt read uses only `wacli.db`, without a session, writer lock or migration; existing auth inspection is separate. `recovery_observations=null` means historical outcomes were not persisted. Debt also arises preventively at normal shutdown; neither debt nor its absence proves recovery failure, integrity, completeness or freshness. See [sync's per-invocation observations](sync.md#app-state-summary) to inspect a known failed/cancelled/unconfirmed collection, phase and code. Sync remains unsupported with `--agent`.
+Offline doctor's `app_state` is identical in compact/full: `reconciliation=required|none_recorded|unknown`, sorted/distinct `pending_collections` (`[]` only for a successful empty query, `null` when unavailable), and optional sanitized `error.code="recovery_state_unavailable"`. A recovery-query-only failure is embedded without changing exits; existing archive/schema/auth-source failures still exit 4. This debt read uses only `wacli.db`, without a session, writer lock or migration; existing auth inspection is separate. Legacy `app_state.recovery_observations=null` describes the absence of invocation-local outcomes in offline doctor; retained historical outcomes are separate in `observations.sync.recovery_observations` when available. Debt also arises preventively at normal shutdown; neither debt nor its absence proves recovery failure, integrity, completeness or freshness. See [sync's per-invocation observations](sync.md#app-state-summary) to inspect a known failed/cancelled/unconfirmed collection, phase and code. Sync remains unsupported with `--agent`.
 
 ## Media observations and explicit output
 
@@ -292,3 +292,21 @@ Only `outbound send D --revision R --expect-hash H --key K` gains the outbound l
 `error.outbound` carries request/operation/message IDs, D/R/H/key/frozen own PN, phase, retained attempt result, known result, persistence confirmation and optional known ACK timestamp. Output failure after an effect retains this query correlation. Compact/full are capped at 1/8 MiB; no body, protobuf, media secrets or raw internal causes are exposed. The adapter's one invocation does not limit SDK frame or retry-receipt retransmission, including after uncertainty/cancellation. Accepted never establishes delivered/read. See [outbound operations](outbound.md) for deadlines, IPC, snapshot handling, certainty and restoration limits.
 
 Static image drafts expose `kind=image` and `image={mime,caption,size,sha256,width,height,thumbnail_bytes,thumbnail_sha256,verified_at_create}`. Full adds only the derived expected `snapshot_path`; compact may truncate the literal caption with explicit recovery guidance. Thumbnail bytes/base64 and import paths are private and never part of the public DTO. Metadata describes preparation only; visual inspection is separate and no human approval is recorded. Output remains minified v1 JSON with existing limits/source/uncertainty. See [drafts](drafts.md) for JPEG/PNG/APNG validation, retention and old-owner request-v2 compatibility.
+
+## Doctor historical evidence
+
+Doctor compact/full add `data.observations` version 1 with independent nullable
+connection/Sync snapshots and `historical=true`; see [doctor](doctor.md#retained-connection-and-sync-observations).
+Each slot carries its own execution ID and dates; Sync separately references its
+connection execution. `doctor --connect` remains outside the agent capability.
+Offline reads do not connect, acquire writer LOCK, migrate or repair snapshots.
+Recovery outcomes are bounded historical facts, separate from current preventive
+reconciliation debt; legacy `app_state.recovery_observations` remains null here.
+`auth.connected`, `meta.freshness` and `meta.completeness` remain unknown even with
+a confirmed historical login, replay completion, `progress=100` or cleanup date.
+Null slots and `diagnostics_unavailable` mean unknown. An observation-only read
+failure is embedded and does not change exits; archive/auth-source errors retain
+exit 4. Readonly schema errors require an explicit writable upgrade, never an
+automatic connection. A failed checkpoint may leave an older execution saved;
+current-run `persistence_unconfirmed` and correlation must not be read as durable
+success or permission to automatically retry an uncertain action.

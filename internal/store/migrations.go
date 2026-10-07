@@ -45,6 +45,7 @@ var schemaMigrations = []migration{
 	{version: 29, name: "history recovery evidence", up: migrateHistoryEvidence},
 	{version: 30, name: "local draft revisions", up: migrateDrafts},
 	{version: 31, name: "durable outbound operations", up: migrateOutbound},
+	{version: 32, name: "bounded connection and sync diagnostics", up: migrateDiagnosticSnapshots},
 }
 
 func migratePlaceholderChatActivity(d *DB) error {

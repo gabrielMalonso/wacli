@@ -78,19 +78,21 @@ func (s doctorStoreStats) MarshalJSON() ([]byte, error) {
 }
 
 type doctorReport struct {
-	StoreDir        string                     `json:"store_dir"`
-	LockHeld        bool                       `json:"lock_held"`
-	LockInfo        string                     `json:"lock_info,omitempty"`
-	LockOwnerPID    int                        `json:"lock_owner_pid,omitempty"`
-	Authed          bool                       `json:"authenticated"`
-	SessionRevoked  bool                       `json:"session_revoked"`
-	LinkedJID       string                     `json:"linked_jid,omitempty"`
-	Connected       bool                       `json:"connected"`
-	ConnectionState string                     `json:"connection_state"`
-	FTSEnabled      bool                       `json:"fts_enabled"`
-	Store           *doctorStoreStats          `json:"store,omitempty"`
-	StoreError      string                     `json:"store_error,omitempty"`
-	AppState        appPkg.AppStateDiagnostics `json:"app_state"`
+	StoreDir             string                        `json:"store_dir"`
+	LockHeld             bool                          `json:"lock_held"`
+	LockInfo             string                        `json:"lock_info,omitempty"`
+	LockOwnerPID         int                           `json:"lock_owner_pid,omitempty"`
+	Authed               bool                          `json:"authenticated"`
+	SessionRevoked       bool                          `json:"session_revoked"`
+	LinkedJID            string                        `json:"linked_jid,omitempty"`
+	Connected            bool                          `json:"connected"`
+	ConnectionState      string                        `json:"connection_state"`
+	FTSEnabled           bool                          `json:"fts_enabled"`
+	Store                *doctorStoreStats             `json:"store,omitempty"`
+	StoreError           string                        `json:"store_error,omitempty"`
+	AppState             appPkg.AppStateDiagnostics    `json:"app_state"`
+	Observations         appPkg.DiagnosticObservations `json:"observations"`
+	InvocationConnection *appPkg.ConnectionObservation `json:"invocation_connection,omitempty"`
 }
 
 func doctorStoreStatsFromStoreStats(stats store.StoreStats) doctorStoreStats {
@@ -140,6 +142,8 @@ func writeDoctorReport(w io.Writer, rep doctorReport) {
 		}
 	}
 	writeAppStateRows(tw, rep.AppState)
+	writeObservationRows(tw, rep.Observations)
+	writeInvocationConnectionRows(tw, rep.InvocationConnection)
 	_ = tw.Flush()
 }
 
@@ -152,7 +156,7 @@ func writeAppStateRows(w io.Writer, state appPkg.AppStateDiagnostics) {
 		fmt.Fprintf(w, "APP_STATE_ERROR\t%s\n", state.Error.Code)
 	}
 	if state.RecoveryObservations == nil {
-		fmt.Fprintln(w, "APP_STATE_RECOVERY\tunknown (outcomes not retained)")
+		fmt.Fprintln(w, "APP_STATE_RECOVERY\tunknown (no invocation-local outcomes)")
 	} else if len(state.RecoveryObservations) == 0 {
 		fmt.Fprintln(w, "APP_STATE_RECOVERY\tnone observed in this run")
 	}
@@ -174,11 +178,16 @@ func writeAppStateHint(w io.Writer, state appPkg.AppStateDiagnostics) {
 	case appPkg.AppStateReconciliationUnknown:
 		fmt.Fprintln(w, "Tip: check readability and schema compatibility of the selected local archive; app-state debt is unknown.")
 	case appPkg.AppStateReconciliationRequired:
-		fmt.Fprintln(w, "Tip: inspect this sync run's recovery observations for failed/cancelled collections and phases. Debt can also be preventive after normal shutdown; command success does not certify queue integrity or freshness.")
+		fmt.Fprintln(w, "Tip: inspect dated recovery observations and their execution for failed/cancelled collections and phases. Debt can also be preventive after normal shutdown; command success does not certify queue integrity or freshness.")
 	}
 }
 
 func newDoctorCmd(flags *rootFlags) *cobra.Command {
+	return newDoctorCmdWithApp(flags, newApp)
+}
+
+// The factory keeps live-command fixtures at the existing App/WA boundary.
+func newDoctorCmdWithApp(flags *rootFlags, openApp func(context.Context, *rootFlags, bool, bool) (*appPkg.App, *lock.Lock, error)) *cobra.Command {
 	var connect bool
 
 	cmd := &cobra.Command{
@@ -234,7 +243,7 @@ func newDoctorCmd(flags *rootFlags) *cobra.Command {
 					closeFn = func() { _ = roDB.Close() }
 				}
 			} else {
-				appInstance, lk, err := newApp(ctx, flags, connect, true)
+				appInstance, lk, err := openApp(ctx, flags, connect, true)
 				if err != nil {
 					storeErr = err.Error()
 				} else {
@@ -319,7 +328,10 @@ func newDoctorCmd(flags *rootFlags) *cobra.Command {
 				Store:           stats,
 				StoreError:      storeErr,
 				AppState:        appPkg.ReadAppStateDiagnostics(db),
+				Observations:    appPkg.ReadDiagnosticObservations(db),
 			}
+
+			rep.InvocationConnection = a.InvocationConnectionObservation()
 
 			if flags.asJSON {
 				return out.WriteJSON(os.Stdout, rep)
@@ -349,4 +361,72 @@ func readDoctorLockInfo(storeDir string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
+}
+
+func writeObservationRows(w io.Writer, observations appPkg.DiagnosticObservations) {
+	fmt.Fprintln(w, "OBSERVATIONS\thistorical checkpoints; current liveness/freshness/completeness unknown")
+	if observations.Error != nil {
+		fmt.Fprintf(w, "OBSERVATIONS_ERROR\t%s\n", observations.Error.Code)
+	}
+	if c := observations.Connection; c != nil {
+		fmt.Fprintf(w, "CONNECTION_EXECUTION\t%s\nCONNECTION_LAST_EVENT\t%s\nCONNECTION_CHECKPOINT\t%s\n", c.ExecutionID, c.LastEvent, c.ObservedAt.Format(time.RFC3339Nano))
+		for _, field := range []struct {
+			name string
+			at   *time.Time
+		}{{"LOGIN_CONFIRMED_AT", c.LoginConfirmedAt}, {"DISCONNECTED_AT", c.DisconnectedAt}, {"LOGGED_OUT_AT", c.LoggedOutAt}, {"CONNECTION_CLOSED_AT", c.ClosedAt}, {"CONNECTION_REJECTED_AT", c.RejectedAt}, {"CONNECTION_ERROR_AT", c.ErrorAt}} {
+			if field.at != nil {
+				fmt.Fprintf(w, "%s\t%s\n", field.name, field.at.Format(time.RFC3339Nano))
+			}
+		}
+		if c.PersistenceUnconfirmed {
+			fmt.Fprintln(w, "CONNECTION_PERSISTENCE\tunconfirmed; saved checkpoint may be older")
+		}
+	} else {
+		fmt.Fprintln(w, "CONNECTION_OBSERVATION\tunknown (no retained observation)")
+	}
+	if s := observations.Sync; s != nil {
+		fmt.Fprintf(w, "SYNC_EXECUTION\t%s (%s)\nSYNC_OBSERVED\t%s %s %s\n", s.ExecutionID, s.Mode, s.State, s.StopReason, s.ObservedAt.Format(time.RFC3339Nano))
+		if s.CleanupAt != nil {
+			fmt.Fprintf(w, "SYNC_CLEANUP_AT\t%s\n", s.CleanupAt.Format(time.RFC3339Nano))
+		}
+		if h := s.LastHistorySync; h != nil {
+			fmt.Fprintf(w, "HISTORY_SYNC_OBSERVED\t%s %s\n", h.SyncType, h.ObservedAt.Format(time.RFC3339Nano))
+		}
+		if s.OfflineCompletedAt != nil {
+			fmt.Fprintf(w, "OFFLINE_REPLAY_OBSERVED\t%s (server signal, not archive completeness)\n", s.OfflineCompletedAt.Format(time.RFC3339Nano))
+		}
+		if s.PersistenceUnconfirmed {
+			fmt.Fprintln(w, "SYNC_PERSISTENCE\tunconfirmed; saved checkpoint may be older")
+		}
+		for _, o := range s.RecoveryObservations {
+			outcomes := make([]string, len(o.Outcomes))
+			for i, v := range o.Outcomes {
+				outcomes[i] = string(v)
+			}
+			fmt.Fprintf(w, "RETAINED_RECOVERY\t%s %s: %s", o.Collection, o.Phase, strings.Join(outcomes, ", "))
+			if len(o.ErrorCodes) > 0 {
+				fmt.Fprintf(w, " (%s)", strings.Join(o.ErrorCodes, ", "))
+			}
+			if o.LastObservedAt != nil {
+				fmt.Fprintf(w, " at %s", o.LastObservedAt.Format(time.RFC3339Nano))
+			}
+			fmt.Fprintln(w)
+		}
+	} else {
+		fmt.Fprintln(w, "SYNC_OBSERVATION\tunknown (no retained observation)")
+	}
+}
+
+func writeInvocationConnectionRows(w io.Writer, c *appPkg.ConnectionObservation) {
+	if c == nil {
+		return
+	}
+	fmt.Fprintln(w, "INVOCATION_CONNECTION\thistorical checkpoint from this invocation; current liveness unknown")
+	fmt.Fprintf(w, "INVOCATION_CONNECTION_EXECUTION\t%s\nINVOCATION_CONNECTION_EVENT\t%s\nINVOCATION_CONNECTION_CHECKPOINT\t%s\n", c.ExecutionID, c.LastEvent, c.ObservedAt.Format(time.RFC3339Nano))
+	if c.LoginConfirmedAt != nil {
+		fmt.Fprintf(w, "INVOCATION_LOGIN_CONFIRMED_AT\t%s\n", c.LoginConfirmedAt.Format(time.RFC3339Nano))
+	}
+	if c.PersistenceUnconfirmed {
+		fmt.Fprintln(w, "INVOCATION_CONNECTION_PERSISTENCE\tunconfirmed; saved slot may describe another execution")
+	}
 }

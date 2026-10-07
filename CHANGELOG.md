@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Diagnostics: retain two bounded, sanitized SQLite snapshots for the latest connection and Sync executions, with correlation, dates, history/replay signals and monotonic recovery outcomes after cleanup/restart. Add historical evidence to doctor human/JSON/agent and sync summary/events without claiming current liveness, freshness or completeness. Preserve preventive debt, readonly errors/exits, writer isolation and explicit unconfirmed persistence; schema 32 is writable-only.
+
 - Sync: prevent ordinary one-shot/bootstrap idle exit from cancelling admitted history downloads or persistence; reuse the existing callback observer and count offline replay signals as activity. Keep explicit cancellation, limits and legacy result fields unchanged. Add history blob type/chunk/progress to lifecycle diagnostics and clarify that replay completion, empty local search and backward backfill do not certify or automatically recover a newer offline gap. Fixture validation only; no remote completeness guarantee or identified cause for the reported live absence.
 
 - Accounts: correct strict-binding discovery when help/version precede a split selector, preserving typed selection errors; apply the registry refusal to `help accounts` targets, including subcommands. Keep unbound legacy behavior and Cobra's shell-completion protocol unchanged; completion exit 0 is not a command acceptance/dispatch result.

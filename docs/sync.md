@@ -77,9 +77,9 @@ The final human/legacy JSON summary includes `app_state`, read after App closes 
 
 `reconciliation` is `required` when debt is retained, or `none_recorded` when the query succeeds without any. `pending_collections` is sorted and distinct, and is `[]` only for a successful empty query. Successful recovery and failed recovery can both end with `required`: ordinary shutdown records preventive debt for the next covered startup. Do not interpret debt alone as a recovery failure, or an empty list as a healthy/fresh mirror.
 
-`recovery_observations` contains facts from **this invocation**, captured by its workers and collected after they drain. It is `[]` when no monitored recovery/failure was observed; doctor returns `null` because these outcomes are not persisted. Each entry has a collection, phase, an `outcomes` set (`completed`, `failed`, `cancelled`, `unconfirmed`) and sanitized `error_codes`. A full-refresh failure followed by a correlated snapshot response retains the failure and a snapshot `unconfirmed` observation with `completion_unconfirmed`; repeated outcomes in one phase are deduplicated, and a later completion cannot erase an earlier failure. These sets do not encode attempt order or count. Storage is fixed to the five known app-state collections and seven phases (`prepare`, `full_sync`, `snapshot`, `persist`, `checkpoint`, `delta`, `shutdown`), at most 35 entries. `completed` describes the observed phase, not a remote integrity check or a guarantee that all debt was cleared. Shutdown observations record marker failures, not ordinary preventive markers. `unconfirmed` is neither remote success nor remote rejection. Deadline without a response remains a failed local wait with remote application unknown. The transient `app_state_recovery_observed` event reports only `requested_collection`, `ack_confirmed`, `response_received` and `completion="unconfirmed"`; false ACK/response fields mean not confirmed/observed, not remote absence. Partial facts survive send errors/cancellation. No snapshot contents, keys or hashes are exposed.
+`recovery_observations` contains facts from **this invocation**, captured by its workers and collected after they drain. It is `[]` when no monitored recovery/failure was observed; offline doctor keeps this invocation-local field `null`; retained historical outcomes are separate in `observations.sync.recovery_observations` when available. Each entry has a collection, phase, an `outcomes` set (`completed`, `failed`, `cancelled`, `unconfirmed`) and sanitized `error_codes`. A full-refresh failure followed by a correlated snapshot response retains the failure and a snapshot `unconfirmed` observation with `completion_unconfirmed`; repeated outcomes in one phase are deduplicated, and a later completion cannot erase an earlier failure. These sets do not encode attempt order or count. Storage is fixed to the five known app-state collections and seven phases (`prepare`, `full_sync`, `snapshot`, `persist`, `checkpoint`, `delta`, `shutdown`), at most 35 entries. `completed` describes the observed phase, not a remote integrity check or a guarantee that all debt was cleared. Shutdown observations record marker failures, not ordinary preventive markers. `unconfirmed` is neither remote success nor remote rejection. Deadline without a response remains a failed local wait with remote application unknown. The transient `app_state_recovery_observed` event reports only `requested_collection`, `ack_confirmed`, `response_received` and `completion="unconfirmed"`; false ACK/response fields mean not confirmed/observed, not remote absence. Partial facts survive send errors/cancellation. No snapshot contents, keys or hashes are exposed.
 
-For example, a command can retain its legacy successful exit while reporting a failed recovery:
+For example, this partial legacy `app_state` excerpt shows a successful command exit with failed recovery. Dated outcome fields and the separate versioned `observations` snapshot are omitted here:
 
 ```json
 {"success":true,"data":{"synced":true,"messages_stored":0,"app_state":{"reconciliation":"required","pending_collections":["regular","regular_high","regular_low"],"recovery_observations":[{"collection":"regular_low","phase":"full_sync","outcomes":["failed"],"error_codes":["lthash_mismatch"]},{"collection":"regular_low","phase":"snapshot","outcomes":["failed"],"error_codes":["deadline_exceeded"]}]}},"error":null}
@@ -144,3 +144,36 @@ wacli sync --follow --stale-threshold 2m --events 2>events.ndjson
 wacli sync --follow --webhook https://example.com/wacli --webhook-secret "$WACLI_WEBHOOK_SECRET"
 wacli sync --follow --webhook https://example.com/wacli --webhook-events message,receipt,chat_presence
 ```
+
+## Historical execution checkpoints
+
+Sync summaries add the versioned `observations` described in [doctor](doctor.md#retained-connection-and-sync-observations).
+The existing `synced`/exit and `app_state.recovery_observations` contracts remain;
+`observations.sync` identifies this invocation even if a saved older checkpoint
+remains after a persistence failure. `stop_reason` is `idle`, `cancelled`,
+`deadline_exceeded`, `logged_out` or `failed`; idle/stopped is not completeness.
+Cancellation/logout can still keep the existing successful command exit status.
+A logout callback arriving after a stop keeps its separate connection observation
+without replacing the already observed failed/cancelled stop reason.
+Startup/connection errors and storage-limit failures do not certify normal sync.
+
+Checkpoints happen at start, binding to a connection execution, observed connection
+transitions, history blobs, replay signals, new recovery outcomes/codes, stop and
+post-drain cleanup. No diagnostic write is added per message, keepalive, or
+HEARTBEAT tick, and no new worker or connection is started. Recovery uses the
+existing five collections × seven phases (at most 35 observations), retaining
+all completed/failed/cancelled/unconfirmed kinds and fixed diagnostic codes in
+that execution. `first_observed_at` and `last_observed_at` bound observations;
+`completed_at`, `failed_at`, `cancelled_at`, `unconfirmed_at` retain the most recent
+date of each kind. Later completion cannot erase an earlier failure or uncertainty.
+A new Sync replaces the old Sync slot rather than accumulating executions.
+Preventive shutdown replay debt stays separate and can exist with zero failures.
+
+With `--events`, `sync_started`, `sync_stopped` and
+`sync_observations_finalized` add execution correlation. Connection, history,
+replay, idle/stop/reconnect/progress and app-state recovery-request lifecycle
+signals add `execution_id` and `observed_at` to their existing data. The stopped
+event precedes App cleanup; the finalized event and successful CLI summary include
+known drained callbacks and final replay restoration. Persistence failure is
+explicit even in a finalized event; finalized never promises durable success.
+These stderr events are transient diagnostics, not a durable consumer feed.
