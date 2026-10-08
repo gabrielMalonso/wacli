@@ -80,6 +80,8 @@ Write commands take a per-store lock. After a `sync --follow` process finishes s
 
 ## Start an agent workflow
 
+Start with [Agent daily use](docs/agent-daily-use.md) for the routine workflow: continuous sync, live owner status, cursor watching, inbox/context review, immutable drafts, sending, files/audio, anchored history recovery and handoff. The [browser CLI coverage checklist](docs/browser-cli-coverage.md) records equivalents and limitations for a complete reference service-desk workflow. Use the full command references when the task needs more detail.
+
 Discover static capabilities without an account, then list accounts with legacy JSON and choose a name explicitly for bounded queries:
 
 ```sh

@@ -51,6 +51,7 @@
 
 ## Agent Notes
 - This repo uses `AGENTS.md` as its agent-instruction source; `CLAUDE.md` is explicitly ignored.
+- For routine WhatsApp operation, start with [Agent daily use](docs/agent-daily-use.md); follow its links for the complete command contracts and browser-workflow coverage.
 - For agent-safe execution, pass `--read-only` (or set `WACLI_READONLY=1`) to prevent writes.
-- Prefer `--json` output for machine-readable parsing.
+- Prefer `--agent` for supported task commands; use legacy `--json` for account discovery and other explicitly chosen legacy commands.
 - Do not add dependencies or change build tooling without confirming with the maintainer.

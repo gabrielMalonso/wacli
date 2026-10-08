@@ -20,7 +20,8 @@ const productDescription =
 const brewInstall = "brew install openclaw/tap/wacli";
 
 const sections = [
-  ["Start", ["index.md", "install.md", "quickstart.md", "overview.md"]],
+  ["Start", ["index.md", "install.md", "quickstart.md", "agent-daily-use.md", "overview.md"]],
+  ["Agents", ["browser-cli-coverage.md", "agent.md", "drafts.md", "outbound.md", "changes.md", "concurrent-use.md"]],
   ["Auth & Sync", ["auth.md", "accounts.md", "sync.md", "history.md", "doctor.md"]],
   ["Messages", ["messages.md", "send.md", "media.md", "presence.md", "channels.md"]],
   ["Contacts & Groups", ["contacts.md", "contacts-import-system.md", "chats.md", "groups.md", "profile.md"]],

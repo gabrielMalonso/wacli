@@ -7,6 +7,8 @@ description: "Pair as a linked WhatsApp Web device, sync, search, and send your 
 
 Five minutes from a clean machine to authenticated sync, search, and send. For deeper reading, follow the links at the bottom of each step.
 
+Already paired and working as an agent? Start with [Agent daily use](agent-daily-use.md) for the routine workflow and [browser CLI coverage](browser-cli-coverage.md) for task equivalents and limitations.
+
 ## 1. Install
 
 ```bash
