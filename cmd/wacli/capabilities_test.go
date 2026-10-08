@@ -101,7 +101,7 @@ func TestCapabilitiesCatalogMatchesExecutablePolicy(t *testing.T) {
 		}
 		commands[c.Command] = c
 	}
-	for _, path := range []string{"capabilities", "auth status", "doctor", "messages list", "messages search", "messages show", "messages context", "changes list", "chats list", "chats show", "contacts list", "contacts search", "contacts show", "contacts resolve", "history coverage", "history backfill", "draft create", "draft update", "draft discard", "draft show", "draft list", "draft cleanup preview", "draft cleanup apply", "outbound send", "outbound list", "outbound show", "media status", "media download", "media retry", "media transcribe", "chats mark-read", "chats mark-unread", "chats archive", "chats unarchive"} {
+	for _, path := range []string{"capabilities", "auth status", "doctor", "sync status", "messages list", "messages search", "messages show", "messages context", "changes list", "chats list", "chats show", "contacts list", "contacts search", "contacts show", "contacts resolve", "history coverage", "history backfill", "draft create", "draft update", "draft discard", "draft show", "draft list", "draft cleanup preview", "draft cleanup apply", "outbound send", "outbound list", "outbound show", "media status", "media download", "media retry", "media transcribe", "chats mark-read", "chats mark-unread", "chats archive", "chats unarchive"} {
 		c, ok := commands[path]
 		if !ok || c.AgentMode != "supported" || c.Capability == "" || c.ReadOnly == nil || (path != "capabilities" && len(c.Requirements) == 0) {
 			t.Fatalf("missing supported policy for %s: %+v", path, c)
@@ -119,6 +119,9 @@ func TestCapabilitiesCatalogMatchesExecutablePolicy(t *testing.T) {
 	}
 	if commands["help"].AgentMode != "text" || commands["version"].AgentMode != "text" || !slices.Contains(commands["media retry"].Requirements, "writer_lock") || slices.Contains(commands["media retry"].Requirements, "writer_lock_or_compatible_owner") {
 		t.Fatal("incorrect helper or standalone policy")
+	}
+	if commands["sync status"].Source != "live" || !*commands["sync status"].ReadOnly || commands["sync status"].Capability != "sync_status" {
+		t.Fatal("incorrect sync status policy")
 	}
 	if *commands["outbound send"].ReadOnly || !*commands["media download"].ReadOnly || !*commands["media transcribe"].ReadOnly || commands["outbound send"].Source != "live" || commands["media transcribe"].Source != "local" {
 		t.Fatal("incorrect effect policy")

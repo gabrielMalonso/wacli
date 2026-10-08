@@ -769,3 +769,10 @@ func TestDelegatedChatStateHonorsAbsoluteCallerDeadline(t *testing.T) {
 	default:
 	}
 }
+
+// Test owners may exercise delegation independently of a Sync lifecycle.
+func startSendDelegateServer(ctx context.Context, a *app.App, spacing sendSpacing) (func(), error) {
+	return startSendDelegateServerForStore(ctx, a.StoreDir(), spacing, func(ctx context.Context, req sendDelegateRequest) (sendDelegateResponse, error) {
+		return executeDelegatedSend(ctx, a, req)
+	})
+}

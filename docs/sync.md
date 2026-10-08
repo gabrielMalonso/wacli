@@ -10,6 +10,89 @@ Startup repairs historical LID identities using indexed message lookups without 
 
 Remote logout stops sync and emits `logged_out`; it retains the existing successful-stop exit status. `auth status` and `doctor` remember the observed revocation until a confirmed login.
 
+## Live owner readiness
+
+```bash
+wacli -a personal --read-only --agent sync status
+wacli --store /path/to/archive sync status --json --timeout 2s
+```
+
+`sync status` queries the existing `sync --follow` owner's private Unix socket.
+It opens no archive/session database, acquires no writer LOCK, initializes or
+migrates nothing, and creates no WhatsApp client or network connection. It works
+with `--read-only` / `WACLI_READONLY=1`, including while a delegated write owns
+the operation slot. It does not start or reconnect an owner. No heartbeat or
+schema is persisted for this query. `sync --once` and `auth --follow` do not expose
+this status endpoint.
+
+`ready=true` means the owner's required local startup sequence has returned
+(LID migration, initial app-state reconciliation attempts, requested bootstrap
+refresh attempts and follow history runtime), it is answering IPC, and an
+authenticated `Connected` event is supported by the existing client's currently
+open transport. Startup warnings/reconciliation debt can remain. Readiness does
+not certify message history, successful replay, complete app-state reconciliation,
+webhook delivery, queue capacity or a future send. A `Connected` event alone is
+not readiness. The follow socket now opens immediately before Sync connects, ahead of bootstrap;
+mutation requests arriving before initialization or during terminal cleanup are
+refused before dispatch. Existing post-initialization operation semantics remain.
+
+Legacy `--json` uses its usual success/data envelope. `--agent` uses v1 with
+`meta.source=live`, `meta.completeness=unknown`, `meta.freshness=unknown`; compact
+and full have the same bounded DTO. `data` contains `state`, boolean `ready` and
+`initialized`, `connected` (`true|false|unknown` strings), UTC `observed_at`, and
+optional exact public `linked_jid` / `linked_lid` from this owner. LIDs are never
+converted into inferred phone identities. `observed_at` dates this point-in-time
+snapshot, not a last-message or last-successful-keepalive timestamp. A stopping
+owner can still report `connected=true` while its existing socket is being cleaned
+up; only `ready=true` permits treating the owner as available.
+
+| State | Meaning |
+| --- | --- |
+| `absent` | No reachable owner at the selected socket (missing or refused connection); current WhatsApp connectivity stays unknown. |
+| `initializing` | Owner answers, but local bootstrap has not completed; it may already report `connected=true`. |
+| `ready` | Local initialization complete and current authenticated connection observed. |
+| `disconnected` / `reconnecting` | Owner observed a disconnect or is attempting reconnection; not ready. |
+| `logged_out` | Owner observed terminal session revocation; late Connected events cannot revive it. |
+| `stopping` / `stopped` | Cancellation/cleanup or completed run while the endpoint is still reachable. |
+| `error` | Sync failed while the endpoint is still reachable. |
+| `unknown` | Connectivity or IPC evidence cannot be validated. |
+
+After socket closure/removal, terminal state is no longer queryable and the result
+becomes `absent`; use offline [doctor](doctor.md) for retained historical evidence.
+Before the socket opens, including initial App/session setup, the result is also
+`absent`; this means endpoint absence, not proof that no process owns LOCK.
+Disconnection/reconnection can be too brief to observe. Connectivity reflects the
+SDK's observation, not an independent WhatsApp health probe, and can change as
+soon as the reply is produced.
+
+The query is bounded to 5s by default; explicit global `--timeout` accepts positive
+durations up to 1m. Interrupt/cancellation closes IPC promptly. There is no
+wait-for-ready service or network fallback: callers may make a separately bounded
+query again and proceed only on positive `ready=true`. A completed status query,
+including `absent`/`unknown`, exits 0; invalid arguments exit 2, and selection/config
+failures preserve their existing exit contracts. Never equate exit 0 with readiness.
+
+For unavailable evidence, `reason` is one of `owner_absent`, `ipc_unsupported`,
+`scope_unavailable`, `ipc_unavailable`, `timeout`, `cancelled`, `owner_incompatible`,
+`scope_mismatch` or `invalid_reply`. Older owners, mismatched/uncorrelated responses,
+malformed or stale snapshots never produce readiness. Each reply must match the
+query's nonce, protocol version and absolute selected store reference; the owner
+checks that reference against its own store. This follows account selection's
+store isolation, not a permanent database fingerprint: copied/replaced archives
+and different account names pointing at the same store are not distinguished.
+Treat the returned linked identities as observations of that scoped owner.
+
+Windows returns `unknown` / `ipc_unsupported`: this status contract uses the
+project's existing Unix IPC, with no named-pipe implementation. Unsupported socket
+platforms never fall back to a connection or an offline auth claim. Offline
+`auth status` and `doctor` continue to report connectivity as `unknown`.
+
+Example data while bootstrap is connected but incomplete:
+
+```json
+{"state":"initializing","ready":false,"initialized":false,"connected":"true","linked_jid":"15550000001@s.whatsapp.net","linked_lid":"100000000001@lid","observed_at":"2026-10-08T13:00:00Z"}
+```
+
 ## Command
 
 ```bash

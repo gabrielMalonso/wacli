@@ -69,6 +69,7 @@ func (a *App) addSyncEventHandler(ctx context.Context, opts SyncOptions, message
 	lifetimeObserver := a.outboundEvents
 	a.waMu.Unlock()
 	handlerID := a.wa.AddEventHandler(func(evt any) {
+		a.live.event(evt, opts.liveGeneration)
 		// The lifetime gate also drains legacy sync writes before App closes its DB.
 		ctx := ctx
 		if observer := lifetimeObserver; observer != nil {
@@ -231,6 +232,7 @@ func (a *App) addSyncEventHandler(ctx context.Context, opts SyncOptions, message
 			// whatsmeow emits StreamReplaced before onDisconnect necessarily
 			// clears the socket, so force-close before reconnecting.
 			a.wa.Disconnect()
+			a.live.transition(SyncLiveDisconnected)
 			select {
 			case disconnected <- struct{}{}:
 			default:

@@ -32,7 +32,7 @@ Read when: you need the user-facing command map, global flags, store model, or l
 - [auth](auth.md) - pair, inspect auth status, logout.
 - [accounts](accounts.md) - create and select named account stores.
 - [capabilities](agent.md#static-capability-discovery) - discover static CLI/agent support without opening an account.
-- [sync](sync.md) - sync messages, contacts, groups, channels, and optional media.
+- [sync](sync.md) - sync messages, contacts, groups, channels and optional media; query existing follow owner readiness with `sync status`.
 - [messages](messages.md) - list, search, show, and contextualize stored messages.
 - [changes](changes.md) - consume durable local message mutations and receipt observations with restartable cursors.
 - [calls](calls.md) - list stored WhatsApp call events.

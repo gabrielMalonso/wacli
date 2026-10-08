@@ -35,6 +35,7 @@ const (
 	agentMediaRecovery
 	agentMediaTranscription
 	agentDiscovery
+	agentSyncStatus
 )
 
 // Recover output intent even if Cobra stops on an earlier parse error. Inspect
@@ -256,6 +257,8 @@ func agentCommandCapability(cmd *cobra.Command) agentCapability {
 		return agentOutboundSend
 	case "chats mark-read", "chats mark-unread", "chats archive", "chats unarchive":
 		return agentChatState
+	case "sync status":
+		return agentSyncStatus
 	case "doctor":
 		connect, _ := cmd.Flags().GetBool("connect")
 		if !connect {
@@ -576,7 +579,7 @@ func agentMeta(flags *rootFlags) out.AgentMeta {
 }
 
 func agentCapabilitySource(capability agentCapability) string {
-	if capability == agentHistoryRecovery || capability == agentOutboundSend || capability == agentChatState || capability == agentMediaDownload || capability == agentMediaRecovery {
+	if capability == agentSyncStatus || capability == agentHistoryRecovery || capability == agentOutboundSend || capability == agentChatState || capability == agentMediaDownload || capability == agentMediaRecovery {
 		return "live"
 	}
 	return "local"

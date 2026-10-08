@@ -122,6 +122,7 @@ type Options struct {
 }
 
 type App struct {
+	live                    syncLive
 	opts                    Options
 	waMu                    sync.Mutex
 	wa                      WAClient

@@ -128,6 +128,8 @@ func capabilityRequirements(capability agentCapability) (name string, requiremen
 	switch capability {
 	case agentDiscovery:
 		return "discovery", nil, readOnly
+	case agentSyncStatus:
+		return "sync_status", []string{"compatible_follow_owner_ipc"}, readOnly
 	case agentLocalRead:
 		return "local_read", []string{"existing_compatible_archive"}, readOnly
 	case agentMediaRead:
@@ -163,6 +165,8 @@ func capabilityConstraints(path string) []string {
 	switch path {
 	case "capabilities":
 		return []string{"Global discovery; account/store selectors are rejected."}
+	case "sync status":
+		return []string{"Existing follow owner IPC only; no store/session open, writer LOCK or second connection. Ready is local initialization and current connectivity, not history completeness."}
 	case "doctor":
 		return []string{"--connect is unsupported with --agent; local and historical observations do not prove current liveness."}
 	case "auth status":

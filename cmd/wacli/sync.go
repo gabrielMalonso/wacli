@@ -94,10 +94,10 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
 					stopSendDelegate()
 				}
 			}()
-			var afterConnect func(context.Context) error
+			var beforeConnect func(context.Context) error
 			if mode == appPkg.SyncModeFollow {
-				afterConnect = func(ctx context.Context) error {
-					stop, err := startSendDelegateServer(ctx, a, sendSpacing)
+				beforeConnect = func(ctx context.Context) error {
+					stop, err := startSyncDelegateServer(ctx, a, sendSpacing)
 					if err != nil {
 						return err
 					}
@@ -110,7 +110,7 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
 				Mode:                mode,
 				PresenceMode:        presenceMode,
 				AllowQR:             false,
-				AfterConnect:        afterConnect,
+				BeforeConnect:       beforeConnect,
 				DownloadMedia:       downloadMedia,
 				RefreshContacts:     refreshContacts,
 				RefreshGroups:       refreshGroups,
@@ -158,6 +158,7 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
 	cmd.Flags().StringVar(&webhookEventsFlag, "webhook-events", string(appPkg.SyncWebhookEventMessage), "comma-separated event types to POST: message, receipt, chat_presence")
 	cmd.Flags().Int64Var(&storage.maxMessages, "max-messages", 0, "maximum total messages to keep in the local DB before sync stops (0 = unlimited, or WACLI_SYNC_MAX_MESSAGES)")
 	cmd.Flags().StringVar(&storage.maxDBSize, "max-db-size", "", "maximum wacli.db disk usage before sync stops, e.g. 500MB or 2GB (default: WACLI_SYNC_MAX_DB_SIZE or unlimited)")
+	cmd.AddCommand(newSyncStatusCmd(flags))
 	return cmd
 }
 
