@@ -7,23 +7,29 @@ description: "A practical daily workflow for agents: account binding, continuous
 
 Read this first for routine WhatsApp work. Use the linked command references when a task needs more detail. This guide assumes an existing paired account and describes this fork; check the actual binary's capabilities before using it.
 
-The daily loop is **bind account → keep sync running → select recipient → read context → prepare and review → dispatch → inspect result → finish or hand off**. The [browser CLI coverage checklist](browser-cli-coverage.md) maps every command in the reference browser workflow to this guide, including differences and missing equivalents.
+The daily loop is **verify executable → bind account → keep sync and change stream running → select recipient → read context → prepare and review → dispatch → inspect result → finish or hand off**. The [browser CLI coverage checklist](browser-cli-coverage.md) maps every command in the reference browser workflow to this guide, including differences and missing equivalents.
+
+**For live work, complete steps 1 and 2 before reviewing the inbox/conversation, preparing a reply, sending or changing chat state.** Reuse compatible managed processes for the selected account; keep both sync and the change consumer running throughout the session. An explicitly offline archive review can use local readonly queries without starting either process; its results do not establish current WhatsApp state.
 
 WhatsApp operations belong here. Business rules, approved templates, customer memory, appointment lookup, authorization and work assignment belong to the calling agent/application. Selecting an account or preparing a draft does not authorize sending.
 
 ## 1. Bind the account and check local health
 
-Discover capabilities and accounts without an account selector. Then bind every account-scoped invocation explicitly; do not rely on the default account or a previous command's selection.
+First check which executable this shell resolves, then discover capabilities and accounts without an account selector. Use the same verified executable for subsequent commands and the sync owner. Then bind every account-scoped invocation explicitly; do not rely on the default account or a previous command's selection.
 
 ```bash
-wacli --read-only capabilities --agent
-wacli --read-only accounts list --json
+command -v wacli || exit "$?"
+wacli --version || exit "$?"
+wacli --read-only capabilities --agent || exit "$?"
+wacli --read-only accounts list --json || exit "$?"
 # Set this from the requested account and reviewed data.accounts, in the same shell.
 wacli_account='example-account'
 : "${wacli_account:?Bind the reviewed existing account}"
-wacli -a "$wacli_account" --read-only --agent auth status
-wacli -a "$wacli_account" --read-only --agent doctor
+wacli -a "$wacli_account" --read-only --agent auth status || exit "$?"
+wacli -a "$wacli_account" --read-only --agent doctor || exit "$?"
 ```
+
+Check that discovery advertises agent support for `auth status`, `doctor`, `sync status`, `changes list`, `changes watch` and the intended task commands; watch must advertise `encoding=ndjson`. Version text alone is insufficient: an older local build can have the same release version with fewer commands. If `wacli` is missing, discovery is unavailable, or `-a` is unrecognized, stop and follow [executable verification and compatibility](install.md#verify-the-executable-for-agent-work). Do not rebuild, change PATH or replace a managed owner as a side effect of a read query.
 
 Stop on an error before using its output. `-a` requires an existing configured account and refuses conflicting selectors. Account discovery uses legacy JSON; supported task commands use `--agent`. Success JSON is on stdout, errors on stderr; inspect the exit status and typed error. Do not silently switch to legacy sending when agent mode refuses a command.
 
@@ -33,7 +39,15 @@ References: [accounts](accounts.md), [agent contract](agent.md), [doctor](doctor
 
 ## 2. Keep one continuous sync per account
 
-At the start of an authorized live work session, reuse the account's existing compatible sync owner, or start one in a persistent terminal/service owned by the caller:
+### Inspect or start the sync owner
+
+At the start of an authorized live work session, inspect the existing follow owner before launching anything:
+
+```bash
+wacli -a "$wacli_account" --read-only --agent sync status --timeout 2s || exit "$?"
+```
+
+Reuse an existing compatible owner. Start one in a persistent terminal/service owned by the caller only after confirming `reason=owner_absent` and that no other writer/shared owner is using the store. Initializing, disconnected, unavailable or incompatible owners require inspecting the managed process; do not start a competing sync, remove LOCK or kill a shared owner.
 
 Bind the same reviewed `wacli_account` in that terminal/service too; shell variables are not carried into a new terminal automatically.
 
@@ -44,10 +58,10 @@ wacli -a "$wacli_account" sync --follow --presence-mode quiet --events
 
 Follow mode connects, ingests available history/events and keeps updating SQLite while the agent works. Local reads see committed updates without acquiring the writer lock. Draft writes, outbound sends and supported chat-state/history actions can use the owner's IPC; do not start a separate sync before each read/send. `quiet` suppresses available presence, which can help preserve primary-phone notifications; it is not a notification guarantee.
 
-Observe the existing follow owner without starting sync, opening databases or making another WhatsApp connection:
+After starting or reusing the owner, observe it again without opening databases or making another WhatsApp connection:
 
 ```bash
-wacli -a "$wacli_account" --read-only --agent sync status --timeout 2s
+wacli -a "$wacli_account" --read-only --agent sync status --timeout 2s || exit "$?"
 ```
 
 Startup can include migration and app-state recovery. The status socket opens before bootstrap completes; `data.owner_ready=true` means local initialization has returned, the owner answers scoped IPC and has not entered terminal cleanup. `data.transport_connected` separately observes the SDK transport. Neither establishes current authentication, replay completeness or successful sending. A `connected` event, lock, socket file or heartbeat alone is insufficient.
@@ -58,19 +72,36 @@ Owner status uses Unix IPC; Windows reports it explicitly unsupported. The new f
 
 `--events` emits lifecycle diagnostics on stderr, not a durable message stream. Follow reconnects within its configured budget; `--max-reconnect 0` permits indefinite reconnect attempts, but logout remains terminal. A completed `sync --once` only ingests what arrived during that run; it does not establish complete history or ongoing freshness. Stop only a process the caller owns when the session ends; leave a shared owner to its supervisor.
 
-For an application that needs to wake agents on new data, consume the durable local feed in a separate managed reader. A finite page can establish or resume its checkpoint; a continuous watcher then waits for new committed changes:
+### Start or reuse the change stream
+
+For live work, start or reuse a separate managed `changes watch` consumer bound to the same account/store. This is the message-change stream; `--events` on sync is diagnostics only. The consumer processes complete pages, saves its checkpoint and wakes the agent for relevant work. Do not launch an unconsumed stream or duplicate an existing consumer's work.
+
+Resume from that consumer's saved cursor. If there is no checkpoint, bootstrap from the retained feed's beginning with `changes list`, process the returned page and bind `wacli_change_cursor` to its unchanged `meta.page.next_cursor`. A finite page can establish or resume the checkpoint; a continuous watcher then waits for new committed changes:
 
 ```bash
-wacli -a "$wacli_account" --read-only --agent changes list --limit 20
+wacli -a "$wacli_account" --read-only --agent changes list --limit 20 || exit "$?"
 # Continue from the returned meta.page.next_cursor, including an empty/end page.
-wacli -a "$wacli_account" --read-only --agent changes list --cursor "$wacli_change_cursor" --limit 200
+: "${wacli_change_cursor:?Bind cursor from the last completely processed page}"
+wacli -a "$wacli_account" --read-only --agent changes list --cursor "$wacli_change_cursor" --limit 200 || exit "$?"
 # In the managed consumer, using the last completely processed page's cursor.
+# Bind wacli_account and the updated wacli_change_cursor in that process too.
 wacli -a "$wacli_account" --read-only --agent --timeout 0 changes watch --cursor "$wacli_change_cursor" --interval 1s --limit 20
 ```
 
 `changes watch` emits one complete agent page per stdout line (NDJSON). It drains backlog, emits an initial checkpoint even when empty, then waits; `has_more=false` does not end the stream, and unchanged empty polls emit no heartbeat. Default polling is 1s. Explicit `--timeout 0` keeps watching until cancellation; without it, the command defaults to 5m. Watch reads only the existing local archive: it starts no sync, uses no owner IPC and works independently of live authenticated readiness. The follow owner supplies remote ingestion; watch observes only what was committed locally.
 
 The consumer saves `meta.page.next_cursor` only after processing the complete page and handles duplicate event IDs across restarts. List/watch cursors are interchangeable with the same account/store binding. On a partial final line or stream error, resume from the last processed checkpoint; there is no final exit checkpoint or automatic cursor reset. With no cursor, consumption starts at the beginning of the retained feed, not implicitly "from now". This feed covers message mutations and selected receipts, not all chat/contact metadata or a work queue. Let the application consume the stream and wake the agent for relevant work; the agent does not need to remember to sync before every operation.
+
+### Live-session startup checklist
+
+| Check before continuing to step 3 | Required observation |
+| --- | --- |
+| Executable and account | The verified fork binary supports the required commands; every process uses the reviewed account/store. Local auth is paired and not reported revoked. |
+| Sync owner | One compatible owner is running; `owner_ready=true` and `transport_connected="true"` are observed within the caller's bounded startup deadline. |
+| Change consumer | A managed reader is running for that account/store, has emitted a valid complete initial frame and processes pages before saving their cursors. |
+| Lifecycle | The caller knows who owns both processes, where to inspect failures and which consumer checkpoint to resume. |
+
+These are live-session prerequisites, not proof of current authentication or complete replay. Do not wait for strict `ready=true`: the SDK limitation above leaves it false. If initialization/connection is not observed within the startup deadline, or a consumer fails, pause live work and diagnose; explicit offline archive reads remain available. An idle watcher or `has_more=false` does not prove remote freshness. Recheck the owner/processes after disconnection, exit or stream failure; reconcile any pending outbound operation before continuing. Stop only processes owned by this session at handoff; leave shared managed processes running.
 
 References: [sync](sync.md), [concurrent use](concurrent-use.md), [changes](changes.md).
 

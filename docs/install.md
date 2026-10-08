@@ -7,6 +7,8 @@ description: "Install wacli via Homebrew tap, prebuilt release archives, or a lo
 
 `wacli` ships as a single binary. Local builds need cgo (because of `go-sqlite3` with FTS5); release artifacts and the Homebrew tap take care of that for you.
 
+The Homebrew, release and `go install` URLs below are upstream distribution references. Do not assume they include this fork's agent additions. For the checkout's agent workflow, use a binary built from the intended fork and complete [executable verification](#verify-the-executable-for-agent-work).
+
 ## Homebrew (macOS, Linux)
 
 ```bash
@@ -63,15 +65,39 @@ writes `./dist/wacli`; `make check` runs the complete local CI gate.
 
 Repository development, CI, and Docker builds select Go 1.27.1 for its compiler, runtime, cgo, and standard-library fixes. The `toolchain` directive in `go.mod` selects that build version without raising the Go 1.27.0 source minimum; normal Go toolchain auto-selection downloads it when needed.
 
-## Verify the install
+## Verify the executable for agent work
 
 ```bash
-wacli --version
-wacli doctor
-wacli --help
+command -v wacli || exit "$?"
+wacli --version || exit "$?"
+wacli --help || exit "$?"
+wacli --read-only capabilities --agent || exit "$?"
 ```
 
-`wacli doctor` checks the store directory, database integrity, FTS5 availability, and (with `--connect`) live connectivity to WhatsApp. See [Doctor](doctor.md).
+These checks do not select an account or connect to WhatsApp. Inspect the resolved path and actual capabilities, not just the release version: local builds with the same version string can contain different commands. The daily workflow needs `-a`/`--for-account`, agent support for `auth status`, `doctor`, `sync status`, `changes list/watch` and the intended task commands; `changes watch` must advertise `encoding=ndjson`.
+
+| Observation | Next step |
+| --- | --- |
+| `wacli` not found | Use the intended fork binary's explicit path, or add its directory to this shell's PATH during authorized setup. |
+| Unexpected executable path | Inspect shell aliases/functions and PATH order; use the reviewed executable consistently. |
+| Unknown `capabilities` command or `-a` flag; required capability absent | Treat the executable as incompatible with this guide. Use a current fork release or rebuild the intended checkout during authorized setup; do not downgrade to legacy sends. |
+| New CLI but an older managed follow owner | Coordinate its restart with its owner/supervisor before relying on new IPC features. Replacing a binary on disk does not update a running process. |
+
+For an **authorized local build**, from the intended fork's checkout with the prerequisites above installed:
+
+```bash
+pnpm build || exit "$?"
+./dist/wacli --read-only capabilities --agent || exit "$?"
+# Optional Bash setup for this shell; rebuilding alone does not install onto PATH.
+export PATH="$PWD/dist:$PATH"
+hash -r
+command -v wacli || exit "$?"
+wacli --read-only capabilities --agent || exit "$?"
+```
+
+Inspect any alias/function that still overrides the PATH entry, or invoke the reviewed executable by its explicit path. Use that same executable for the sync owner and task commands. Do not rebuild, replace binaries, restart shared processes, pair/relink or migrate an archive merely to make a readonly query succeed.
+
+After executable verification, [Agent daily use](agent-daily-use.md) binds an existing account, checks local health with readonly `auth status`/`doctor`, and starts or reuses sync plus the managed change stream before live work. See [Doctor](doctor.md) for diagnostic scope.
 
 ## Updating
 

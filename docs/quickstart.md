@@ -7,7 +7,7 @@ description: "Pair as a linked WhatsApp Web device, sync, search, and send your 
 
 Five minutes from a clean machine to authenticated sync, search, and send. For deeper reading, follow the links at the bottom of each step.
 
-Already paired and working as an agent? Start with [Agent daily use](agent-daily-use.md) for the routine workflow and [browser CLI coverage](browser-cli-coverage.md) for task equivalents and limitations.
+Already paired and working as an agent? Start with [Agent daily use](agent-daily-use.md) for the routine workflow and [browser CLI coverage](browser-cli-coverage.md) for task equivalents and limitations. Before live work, complete the [startup checklist](agent-daily-use.md#live-session-startup-checklist): verify the actual executable/account and reuse/start continuous sync plus a managed change consumer. The examples below also allow explicitly offline archive queries.
 
 ## 1. Install
 
@@ -17,6 +17,8 @@ wacli --version
 ```
 
 Other options (release archives, source builds, GCC 15 notes) are documented on [Install](install.md).
+
+For this fork's agent commands, [verify the resolved executable and capabilities](install.md#verify-the-executable-for-agent-work). An upstream or older local binary may not support the current guide; rebuilding `dist/wacli` alone does not install it onto PATH or update a running sync owner.
 
 ## 2. Pair as a linked device
 
