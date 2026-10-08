@@ -39,6 +39,7 @@ type syncLive struct {
 	state       SyncLiveState
 	ctx         context.Context
 	generation  uint64
+	revision    uint64 // fences SDK reads performed outside mu
 	initialized bool
 	connected   bool
 }
@@ -52,6 +53,7 @@ func (s *syncLive) begin(ctx context.Context) uint64 {
 	defer s.mu.Unlock()
 	s.ctx = ctx
 	s.generation++
+	s.revision++
 	s.state, s.initialized, s.connected = SyncLiveInitializing, false, false
 	return s.generation
 }
@@ -70,6 +72,7 @@ func (s *syncLive) transition(state SyncLiveState) {
 	if s.state == SyncLiveLoggedOut || s.terminal() && state != SyncLiveStopped && state != SyncLiveError {
 		return
 	}
+	s.revision++
 	s.state = state
 	// Reconnect can race an already authenticated Connected callback. Keep that
 	// evidence; the snapshot also checks the transport, including force-close.
@@ -103,6 +106,7 @@ func (s *syncLive) event(evt any, generation uint64) {
 	if generation != s.generation || generation == 0 {
 		return
 	}
+	s.revision++
 	if s.terminal() {
 		// Late loss/revocation can update connection evidence without reviving or
 		// replacing the terminal lifecycle state.
@@ -126,6 +130,9 @@ func (s *syncLive) event(evt any, generation uint64) {
 func (a *App) SyncLiveSnapshot() SyncLiveStatus {
 	// Do not hold the lifecycle mutex across SDK getters: Disconnect may wait
 	// for handlers while holding the client mutex those getters need.
+	a.live.mu.Lock()
+	revision := a.live.revision
+	a.live.mu.Unlock()
 	a.waMu.Lock()
 	client, closed := a.wa, a.closed
 	a.waMu.Unlock()
@@ -140,12 +147,34 @@ func (a *App) SyncLiveSnapshot() SyncLiveStatus {
 	if a.live.ctx != nil && a.live.ctx.Err() != nil && !a.live.terminal() {
 		a.live.state = SyncLiveStopping
 	}
+	// Invalidate only evidence from the same observation revision. A Connected
+	// event or a new run during the getter must not be erased by an older loss.
+	if revision == a.live.revision && client != nil && !transportConnected && a.live.connected {
+		a.live.connected = false
+		a.live.revision++
+		if !a.live.terminal() && a.live.state != SyncLiveReconnecting {
+			a.live.state = SyncLiveDisconnected
+		}
+		revision = a.live.revision
+	}
 	v := SyncLiveStatus{State: a.live.state, Initialized: a.live.initialized, Connected: "unknown", LinkedJID: linkedJID, LinkedLID: linkedLID, ObservedAt: time.Now().UTC()}
 	if v.State == "" {
 		v.State = SyncLiveInitializing
 	}
 	if closed && v.State != SyncLiveLoggedOut && v.State != SyncLiveError {
 		v.State = SyncLiveStopped
+	}
+	if revision != a.live.revision {
+		// Do not combine an old transport/identity read with newer event evidence.
+		v.LinkedJID, v.LinkedLID = "", ""
+		if a.live.connected {
+			if !a.live.terminal() && !closed {
+				v.State = SyncLiveUnknown
+			}
+		} else if client != nil {
+			v.Connected = "false"
+		}
+		return v
 	}
 	if client != nil {
 		connected := a.live.connected && transportConnected && a.live.state != SyncLiveLoggedOut && !closed
@@ -160,8 +189,6 @@ func (a *App) SyncLiveSnapshot() SyncLiveStatus {
 		v.Ready = v.Initialized && connected && !a.live.terminal()
 		if v.Ready {
 			v.State = SyncLiveReady
-		} else if a.live.connected && !transportConnected && !a.live.terminal() && !closed && v.State != SyncLiveReconnecting {
-			v.State = SyncLiveDisconnected
 		}
 	}
 	return v

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -229,5 +230,126 @@ func TestSyncLiveForcedReconnectNeedsNewAuthenticatedEvent(t *testing.T) {
 	a.live.transition(SyncLiveStopping)
 	if v := a.SyncLiveSnapshot(); v.Ready || v.Connected != "true" {
 		t.Fatalf("cleanup connection evidence lost: %+v", v)
+	}
+}
+
+func TestSyncLiveTransportLossInvalidatesPriorAuthentication(t *testing.T) {
+	a := newTestApp(t)
+	f := newFakeWA()
+	a.wa = f
+	generation := a.live.begin(t.Context())
+	a.live.initialize(t.Context())
+	f.mu.Lock()
+	f.connected = true
+	f.mu.Unlock()
+	a.live.event(&events.Connected{}, generation)
+	if !a.SyncLiveSnapshot().Ready {
+		t.Fatal("fixture never became ready")
+	}
+
+	// The SDK can expose a lost transport before asynchronous Disconnected.
+	f.Disconnect()
+	lost := a.SyncLiveSnapshot()
+	if lost.Ready || lost.State != SyncLiveDisconnected {
+		t.Fatalf("loss=%+v", lost)
+	}
+	t.Logf("observed lost transport: %+v", lost)
+
+	// Its replacement transport is up, but no authenticated Connected event
+	// for that replacement has been delivered.
+	f.mu.Lock()
+	f.connected = true
+	f.mu.Unlock()
+	replacement := a.SyncLiveSnapshot()
+	if replacement.Ready {
+		t.Fatalf("new unauthenticated transport inherited old Connected: %+v", replacement)
+	}
+	a.live.event(&events.Connected{}, generation)
+	if !a.SyncLiveSnapshot().Ready {
+		t.Fatal("new authenticated event did not restore readiness")
+	}
+	a.live.transition(SyncLiveStopping)
+	f.Disconnect()
+	if v := a.SyncLiveSnapshot(); v.State != SyncLiveStopping || v.Ready || v.Connected != "false" {
+		t.Fatalf("transport loss replaced terminal state: %+v", v)
+	}
+}
+
+type delayedTransportLiveWA struct {
+	*fakeWA
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (f *delayedTransportLiveWA) IsConnected() bool {
+	connected := f.fakeWA.IsConnected()
+	f.once.Do(func() { close(f.started); <-f.release })
+	return connected
+}
+
+func TestSyncLiveTransportReadConcurrentWithNewAuthentication(t *testing.T) {
+	for _, test := range []struct {
+		name                   string
+		priorTransport, newRun bool
+	}{
+		{"loss_then_new_connection", false, false},
+		{"loss_then_new_run", false, true},
+		{"positive_read_then_replacement_loss", true, false},
+		{"positive_read_then_new_run_loss", true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			a := newTestApp(t)
+			f := &delayedTransportLiveWA{fakeWA: newFakeWA(), started: make(chan struct{}), release: make(chan struct{})}
+			a.wa = f
+			generation := a.live.begin(t.Context())
+			a.live.initialize(t.Context())
+			a.live.event(&events.Connected{}, generation)
+			f.mu.Lock()
+			f.connected = test.priorTransport
+			f.mu.Unlock()
+			snapshots := make(chan SyncLiveStatus, 1)
+			go func() { snapshots <- a.SyncLiveSnapshot() }()
+			<-f.started
+			// New authentication completes while the prior transport read is pending.
+			// Neither an old negative read nor an old positive read belongs to it.
+			if test.newRun {
+				generation = a.live.begin(t.Context())
+				a.live.initialize(t.Context())
+			} else {
+				a.live.event(&events.Disconnected{}, generation)
+			}
+			f.mu.Lock()
+			f.connected = !test.priorTransport
+			f.mu.Unlock()
+			eventDone := make(chan struct{})
+			go func() { a.live.event(&events.Connected{}, generation); close(eventDone) }()
+			select {
+			case <-eventDone:
+			case <-time.After(time.Second):
+				close(f.release)
+				t.Fatal("transport getter held lifecycle mutex")
+			}
+			close(f.release)
+			if v := <-snapshots; v.Ready || v.State != SyncLiveUnknown || v.Connected != "unknown" {
+				t.Fatalf("mixed observations certified readiness: %+v", v)
+			}
+			next := a.SyncLiveSnapshot()
+			if !test.priorTransport {
+				if !next.Ready {
+					t.Fatalf("stale loss erased newer authenticated event: %+v", next)
+				}
+			} else {
+				if next.Ready || next.State != SyncLiveDisconnected {
+					t.Fatalf("current loss not observed: %+v", next)
+				}
+				f.mu.Lock()
+				f.connected = true
+				f.mu.Unlock()
+				if v := a.SyncLiveSnapshot(); v.Ready {
+					t.Fatalf("replacement inherited lost authentication: %+v", v)
+				}
+			}
+		})
 	}
 }

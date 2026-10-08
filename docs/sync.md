@@ -44,7 +44,11 @@ optional exact public `linked_jid` / `linked_lid` from this owner. LIDs are neve
 converted into inferred phone identities. `observed_at` dates this point-in-time
 snapshot, not a last-message or last-successful-keepalive timestamp. A stopping
 owner can still report `connected=true` while its existing socket is being cleaned
-up; only `ready=true` permits treating the owner as available.
+up; only `ready=true` permits treating the owner as available. An observed transport
+loss invalidates prior authenticated connection evidence even if `Disconnected`
+has not arrived; a replacement needs a new `Connected` event. If connection events
+or a new run change during the unlocked SDK read, that query cannot certify
+readiness and may return `unknown`; a fresh query can observe the newer evidence.
 
 | State | Meaning |
 | --- | --- |
