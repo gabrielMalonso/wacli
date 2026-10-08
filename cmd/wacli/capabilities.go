@@ -178,7 +178,7 @@ func capabilityConstraints(path string) []string {
 	case "media transcribe":
 		return []string{"No archive/session required; --read-only allows the explicit adapter, which is not sandboxed and may have external effects."}
 	case "history backfill":
-		return []string{"Requires local anchor and existing authenticated session or compatible owner; primary response is best-effort, not completeness."}
+		return []string{"Requires local anchor and existing authenticated session or compatible owner; primary response is best-effort, not completeness.", "--before-id selects an exact persisted DM/group message; one batch only (--requests 1), no anchor/identity retry; requires a compatible explicit-anchor owner."}
 	case "outbound send":
 		return []string{"Requires exact draft/revision/hash/key; text/contact/document/image/voice only.", "New dispatch requires existing authenticated session or compatible owner; a retained duplicate may resolve locally.", "Retained idempotency does not survive every archive loss/restore; never automatically resend after uncertainty."}
 	case "chats mark-read":

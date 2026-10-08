@@ -11,6 +11,8 @@ import (
 	"github.com/openclaw/wacli/internal/store/storedb"
 )
 
+var ErrInvalidHistoryAnchor = errors.New("invalid explicit history anchor")
+
 var ErrMessageNotTombstoned = errors.New("message is not tombstoned")
 
 type UpsertMessageParams struct {
@@ -489,6 +491,20 @@ func (d *DB) GetMessage(chatJID, msgID string) (Message, error) {
 		return Message{}, err
 	}
 	return messageFromGetRow(row), nil
+}
+
+// GetHistoryAnchorMessage refuses invalid raw key metadata and tombstones before
+// converting from_me to bool. The message comes from one exact chat/ID SELECT.
+func (d *DB) GetHistoryAnchorMessage(chatJID, msgID string) (Message, error) {
+	row, err := d.q.GetMessage(storeCtx(), storedb.GetMessageParams{ChatJid: chatJID, MsgID: msgID})
+	if err != nil {
+		return Message{}, err
+	}
+	m := messageFromGetRow(row)
+	if (row.FromMe != 0 && row.FromMe != 1) || row.Ts <= 0 || m.Revoked || m.DeletedForMe || row.DeletedAt != 0 || row.PayloadPurgedAt != 0 {
+		return Message{}, ErrInvalidHistoryAnchor
+	}
+	return m, nil
 }
 
 func (d *DB) CountMessages() (int64, error) {

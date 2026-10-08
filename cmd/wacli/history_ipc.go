@@ -12,10 +12,16 @@ import (
 
 // A distinct kind makes older owners reject this request explicitly.
 const historyBackfillKind = "history_backfill"
+const historyBeforeKind = "history_backfill_before_v1"
+
+func isHistoryBackfillKind(kind string) bool {
+	return kind == historyBackfillKind || kind == historyBeforeKind
+}
 
 type backfillDelegateOptions struct {
 	AttemptID string `json:"attempt_id"`
 	ChatJID   string `json:"chat_jid"`
+	BeforeID  string `json:"before_id,omitempty"`
 	Count     int    `json:"count"`
 	Requests  int    `json:"requests"`
 	WaitMS    int64  `json:"wait_ms"`
@@ -31,17 +37,21 @@ func (o backfillDelegateOptions) options() (app.BackfillOptions, error) {
 		return app.BackfillOptions{}, fmt.Errorf("backfill wait and idle must be between 0 and 5m")
 	}
 	return app.PrepareBackfillOptions(app.BackfillOptions{
-		AttemptID: o.AttemptID, ChatJID: o.ChatJID, Count: o.Count, Requests: o.Requests,
+		AttemptID: o.AttemptID, ChatJID: o.ChatJID, BeforeID: o.BeforeID, Count: o.Count, Requests: o.Requests,
 		WaitPerRequest: time.Duration(o.WaitMS) * time.Millisecond,
 		IdleExit:       time.Duration(o.IdleMS) * time.Millisecond,
 	})
 }
 
 func delegateHistoryBackfill(ctx context.Context, flags *rootFlags, lockErr error, opts app.BackfillOptions) error {
+	kind := historyBackfillKind
+	if opts.BeforeID != "" {
+		kind = historyBeforeKind
+	}
 	resp, _, err := tryDelegateSend(ctx, flags, lockErr, sendDelegateRequest{
-		Kind: historyBackfillKind,
+		Kind: kind,
 		Backfill: &backfillDelegateOptions{
-			AttemptID: opts.AttemptID, ChatJID: opts.ChatJID, Count: opts.Count, Requests: opts.Requests,
+			AttemptID: opts.AttemptID, ChatJID: opts.ChatJID, BeforeID: opts.BeforeID, Count: opts.Count, Requests: opts.Requests,
 			WaitMS: max(1, durationMillis(opts.WaitPerRequest)), IdleMS: max(1, durationMillis(opts.IdleExit)),
 		},
 	})
@@ -70,7 +80,7 @@ func executeDelegatedBackfill(ctx context.Context, a *app.App, req sendDelegateR
 }
 
 func delegateTransportError(kind string, err error) error {
-	if kind == historyBackfillKind {
+	if isHistoryBackfillKind(kind) {
 		return fmt.Errorf("no reliable reply from running sync after attempting history backfill dispatch; history may already have been persisted; check before retrying: %w", err)
 	}
 	return err

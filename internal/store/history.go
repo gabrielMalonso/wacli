@@ -116,3 +116,14 @@ func normalizeHistoryCoverage(c HistoryCoverage) HistoryCoverage {
 	c.BlockedReason = ""
 	return c
 }
+
+// CountConversationMessagesBefore measures distinct retained IDs strictly before
+// a real anchor's timestamp. The archive has second precision, so equal-second
+// messages cannot establish BEFORE progress. Verified aliases are counted once.
+func (d *DB) CountConversationMessagesBefore(chatJID, aliasJID string, before time.Time) (int64, error) {
+	var count int64
+	err := d.sql.QueryRowContext(storeCtx(), `SELECT COUNT(DISTINCT msg_id) FROM messages
+ WHERE chat_jid IN (?,?) AND ts > 0 AND ts < ? AND revoked=0 AND deleted_for_me=0
+ AND COALESCE(deleted_at,0)=0 AND COALESCE(payload_purged_at,0)=0`, chatJID, aliasJID, before.Unix()).Scan(&count)
+	return count, err
+}

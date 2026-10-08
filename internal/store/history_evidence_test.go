@@ -302,3 +302,56 @@ func BenchmarkHistoryEvidenceSelectedKeys(b *testing.B) {
 		}
 	}
 }
+
+func TestHistoryEvidenceDefiniteRefusalDoesNotErasePriorInvocations(t *testing.T) {
+	for _, calls := range []int{0, 1} {
+		t.Run(fmt.Sprint(calls), func(t *testing.T) {
+			db, err := Open(filepath.Join(t.TempDir(), "wacli.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			a := historyTestAttempt()
+			if err := db.BeginHistoryAttempt(t.Context(), a); err != nil {
+				t.Fatal(err)
+			}
+			a.WindowChatJID = a.RequestedChatJID
+			a.AccountJID = "100@s.whatsapp.net"
+			a.BaselineCount = new(int64(0))
+			a.Phase = HistoryDispatchPossible
+			a.DispatchPossible = true
+			a.RequestsSent = calls
+			if err := db.SaveHistoryAttempt(t.Context(), a); err != nil {
+				t.Fatal(err)
+			}
+			refused := a
+			refused.DispatchPossible = false
+			refused.RequestsSent = 0
+			refused.State = HistoryError
+			refused.Phase = HistoryObserving
+			refused.ErrorCode = "no_local_anchor"
+			now := time.Now().UTC()
+			refused.FinishedAt = &now
+			refused.CountersFinal = true
+			err = db.SaveHistoryAttempt(t.Context(), refused)
+			if calls == 0 && err != nil {
+				t.Fatal(err)
+			}
+			if calls == 1 && !errors.Is(err, ErrHistoryAttemptSuperseded) {
+				t.Fatalf("prior invocation uncertainty erased: %v", err)
+			}
+			got, err := db.ListHistoryRecoveryEvidence(t.Context(), []string{a.RequestedChatJID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			latest := got[0].Latest
+			if calls == 0 {
+				if latest.DispatchPossible || !latest.CountersFinal || latest.RequestsSent != 0 {
+					t.Fatalf("refusal=%+v", latest)
+				}
+			} else if !latest.DispatchPossible || latest.RequestsSent != 1 || latest.State != HistoryUnfinalized {
+				t.Fatalf("earlier dispatch=%+v", latest)
+			}
+		})
+	}
+}

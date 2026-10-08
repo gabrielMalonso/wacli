@@ -18,6 +18,7 @@ import (
 type BackfillOptions struct {
 	AttemptID      string
 	ChatJID        string
+	BeforeID       string
 	Count          int
 	Requests       int
 	WaitPerRequest time.Duration
@@ -43,11 +44,15 @@ const (
 )
 
 type BackfillResult struct {
-	AttemptID     string
-	Evidence      *store.HistoryAttempt `json:"evidence,omitempty"`
-	ChatJID       string
-	RequestsSent  int
-	ResponsesSeen int
+	AttemptID string
+	BeforeID  string `json:"before_id,omitempty"`
+	// MessagesAddedBefore is explicit-mode net retained growth strictly before
+	// the genuine anchor timestamp, including concurrent/late conversation activity.
+	MessagesAddedBefore *int64                `json:"messages_added_before,omitempty"`
+	Evidence            *store.HistoryAttempt `json:"evidence,omitempty"`
+	ChatJID             string
+	RequestsSent        int
+	ResponsesSeen       int
 	// MessagesAdded is net distinct local growth for the selected conversation
 	// during the post-connect counting window, including concurrent activity.
 	MessagesAdded int64
@@ -104,6 +109,14 @@ func PrepareBackfillOptions(opts BackfillOptions) (BackfillOptions, error) {
 			return BackfillOptions{}, err
 		}
 	}
+	if opts.BeforeID != "" {
+		if err := validateBeforeID(opts.BeforeID); err != nil {
+			return BackfillOptions{}, err
+		}
+		if _, err := store.NormalizeDraftTarget(opts.ChatJID); err != nil {
+			return BackfillOptions{}, fmt.Errorf("--before-id requires a valid DM/group JID: %w", err)
+		}
+	}
 	opts = normalizeBackfillOptions(opts)
 	return opts, validateBackfillOptions(opts)
 }
@@ -134,6 +147,17 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 			return BackfillResult{}, err
 		}
 	}
+	var selected store.MessageInfo
+	var selectedIdentity HistoryIdentity
+	if opts.BeforeID != "" {
+		if err := a.EnsureAuthedWithoutMigration(ctx); err != nil {
+			return BackfillResult{}, historyFailure(opts.AttemptID, store.HistoryPreparing, "backfill_not_dispatched", false, true, err)
+		}
+		selected, selectedIdentity, err = a.explicitHistoryAnchor(ctx, opts.ChatJID, opts.BeforeID)
+		if err != nil {
+			return BackfillResult{}, historyFailure(opts.AttemptID, store.HistoryPreparing, anchorFailureCode(err), false, true, err)
+		}
+	}
 	now := nowUTC()
 	rec := store.HistoryAttempt{RequestedChatJID: opts.ChatJID, AttemptID: opts.AttemptID, StartedAt: now, CheckpointAt: now,
 		State: store.HistoryUnfinalized, Phase: store.HistoryPreparing, ExecutionMode: "standalone", Count: opts.Count, Requests: opts.Requests,
@@ -145,11 +169,11 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 		return BackfillResult{}, historyFailure(opts.AttemptID, rec.Phase, "store_state", false, false, err)
 	}
 	defer a.finishHistoryAttempt(ctx, &rec, &result, &runErr)
-	if runtime == nil {
+	if runtime == nil && opts.BeforeID == "" {
 		if err := a.EnsureAuthed(ctx); err != nil {
 			return BackfillResult{}, err
 		}
-	} else if !a.wa.IsConnected() || !a.wa.IsAuthed() {
+	} else if runtime != nil && (!a.wa.IsConnected() || !a.wa.IsAuthed()) {
 		return BackfillResult{}, fmt.Errorf("sync follow owner is not connected and authenticated")
 	}
 
@@ -267,7 +291,10 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 			mu.Unlock()
 		}()
 
-		storeChat := a.canonicalStoreJID(ctx, chat).String()
+		storeChat := selectedIdentity.ChatJID
+		if opts.BeforeID == "" {
+			storeChat = a.canonicalStoreJID(ctx, chat).String()
+		}
 		if rec.FirstAnchorID == "" {
 			rec.FirstAnchorID = anchor.MsgID
 		}
@@ -286,13 +313,11 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 			rec.Phase = previousPhase
 			return onDemandResponse{}, historyFailure(rec.AttemptID, rec.Phase, "store_state", previousPossible, true, err)
 		}
-		requestsSent++
-		rec.RequestsSent = requestsSent
 		a.emitOrPrint("backfill_requesting", map[string]any{
 			"chat_jid":         storeChat,
 			"request_chat_jid": requestChat.String(),
 			"count":            opts.Count,
-			"request":          requestsSent,
+			"request":          requestsSent + 1,
 			"anchor_msg_id":    anchor.MsgID,
 		}, "Requesting %d older messages for %s...\n", opts.Count, storeChat)
 		reqInfo := types.MessageInfo{
@@ -300,6 +325,32 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 			ID:            types.MessageID(anchor.MsgID),
 			Timestamp:     anchor.Timestamp,
 		}
+		if opts.BeforeID != "" {
+			reqInfo.Sender, _ = types.ParseJID(anchor.SenderJID)
+			reqInfo.IsGroup = requestChat.Server == types.GroupServer
+		}
+		// The checkpoint and requesting output can block or invoke callbacks.
+		// Re-read local facts after both, with no output/checkpoint before WA.
+		if opts.BeforeID != "" {
+			current, identity, validationErr := a.explicitHistoryAnchor(ctx, opts.ChatJID, opts.BeforeID)
+			code := anchorFailureCode(validationErr)
+			if validationErr == nil && (current != selected || identity != selectedIdentity) {
+				code = "store_state"
+				validationErr = fmt.Errorf("selected anchor, account or conversation scope changed before dispatch")
+			}
+			if validationErr == nil {
+				validationErr = ctx.Err()
+				code = "cancelled"
+			}
+			if validationErr != nil {
+				// This invocation never occurred. Preserve uncertainty from earlier
+				// calls; a crash before finalization still retains the checkpoint.
+				rec.DispatchPossible, rec.Phase = previousPossible, previousPhase
+				return onDemandResponse{}, historyFailure(rec.AttemptID, rec.Phase, code, previousPossible, true, validationErr)
+			}
+		}
+		requestsSent++
+		rec.RequestsSent = requestsSent
 		if _, err := a.wa.RequestHistorySyncOnDemand(ctx, reqInfo, opts.Count); err != nil {
 			return onDemandResponse{}, err
 		}
@@ -362,16 +413,30 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 
 	var beforeCount int64
 	var beforeStored int64
+	var beforeWindowCount int64
 	var stopReason BackfillStopReason
-	countIdentities := func(ctx context.Context) (string, string) {
+	countIdentities := func(ctx context.Context) (string, string, error) {
+		if opts.BeforeID != "" {
+			identity, err := a.explicitHistoryScope(ctx, chat)
+			if err != nil {
+				return "", "", err
+			}
+			if identity != selectedIdentity {
+				return "", "", fmt.Errorf("selected account or conversation scope changed during recovery")
+			}
+			return identity.ChatJID, identity.AliasJID, nil
+		}
 		storeChat := a.canonicalStoreJID(ctx, chat)
 		alias := a.wa.ResolvePNToLID(ctx, storeChat)
-		return storeChat.String(), canonicalJIDString(alias)
+		return storeChat.String(), canonicalJIDString(alias), nil
 	}
 	checkIdentities := func(ctx context.Context) error {
-		currentChat, currentAlias := countIdentities(ctx)
-		if currentChat != windowChat || currentAlias != windowAlias {
-			return fmt.Errorf("backfill conversation identities changed during the counting window; result could not be measured reliably; already persisted messages may remain")
+		currentChat, currentAlias, err := countIdentities(ctx)
+		if err == nil && (currentChat != windowChat || currentAlias != windowAlias) {
+			err = fmt.Errorf("backfill conversation identities changed during the counting window; result could not be measured reliably; already persisted messages may remain")
+		}
+		if err != nil {
+			return historyFailure(rec.AttemptID, rec.Phase, "store_state", rec.DispatchPossible, true, err)
 		}
 		return nil
 	}
@@ -391,8 +456,17 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 	runRequests := func(ctx context.Context) error {
 		// Sync can learn mappings and migrate old LID rows while connecting.
 		// Resolve the local identity only after that migration has completed.
-		windowChat, windowAlias = countIdentities(ctx)
 		var err error
+		windowChat, windowAlias, err = countIdentities(ctx)
+		if err != nil {
+			return historyFailure(rec.AttemptID, rec.Phase, "store_state", rec.DispatchPossible, true, err)
+		}
+		if opts.BeforeID != "" {
+			beforeWindowCount, err = a.db.CountConversationMessagesBefore(windowChat, windowAlias, selected.Timestamp)
+			if err != nil {
+				return historyFailure(rec.AttemptID, rec.Phase, "store_state", false, true, err)
+			}
+		}
 		beforeCount, err = a.db.CountConversationMessages(windowChat, windowAlias)
 		if err != nil {
 			return historyFailure(rec.AttemptID, rec.Phase, "store_state", rec.DispatchPossible, true, fmt.Errorf("count backfill conversation before requests: %w", err))
@@ -418,7 +492,11 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 			if err := checkIdentities(ctx); err != nil {
 				return err
 			}
-			oldest, err := a.db.GetOldestMessageInfo(chatStr)
+			oldest := selected
+			var err error
+			if opts.BeforeID == "" {
+				oldest, err = a.db.GetOldestMessageInfo(chatStr)
+			}
 			if err != nil {
 				if err == sql.ErrNoRows {
 					return historyFailure(rec.AttemptID, rec.Phase, "no_local_anchor", rec.DispatchPossible, true, fmt.Errorf("no messages for %s in local DB; run `wacli sync` first", chatStr))
@@ -426,8 +504,13 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 				return historyFailure(rec.AttemptID, rec.Phase, "store_state", rec.DispatchPossible, true, err)
 			}
 
-			resp, err := requestAnchor(ctx, oldest)
-			if errors.Is(err, errResponseTimeout) && ctx.Err() == nil {
+			var resp onDemandResponse
+			if opts.BeforeID != "" {
+				resp, err = request(ctx, oldest, chat)
+			} else {
+				resp, err = requestAnchor(ctx, oldest)
+			}
+			if opts.BeforeID == "" && errors.Is(err, errResponseTimeout) && ctx.Err() == nil {
 				next, nextErr := a.db.GetNextMessageInfo(chatStr, oldest.MsgID)
 				if nextErr != nil && !errors.Is(nextErr, sql.ErrNoRows) {
 					return nextErr
@@ -459,6 +542,15 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 				"responses_seen": responsesSeen,
 			}, "On-demand history sync: %d conversations, %d messages.\n", resp.conversations, resp.messages)
 
+			if opts.BeforeID != "" {
+				stopReason = BackfillStopRequestedBatchLimit
+				if resp.endType == waHistorySync.Conversation_COMPLETE_AND_NO_MORE_MESSAGE_REMAIN_ON_PRIMARY {
+					stopReason = BackfillStopPrimaryNoMore
+				} else if resp.messages <= 0 {
+					stopReason = BackfillStopEmptyResponse
+				}
+				return nil // Selected-window progress is finalized after the idle drain.
+			}
 			newOldest, err := a.db.GetOldestMessageInfo(chatStr)
 			if err != nil {
 				return fmt.Errorf("read oldest backfill message after response: %w", err)
@@ -548,7 +640,36 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 		return BackfillResult{}, fmt.Errorf("backfill conversation count decreased during the counting window; result could not be measured reliably; already persisted messages may remain")
 	}
 
+	var addedBefore *int64
+	if opts.BeforeID != "" {
+		afterWindowCount, err := a.db.CountConversationMessagesBefore(windowChat, windowAlias, selected.Timestamp)
+		if err != nil {
+			return BackfillResult{}, err
+		}
+		if afterWindowCount < beforeWindowCount {
+			return BackfillResult{}, fmt.Errorf("selected history window count decreased; result cannot be measured reliably")
+		}
+		addedBefore = new(afterWindowCount - beforeWindowCount)
+		// Evaluate window progress after all captured callbacks drain. Same-second
+		// rows have no proven BEFORE order and do not count toward this metric.
+		if stopReason == BackfillStopRequestedBatchLimit && *addedBefore == 0 {
+			stopReason = BackfillStopNoProgress
+		}
+		legacy, message := "requested_batch_limit", "Requested batch limit reached (stopping)."
+		switch stopReason {
+		case BackfillStopNoProgress:
+			legacy, message = "no_older_messages_added", "No messages before the selected anchor were added (stopping)."
+		case BackfillStopEmptyResponse:
+			legacy, message = "no_messages_returned", "No messages returned (stopping)."
+		case BackfillStopPrimaryNoMore:
+			legacy, message = "start_of_history_reached", "Primary device reports no more messages available (stopping)."
+		}
+		if err := stop(stopReason, legacy, message); err != nil {
+			return BackfillResult{}, err
+		}
+	}
 	return BackfillResult{
+		BeforeID: opts.BeforeID, MessagesAddedBefore: addedBefore,
 		ChatJID:        windowChat,
 		RequestsSent:   requestsSent,
 		ResponsesSeen:  responsesSeen,
@@ -575,6 +696,9 @@ func normalizeBackfillOptions(opts BackfillOptions) BackfillOptions {
 }
 
 func validateBackfillOptions(opts BackfillOptions) error {
+	if opts.BeforeID != "" && opts.Requests != 1 {
+		return fmt.Errorf("--before-id supports exactly one batch (--requests 1)")
+	}
 	if opts.WaitPerRequest > 5*time.Minute || opts.IdleExit > 5*time.Minute {
 		return fmt.Errorf("--wait and --idle-exit must be <= 5m")
 	}

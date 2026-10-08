@@ -166,6 +166,7 @@ func newHistoryFillCmd(flags *rootFlags) *cobra.Command {
 
 func newHistoryBackfillCmd(flags *rootFlags) *cobra.Command {
 	var chat string
+	var beforeID string
 	var count int
 	var requests int
 	var wait time.Duration
@@ -179,8 +180,12 @@ func newHistoryBackfillCmd(flags *rootFlags) *cobra.Command {
 				return err
 			}
 
+			if cmd.Flags().Changed("before-id") && beforeID == "" {
+				return fmt.Errorf("--before-id must not be empty")
+			}
+
 			opts, err := app.PrepareBackfillOptions(app.BackfillOptions{
-				ChatJID: chat, Count: count, Requests: requests,
+				ChatJID: chat, BeforeID: beforeID, Count: count, Requests: requests,
 				WaitPerRequest: wait, IdleExit: idleExit,
 			})
 			if err != nil {
@@ -222,6 +227,7 @@ func newHistoryBackfillCmd(flags *rootFlags) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&chat, "chat", "", "chat JID")
+	cmd.Flags().StringVar(&beforeID, "before-id", "", "request one batch before this exact persisted message ID (no retry; requires --requests 1)")
 	cmd.Flags().IntVar(&count, "count", app.DefaultBackfillCount, "number of messages to request per on-demand sync")
 	cmd.Flags().IntVar(&requests, "requests", app.DefaultBackfillRequests, "number of history batches to request (each may retry once after a timeout)")
 	cmd.Flags().DurationVar(&wait, "wait", 60*time.Second, "time to wait for an on-demand response per request")
@@ -231,14 +237,23 @@ func newHistoryBackfillCmd(flags *rootFlags) *cobra.Command {
 
 func writeBackfillResult(dst io.Writer, res app.BackfillResult, asJSON bool) error {
 	if asJSON {
-		return out.WriteJSON(dst, map[string]any{
+		data := map[string]any{
 			"chat":            res.ChatJID,
 			"requests_sent":   res.RequestsSent,
 			"responses_seen":  res.ResponsesSeen,
 			"messages_added":  res.MessagesAdded,
 			"messages_synced": res.MessagesSynced,
 			"stop_reason":     res.StopReason,
-		})
+		}
+		if res.BeforeID != "" {
+			data["before_id"] = res.BeforeID
+			data["messages_added_before"] = res.MessagesAddedBefore
+		}
+		return out.WriteJSON(dst, data)
+	}
+	if res.BeforeID != "" && res.MessagesAddedBefore != nil {
+		_, err := fmt.Fprintf(dst, "Backfill before %s stopped for %s: %s. Added %d messages before this anchor (%d requests).\n", res.BeforeID, res.ChatJID, res.StopReason, *res.MessagesAddedBefore, res.RequestsSent)
+		return err
 	}
 	_, err := fmt.Fprintf(dst, "Backfill stopped for %s: %s. Local conversation grew by %d messages (%d requests).\n", res.ChatJID, res.StopReason, res.MessagesAdded, res.RequestsSent)
 	return err

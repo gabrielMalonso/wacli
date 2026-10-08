@@ -151,3 +151,41 @@ func TestListHistoryCoverageEscapesQueryWildcards(t *testing.T) {
 		t.Fatalf("wildcard leak: %+v", coverage)
 	}
 }
+
+func TestHistoryBeforeWindowCountsRetainedDistinctIDs(t *testing.T) {
+	db := openTestDB(t)
+	boundary := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	pn, lid, other := "15550000001@s.whatsapp.net", "100000000001@lid", "123@g.us"
+	for _, chat := range []string{pn, lid, other} {
+		if err := db.UpsertChat(chat, "dm", "fixture", boundary); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, m := range []struct {
+		chat, id string
+		ts       time.Time
+	}{
+		{pn, "duplicate", boundary.Add(-time.Hour)}, {lid, "duplicate", boundary.Add(-time.Hour)},
+		{lid, "alias-only", boundary.Add(-time.Minute)}, {pn, "same-second", boundary},
+		{pn, "newer", boundary.Add(time.Hour)}, {other, "other-chat", boundary.Add(-time.Hour)},
+		{pn, "tombstone", boundary.Add(-time.Minute)},
+	} {
+		if err := db.UpsertMessage(UpsertMessageParams{ChatJID: m.chat, MsgID: m.id, Timestamp: m.ts, Text: "fixture"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.sql.Exec(`UPDATE messages SET deleted_for_me=1,deleted_at=1 WHERE msg_id='tombstone'`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.CountConversationMessagesBefore(pn, lid, boundary)
+	if err != nil || got != 2 {
+		t.Fatalf("count=%d err=%v", got, err)
+	}
+	// Verified alias migration cannot manufacture window growth.
+	if _, err := db.sql.Exec(`DELETE FROM messages WHERE chat_jid=? AND msg_id='duplicate'`, lid); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := db.CountConversationMessagesBefore(pn, lid, boundary); err != nil || got != 2 {
+		t.Fatalf("after alias dedup=%d err=%v", got, err)
+	}
+}

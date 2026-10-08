@@ -9,7 +9,7 @@ Read when: trying to fetch older messages for a known chat.
 ```bash
 wacli history coverage [--evidence] [--query TEXT] [--kind KIND] [--include-blocked] [--only-actionable]
 wacli history fill --dry-run [--query TEXT] [--kind KIND] [--limit 100]
-wacli history backfill --chat JID [--count 50] [--requests N] [--wait 1m] [--idle-exit 5s] [--events]
+wacli history backfill --chat JID [--before-id MESSAGE_ID] [--count 50] [--requests N] [--wait 1m] [--idle-exit 5s] [--events]
 ```
 
 ## Coverage and planning
@@ -46,17 +46,76 @@ scan, automatic repair, or changes to frozen draft revisions are performed.
 ## Limits
 
 - `--count` defaults to 50 and must be at most 500.
-- `--requests` defaults to 1 and must be at most 100. Each requested batch may retry the other verified identity and one later anchor after timeouts.
+- `--requests` defaults to 1 and must be at most 100. Without `--before-id`, each requested batch may retry the other verified identity and one later anchor after timeouts.
 - `--wait` and `--idle-exit` each default as shown above and must be at most 5 minutes. Nonpositive count/request/wait/idle values retain their legacy defaults.
 - Requests are per chat.
-- The anchor starts at the oldest locally stored message in that chat. If the phone does not answer within `--wait`, backfill retries once using the next chronological local message (timestamp, then row ID). No message IDs or content types are filtered out, and no local rows are deleted.
+- Without `--before-id`, the anchor starts at the oldest locally stored message in that chat. If the phone does not answer within `--wait`, backfill retries once using the next chronological local message (timestamp, then row ID). No message IDs or content types are filtered out, and no local rows are deleted.
 - This is backward pagination, not recovery since disconnection. A missing message newer than the selected anchor is outside the requested interval. Sync replay completion and an empty local search do not prove that interval complete or permanently unavailable; see [missing offline messages](sync.md#missing-messages-after-an-offline-interval).
-- A phone-number JID and its verified mapped LID refer to the same local chat. Backfill uses the phone JID for local anchors and results, requests history with the corresponding LID when available, and accepts responses under either identity. The primary device answers some 1:1 chats only by LID and others only by phone number (#444), so an unanswered request is retried for the same anchor with the other identity, and the identity of a successful attempt is preferred for later batches. Responses do not identify the triggering request, so a late reply may temporarily favor the other identity; the bounded fallback remains available on every batch. A `backfill_identity_retry` warning reports the switch. Unmapped JIDs and groups retain their original identity.
+- In default backfill, a phone-number JID and its verified mapped LID refer to the same local chat. Backfill uses the phone JID for local anchors and results, requests history with the corresponding LID when available, and accepts responses under either identity. The primary device answers some 1:1 chats only by LID and others only by phone number (#444), so an unanswered request is retried for the same anchor with the other identity, and the identity of a successful attempt is preferred for later batches. Responses do not identify the triggering request, so a late reply may temporarily favor the other identity; the bounded fallback remains available on every batch. A `backfill_identity_retry` warning reports the switch. Unmapped JIDs and groups retain their original identity.
 - Each attempt gets its own `--wait`; a batch can therefore wait up to twice that duration for responses, or four times for a mapped 1:1 chat whose identities are both silent (two identities for each of two anchors). If there is no next anchor, or the retry also times out, backfill stops with an error naming the unanswered anchor. Transport errors and cancellation are not retried.
 - A successful retry must add history older than the original local anchor to continue to another batch. Returning only already-stored messages stops backfill normally.
 - Backfill evaluates progress after the history response has been processed into the local store, including asynchronously delivered responses. If a response contains both identities of the frozen verified PN/LID scope, their message observations are summed into one response; a primary end marker from either identity takes precedence and retains its observed identity and time. Conversations outside that scope do not contribute observations or primary markers.
 - Sync owns the manual-history download setting. Backfill uses the same persistence handler for both directly delivered history events and manually downloaded on-demand notifications; a notification is downloaded and persisted once.
 - `--events` emits NDJSON request/response/stop lifecycle events on stderr. Requests include `anchor_msg_id` and `request_chat_jid` (the identity sent to the phone), and a `warning` with code `backfill_anchor_retry` identifies the unanswered anchor and its replacement. Human output reports the same retry on stderr. The result's request count includes retry attempts.
+
+## Explicit recovery anchor
+
+```bash
+# Use an exact ID returned by messages show/list for this selected archive/chat.
+wacli --account example history backfill --chat 1234567890@s.whatsapp.net --before-id REAL_MESSAGE_ID --count 50 --requests 1 --agent
+```
+
+`--before-id` requests up to `--count` messages immediately **before** one genuine
+persisted message in the exact normalized requested chat. It can target a recent
+window even when the archive already contains much older messages. It never
+recovers a gap after the selected anchor or guarantees a missing message exists
+on the phone. An arbitrary date/ID or a message visible only in a browser cannot
+supply an anchor: first select a real local message in this account's archive.
+
+This mode supports one batch only (`--requests 1`, the default), with **one
+request and no anchor or identity retry**. It preserves the requested PN, LID or
+group identity on the wire, without substituting a mapped chat. The writer checks
+the exact chat/ID, positive persisted timestamp, valid sender, `from_me` and
+current local public account/verified author relationships. Missing/wrong-chat
+messages, unknown or contradictory authors, tombstones, purged payloads and read
+errors refuse before recovery dispatch; initial validation precedes standalone
+connection. Explicit preparation and revalidation use local identity reads only: a missing
+alias leaves the requested identity alone, a candidate alias needs corroborating
+PN/LID mappings in both directions, and read errors or scope changes refuse.
+The account, scope and anchor are revalidated after the pre-call checkpoint and
+`backfill_requesting` output, immediately before the WA invocation. That event
+announces an intended request; finalized `requests_sent` counts actual WA
+invocations. A refusal there records zero invocations and `not_dispatched`;
+a crash or failed finalization can retain the conservative pre-call checkpoint.
+These local reads and the network call are not an atomic transaction.
+This does not
+certify historical authorship or continuity across a replaced/restored archive:
+message rows are scoped to the selected archive, without a per-row account ID.
+Normal standalone Sync may migrate verified LID rows after connecting; if the
+selected row moved or changed, explicit recovery refuses rather than switching
+chat/anchor. Inspect the current archive and select again explicitly.
+
+Progress uses net distinct retained IDs with timestamps strictly **before the
+selected anchor**, across the frozen verified conversation scope, after captured
+callbacks and the idle window drain. The global oldest need not change. Duplicate,
+newer and equal-second arrivals do not demonstrate progress; the archive's second
+precision cannot establish order within one second. Tombstones/purged rows are
+excluded from this window metric. `no_progress` means no measured growth in that
+window, not complete or unavailable history. Empty/partial replies remain only
+observations; an explicit primary end marker retains its existing limited meaning.
+Concurrent or late history in this conversation can contribute: WhatsApp supplies
+no request ID and cannot prove exclusive attribution to this anchor/window.
+
+Successful JSON/agent results add `before_id` and `messages_added_before` only in
+this mode. Existing `messages_added` and retained evidence counts remain total
+conversation growth. Evidence reuses the attempt ID, first/last actual anchor,
+prepared request identity, response times and stop reason; no schema change is
+needed. The selector mode and separate window count are in the action result,
+not separately retained in coverage evidence. Keep that result alongside the
+attempt ID; retained anchor IDs alone do not distinguish default/explicit mode.
+Preflight anchor refusals before the evidence start do not create a retained
+attempt. The same deadlines, cancellation/uncertain outcomes and readonly guards
+apply. Never automatically repeat a refused or uncertain request.
 
 ## Backfill alongside sync follow
 
@@ -67,7 +126,10 @@ No second writer, connection, daemon, or database is opened. Without an owner,
 the existing standalone connect/sync/idle flow runs. `--read-only` (including `WACLI_READONLY=1`)
 rejects backfill before dispatch. `--agent history backfill` is an explicit live
 action, subject to the same policy and limits. Older follow owners explicitly
-reject the new `history_backfill` kind; restart with the updated binary.
+reject unsupported history kinds. Explicit selection uses the distinct
+`history_backfill_before_v1` kind: an older owner that ignores new JSON fields
+cannot silently run oldest backfill. Restart with a compatible binary; no
+direct-writer fallback occurs.
 
 Backfill shares the existing serialized operation slot with delegated sends,
 presence, and read receipts. While backfill occupies it, those operations wait
@@ -139,7 +201,7 @@ shows the stop reason and describes the measured local conversation growth.
 | `stop_reason` | Evidence |
 | --- | --- |
 | `requested_batch_limit` | All requested batches received replies with progress; the configured batch limit stopped further requests. |
-| `no_progress` | A nonempty reply left the original oldest local anchor unchanged; this is a heuristic, not evidence of history completeness. |
+| `no_progress` | A nonempty reply left the original oldest local anchor unchanged (default), or explicit selection measured no growth before its anchor after the idle drain; this is a heuristic, not evidence of history completeness. |
 | `empty_response` | The matching conversation returned no messages and no explicit primary end marker. |
 | `primary_no_more_messages` | The primary reported `COMPLETE_AND_NO_MORE_MESSAGE_REMAIN_ON_PRIMARY` for this conversation. This wins over empty/duplicate-response heuristics. |
 

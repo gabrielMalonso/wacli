@@ -402,6 +402,25 @@ func (f *fakeWA) ResolvePNToLID(ctx context.Context, jid types.JID) types.JID {
 	return jid
 }
 
+func (f *fakeWA) LookupLocalAlias(ctx context.Context, jid types.JID) (types.JID, error) {
+	if err := ctx.Err(); err != nil {
+		return types.JID{}, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if jid.Server == types.HiddenUserServer {
+		return f.lids[jid.ToNonAD()], nil
+	}
+	if jid.Server == types.DefaultUserServer {
+		for lid, pn := range f.lids {
+			if pn == jid.ToNonAD() {
+				return lid, nil
+			}
+		}
+	}
+	return types.JID{}, nil
+}
+
 func (f *fakeWA) CheckPublicPair(ctx context.Context, first, second types.JID) (wa.PublicPairResult, error) {
 	if err := ctx.Err(); err != nil {
 		return wa.PublicPairUnverified, err

@@ -177,7 +177,8 @@ func (d *DB) BeginHistoryAttempt(ctx context.Context, a HistoryAttempt) error {
 var ErrHistoryAttemptSuperseded = errors.New("history attempt no longer owns latest evidence")
 
 // Save conditions every update on the expected ID and unfinalized state. Scope
-// cannot be reassigned, and dispatch uncertainty never decreases within an attempt.
+// cannot be reassigned. Only a finalized, definite refusal with zero invocations
+// can clear a pre-call checkpoint; uncertainty from any earlier call remains.
 func (d *DB) SaveHistoryAttempt(ctx context.Context, a HistoryAttempt) error {
 	conn, err := d.historyConn(ctx)
 	if err != nil {
@@ -195,10 +196,11 @@ func (d *DB) SaveHistoryAttempt(ctx context.Context, a HistoryAttempt) error {
 		c = strings.TrimSpace(c)
 		sets = append(sets, c+"=?")
 	}
+	refusedBeforeCall := !a.DispatchPossible && a.CountersFinal && a.FinishedAt != nil && (a.State == HistoryError || a.State == HistoryCancelled) && a.Phase == HistoryObserving && a.RequestsSent == 0 && a.ResponsesSeen == 0
 	args := historyAttemptArgs(a)
-	args = append(args, a.RequestedChatJID, a.AttemptID, a.WindowChatJID, a.WindowAliasJID, a.BaselineCount, a.AccountJID, a.DispatchPossible)
+	args = append(args, a.RequestedChatJID, a.AttemptID, a.WindowChatJID, a.WindowAliasJID, a.BaselineCount, a.AccountJID, a.DispatchPossible, refusedBeforeCall)
 	res, err := tx.ExecContext(ctx, `UPDATE history_recovery_evidence SET `+strings.Join(sets, ",")+` WHERE requested_chat_jid=? AND slot='latest' AND attempt_id=? AND state='unfinalized'
- AND (window_chat_jid='' OR (window_chat_jid=? AND window_alias_jid=? AND baseline_count=? AND account_jid=?)) AND dispatch_possible<=?`, args...)
+ AND (window_chat_jid='' OR (window_chat_jid=? AND window_alias_jid=? AND baseline_count=? AND account_jid=?)) AND (dispatch_possible<=? OR (? AND requests_sent=0 AND responses_seen=0 AND phase='dispatch_possible'))`, args...)
 	if err != nil {
 		return err
 	}
