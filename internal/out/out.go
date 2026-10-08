@@ -26,7 +26,10 @@ func writeJSON(w io.Writer, data any, ignoreBrokenPipe bool) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(w, string(b))
+	n, err := fmt.Fprintln(w, string(b))
+	if err == nil && n != len(b)+1 {
+		err = io.ErrShortWrite
+	}
 	if ignoreBrokenPipe && isPlatformBrokenPipe(err) {
 		return nil
 	}

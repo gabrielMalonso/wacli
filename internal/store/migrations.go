@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -898,7 +899,11 @@ func migrateMessagesFTS(d *DB) error {
 }
 
 func (d *DB) tableExists(table string) (bool, error) {
-	row := d.sql.QueryRow(`SELECT 1 FROM sqlite_master WHERE name = ? AND type IN ('table','view')`, table)
+	return d.tableExistsContext(context.Background(), table)
+}
+
+func (d *DB) tableExistsContext(ctx context.Context, table string) (bool, error) {
+	row := d.sql.QueryRowContext(ctx, `SELECT 1 FROM sqlite_master WHERE name = ? AND type IN ('table','view')`, table)
 	var one int
 	if err := row.Scan(&one); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

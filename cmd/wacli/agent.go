@@ -239,7 +239,7 @@ func agentCommandCapability(cmd *cobra.Command) agentCapability {
 		return agentDiscovery
 	case "messages list", "messages search", "messages show", "messages context", "chats list", "chats show", "contacts list", "contacts search", "contacts show", "contacts resolve", "history coverage", "auth status":
 		return agentLocalRead
-	case "draft show", "draft list", "draft cleanup preview", "outbound show", "outbound list", "changes list":
+	case "draft show", "draft list", "draft cleanup preview", "outbound show", "outbound list", "changes list", "changes watch":
 		return agentLocalRead
 	case "media status":
 		return agentMediaRead
