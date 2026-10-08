@@ -38,6 +38,7 @@ const (
 var errSendDelegateUnavailable = errors.New("send delegate unavailable")
 
 type sendDelegateRequest struct {
+	SyncStatus           *syncStatusRequest       `json:"sync_status,omitempty"`
 	DraftCleanup         *app.DraftCleanupRequest `json:"draft_cleanup,omitempty"`
 	AgentChatState       *app.ChatStateRequest    `json:"agent_chat_state,omitempty"`
 	Outbound             *app.OutboundSendRequest `json:"outbound,omitempty"`
@@ -87,6 +88,7 @@ type sendDelegateRequest struct {
 }
 
 type sendDelegateResponse struct {
+	SyncStatus           *syncStatusReply     `json:"sync_status,omitempty"`
 	DraftValidationField draftValidationField `json:"draft_validation_field,omitempty"`
 
 	DraftCleanup     *draftCleanupReply      `json:"draft_cleanup,omitempty"`
@@ -269,12 +271,6 @@ func tryDelegateSend(ctx context.Context, flags *rootFlags, lockErr error, req s
 	return resp, true, nil
 }
 
-func startSendDelegateServer(ctx context.Context, a *app.App, spacing sendSpacing) (func(), error) {
-	return startSendDelegateServerForStore(ctx, a.StoreDir(), spacing, func(ctx context.Context, req sendDelegateRequest) (sendDelegateResponse, error) {
-		return executeDelegatedSend(ctx, a, req)
-	})
-}
-
 func startSendDelegateServerForStore(ctx context.Context, storeDir string, spacing sendSpacing, execute sendDelegateExecutor) (func(), error) {
 	path := sendDelegateSocketPath(storeDir)
 	if err := removeStaleSendDelegateSocket(path); err != nil {
@@ -447,6 +443,11 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 	// transport alive through its budget and the final response write.
 	_ = conn.SetDeadline(deadline.Add(sendDelegateResponseGrace))
 
+	if req.Kind == syncStatusKind {
+		resp, err := execute(requestCtx, req)
+		writeDelegateResult(conn, requestCtx, req, resp, err)
+		return
+	}
 	if req.Kind == historyBackfillKind {
 		if req.Version != sendDelegateVersion || req.Backfill == nil {
 			_ = json.NewEncoder(conn).Encode(historyRefusal(req, "invalid_arguments", "invalid history backfill request before dispatch; no history was requested"))

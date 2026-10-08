@@ -63,6 +63,7 @@ type SyncOptions struct {
 	OnQRCode            func(string)
 	PairPhoneNumber     string
 	OnPairCode          func(string)
+	BeforeConnect       func(context.Context) error // local owner IPC may serve initialization status
 	AfterConnect        func(context.Context) error
 	DownloadMedia       bool
 	RefreshContacts     bool
@@ -81,6 +82,7 @@ type SyncOptions struct {
 	afterHistorySync    func(*events.HistorySync)
 	historyStoreError   func(types.JID, error) // optional observer for backfill persistence failures
 	historyObserver     *historyObserver       // standalone backfill callback/idle window
+	liveGeneration      uint64                 // fences copied callbacks from prior Sync runs
 	outboundHistory     *outboundEvidenceBatch // shared by download and persistence, never per message
 }
 
@@ -94,6 +96,14 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 	if a.opts.ReadOnly {
 		return SyncResult{}, fmt.Errorf("read-only mode: command would sync WhatsApp")
 	}
+	opts.liveGeneration = a.live.begin(ctx)
+	defer func() {
+		if syncErr != nil {
+			a.live.transition("error")
+		} else {
+			a.live.transition("stopped")
+		}
+	}()
 	run := &appStateRecoveryRun{}
 	ctx = context.WithValue(ctx, appStateRecoveryRunKey{}, run)
 	defer func() { result.recovery, result.storeDir = run, a.StoreDir() }()
@@ -145,6 +155,9 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 
 	syncCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	a.live.mu.Lock()
+	a.live.ctx = syncCtx
+	a.live.mu.Unlock()
 	limits := &syncStorageLimits{app: a, opts: opts, cancel: cancel}
 
 	if err := a.OpenWA(); err != nil {
@@ -224,6 +237,11 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 		}
 	}()
 
+	if opts.BeforeConnect != nil {
+		if err := opts.BeforeConnect(syncCtx); err != nil {
+			return SyncResult{}, err
+		}
+	}
 	connectionEpoch.Store(nowUTC().UnixNano())
 	if err := a.connectForSync(syncCtx, opts); err != nil {
 		return SyncResult{}, err
@@ -234,6 +252,7 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 	// send can complete even after the sync context is cancelled.
 	defer func() {
 		cancel()
+		a.live.transition("stopping")
 		ps.mu.Lock()
 		ps.cleanupStarted = true
 		ps.mu.Unlock()
@@ -298,6 +317,14 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 		}
 	}
 
+	a.live.initialize(syncCtx)
+	defer func() {
+		if syncErr != nil {
+			a.live.transition(SyncLiveError)
+		} else {
+			a.live.transition(SyncLiveStopping)
+		}
+	}()
 	var err error
 	if opts.Mode == SyncModeFollow {
 		_, err = a.runSyncFollow(syncCtx, opts.MaxReconnect, opts.PresenceMode, &messagesStored, &connectionEpoch, disconnected, loggedOut, staleReconnect)

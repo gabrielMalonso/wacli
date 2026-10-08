@@ -66,6 +66,7 @@ The CLI release version, agent envelope version, SQLite migration version, diagn
 | `draft cleanup apply D --revision R --if-revision HEAD --expect-hash HASH` | Explicit local byte removal effect, outcome, directory sync and logical removed bytes | Same result |
 | `outbound send D --revision R --expect-hash H --key K` | Explicit live action: operation, duplicate, persistence, known result/ACK, history warning and SDK retry policy | Nullable checkpoint timestamps |
 | `outbound show/list` | Operation with observation page / operations array; frozen binding, phase/result and derived evidence | Nullable retained checkpoint timestamps |
+| `sync status` | Live existing follow owner readiness via scoped IPC; no archive/session open or connection | Same bounded snapshot |
 | `auth status` | Local authentication observation, public linked JID/phone when known, `session_revoked`, `connected` | Same observation |
 | `doctor` (offline) | Auth observation, lock state, FTS availability, heartbeat activity date and `app_state` replay debt | Store counts and `last_message_at` |
 
@@ -318,6 +319,20 @@ Only `outbound send D --revision R --expect-hash H --key K` gains the outbound l
 `error.outbound` carries request/operation/message IDs, D/R/H/key/frozen own PN, phase, retained attempt result, known result, persistence confirmation and optional known ACK timestamp. Output failure after an effect retains this query correlation. Compact/full are capped at 1/8 MiB; no body, protobuf, media secrets or raw internal causes are exposed. The adapter's one invocation does not limit SDK frame or retry-receipt retransmission, including after uncertainty/cancellation. Accepted never establishes delivered/read. See [outbound operations](outbound.md) for deadlines, IPC, snapshot handling, certainty and restoration limits.
 
 Static image drafts expose `kind=image` and `image={mime,caption,size,sha256,width,height,thumbnail_bytes,thumbnail_sha256,verified_at_create}`. Full adds only the derived expected `snapshot_path`; compact may truncate the literal caption with explicit recovery guidance. Thumbnail bytes/base64 and import paths are private and never part of the public DTO. Metadata describes preparation only; visual inspection is separate and no human approval is recorded. Output remains minified v1 JSON with existing limits/source/uncertainty. See [drafts](drafts.md) for JPEG/PNG/APNG validation, retention and old-owner request-v2 compatibility.
+
+## Live owner status
+
+[`sync status`](sync.md#live-owner-readiness) is a readonly `sync_status` capability
+with `source=live`. It queries only the existing follow owner's scoped Unix IPC,
+without writer LOCK, archive/session open, migration or a second WhatsApp client.
+`data.owner_ready` positively reports completed local initialization without
+terminal cleanup; `transport_connected` separately observes the socket. Current
+authenticated readiness remains a pinned SDK gap: `authenticated=unknown`,
+strict `ready=false`, `readiness_reason=current_authentication_unsupported`.
+The owner can serve local queries despite this gap, including while disconnected.
+These observations never prove history completeness or future dispatch. Timeout, incompatible/mismatched
+owners and Windows unsupported IPC remain explicit unknown observations. Offline
+`auth status` / `doctor` retain `connected=unknown`; no auth-history fallback occurs.
 
 ## Doctor historical evidence
 
