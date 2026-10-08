@@ -53,3 +53,23 @@ func checkPublicPair(ctx context.Context, mapping store.LIDStore, first, second 
 	}
 	return PublicPairVerified, nil
 }
+
+// LookupLocalAlias reads a candidate from this client's public map only. Missing
+// mappings return an empty JID; storage failures remain errors. The caller must
+// corroborate a returned candidate with CheckPublicPair before using its scope.
+func (c *Client) LookupLocalAlias(ctx context.Context, jid types.JID) (types.JID, error) {
+	c.mu.Lock()
+	cli := c.client
+	c.mu.Unlock()
+	if cli == nil || cli.Store == nil || cli.Store.LIDs == nil {
+		return types.JID{}, fmt.Errorf("public identity map unavailable")
+	}
+	switch jid.Server {
+	case types.DefaultUserServer:
+		return cli.Store.LIDs.GetLIDForPN(ctx, jid.ToNonAD())
+	case types.HiddenUserServer:
+		return cli.Store.LIDs.GetPNForLID(ctx, jid.ToNonAD())
+	default:
+		return types.JID{}, nil
+	}
+}

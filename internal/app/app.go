@@ -100,6 +100,7 @@ type WAClient interface {
 	LinkedJID() string
 	LinkedLID() string
 	CheckPublicPair(context.Context, types.JID, types.JID) (wa.PublicPairResult, error)
+	LookupLocalAlias(context.Context, types.JID) (types.JID, error)
 
 	SetProfilePicture(ctx context.Context, avatar []byte) (string, error)
 	GetProfilePictureInfo(ctx context.Context, jid types.JID, preview bool, existingID string) (*types.ProfilePictureInfo, error)

@@ -148,12 +148,12 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 		}
 	}
 	var selected store.MessageInfo
-	var selectedAccount string
+	var selectedIdentity HistoryIdentity
 	if opts.BeforeID != "" {
 		if err := a.EnsureAuthedWithoutMigration(ctx); err != nil {
 			return BackfillResult{}, historyFailure(opts.AttemptID, store.HistoryPreparing, "backfill_not_dispatched", false, true, err)
 		}
-		selected, selectedAccount, err = a.explicitHistoryAnchor(ctx, opts.ChatJID, opts.BeforeID)
+		selected, selectedIdentity, err = a.explicitHistoryAnchor(ctx, opts.ChatJID, opts.BeforeID)
 		if err != nil {
 			return BackfillResult{}, historyFailure(opts.AttemptID, store.HistoryPreparing, anchorFailureCode(err), false, true, err)
 		}
@@ -291,16 +291,10 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 			mu.Unlock()
 		}()
 
-		if opts.BeforeID != "" {
-			current, account, err := a.explicitHistoryAnchor(ctx, opts.ChatJID, opts.BeforeID)
-			if err != nil {
-				return onDemandResponse{}, historyFailure(rec.AttemptID, rec.Phase, anchorFailureCode(err), false, true, err)
-			}
-			if current != selected || account != selectedAccount {
-				return onDemandResponse{}, historyFailure(rec.AttemptID, rec.Phase, "no_local_anchor", false, true, fmt.Errorf("selected anchor or account changed before dispatch"))
-			}
+		storeChat := selectedIdentity.ChatJID
+		if opts.BeforeID == "" {
+			storeChat = a.canonicalStoreJID(ctx, chat).String()
 		}
-		storeChat := a.canonicalStoreJID(ctx, chat).String()
 		if rec.FirstAnchorID == "" {
 			rec.FirstAnchorID = anchor.MsgID
 		}
@@ -319,13 +313,11 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 			rec.Phase = previousPhase
 			return onDemandResponse{}, historyFailure(rec.AttemptID, rec.Phase, "store_state", previousPossible, true, err)
 		}
-		requestsSent++
-		rec.RequestsSent = requestsSent
 		a.emitOrPrint("backfill_requesting", map[string]any{
 			"chat_jid":         storeChat,
 			"request_chat_jid": requestChat.String(),
 			"count":            opts.Count,
-			"request":          requestsSent,
+			"request":          requestsSent + 1,
 			"anchor_msg_id":    anchor.MsgID,
 		}, "Requesting %d older messages for %s...\n", opts.Count, storeChat)
 		reqInfo := types.MessageInfo{
@@ -337,6 +329,28 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 			reqInfo.Sender, _ = types.ParseJID(anchor.SenderJID)
 			reqInfo.IsGroup = requestChat.Server == types.GroupServer
 		}
+		// The checkpoint and requesting output can block or invoke callbacks.
+		// Re-read local facts after both, with no output/checkpoint before WA.
+		if opts.BeforeID != "" {
+			current, identity, validationErr := a.explicitHistoryAnchor(ctx, opts.ChatJID, opts.BeforeID)
+			code := anchorFailureCode(validationErr)
+			if validationErr == nil && (current != selected || identity != selectedIdentity) {
+				code = "store_state"
+				validationErr = fmt.Errorf("selected anchor, account or conversation scope changed before dispatch")
+			}
+			if validationErr == nil {
+				validationErr = ctx.Err()
+				code = "cancelled"
+			}
+			if validationErr != nil {
+				// This invocation never occurred. Preserve uncertainty from earlier
+				// calls; a crash before finalization still retains the checkpoint.
+				rec.DispatchPossible, rec.Phase = previousPossible, previousPhase
+				return onDemandResponse{}, historyFailure(rec.AttemptID, rec.Phase, code, previousPossible, true, validationErr)
+			}
+		}
+		requestsSent++
+		rec.RequestsSent = requestsSent
 		if _, err := a.wa.RequestHistorySyncOnDemand(ctx, reqInfo, opts.Count); err != nil {
 			return onDemandResponse{}, err
 		}
@@ -401,18 +415,28 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 	var beforeStored int64
 	var beforeWindowCount int64
 	var stopReason BackfillStopReason
-	countIdentities := func(ctx context.Context) (string, string) {
+	countIdentities := func(ctx context.Context) (string, string, error) {
+		if opts.BeforeID != "" {
+			identity, err := a.explicitHistoryScope(ctx, chat)
+			if err != nil {
+				return "", "", err
+			}
+			if identity != selectedIdentity {
+				return "", "", fmt.Errorf("selected account or conversation scope changed during recovery")
+			}
+			return identity.ChatJID, identity.AliasJID, nil
+		}
 		storeChat := a.canonicalStoreJID(ctx, chat)
 		alias := a.wa.ResolvePNToLID(ctx, storeChat)
-		return storeChat.String(), canonicalJIDString(alias)
+		return storeChat.String(), canonicalJIDString(alias), nil
 	}
 	checkIdentities := func(ctx context.Context) error {
-		if opts.BeforeID != "" && publicHistoryAccount(a.wa.LinkedJID()) != selectedAccount {
-			return fmt.Errorf("selected account changed during recovery")
+		currentChat, currentAlias, err := countIdentities(ctx)
+		if err == nil && (currentChat != windowChat || currentAlias != windowAlias) {
+			err = fmt.Errorf("backfill conversation identities changed during the counting window; result could not be measured reliably; already persisted messages may remain")
 		}
-		currentChat, currentAlias := countIdentities(ctx)
-		if currentChat != windowChat || currentAlias != windowAlias {
-			return fmt.Errorf("backfill conversation identities changed during the counting window; result could not be measured reliably; already persisted messages may remain")
+		if err != nil {
+			return historyFailure(rec.AttemptID, rec.Phase, "store_state", rec.DispatchPossible, true, err)
 		}
 		return nil
 	}
@@ -432,8 +456,11 @@ func (a *App) backfillHistory(ctx context.Context, opts BackfillOptions, runtime
 	runRequests := func(ctx context.Context) error {
 		// Sync can learn mappings and migrate old LID rows while connecting.
 		// Resolve the local identity only after that migration has completed.
-		windowChat, windowAlias = countIdentities(ctx)
 		var err error
+		windowChat, windowAlias, err = countIdentities(ctx)
+		if err != nil {
+			return historyFailure(rec.AttemptID, rec.Phase, "store_state", rec.DispatchPossible, true, err)
+		}
 		if opts.BeforeID != "" {
 			beforeWindowCount, err = a.db.CountConversationMessagesBefore(windowChat, windowAlias, selected.Timestamp)
 			if err != nil {

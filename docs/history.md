@@ -79,7 +79,16 @@ the exact chat/ID, positive persisted timestamp, valid sender, `from_me` and
 current local public account/verified author relationships. Missing/wrong-chat
 messages, unknown or contradictory authors, tombstones, purged payloads and read
 errors refuse before recovery dispatch; initial validation precedes standalone
-connection. The account and anchor are revalidated before dispatch. This does not
+connection. Explicit preparation and revalidation use local identity reads only: a missing
+alias leaves the requested identity alone, a candidate alias needs corroborating
+PN/LID mappings in both directions, and read errors or scope changes refuse.
+The account, scope and anchor are revalidated after the pre-call checkpoint and
+`backfill_requesting` output, immediately before the WA invocation. That event
+announces an intended request; finalized `requests_sent` counts actual WA
+invocations. A refusal there records zero invocations and `not_dispatched`;
+a crash or failed finalization can retain the conservative pre-call checkpoint.
+These local reads and the network call are not an atomic transaction.
+This does not
 certify historical authorship or continuity across a replaced/restored archive:
 message rows are scoped to the selected archive, without a per-row account ID.
 Normal standalone Sync may migrate verified LID rows after connecting; if the

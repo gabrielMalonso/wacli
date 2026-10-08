@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,6 +37,9 @@ func (f *historyAnchorOwnerWA) ResolvePNToLID(_ context.Context, jid types.JID) 
 func (f *historyAnchorOwnerWA) CheckPublicPair(context.Context, types.JID, types.JID) (wa.PublicPairResult, error) {
 	return wa.PublicPairUnverified, nil
 }
+func (f *historyAnchorOwnerWA) LookupLocalAlias(context.Context, types.JID) (types.JID, error) {
+	return types.JID{}, nil
+}
 func (f *historyAnchorOwnerWA) ResolveChatName(context.Context, types.JID, string) string {
 	return "fixture"
 }
@@ -47,15 +52,42 @@ func (f *historyAnchorOwnerWA) RequestHistorySyncOnDemand(_ context.Context, inf
 // Real DB, LOCK, follow runtime, serialized IPC executor and CLI client. Only
 // the WA boundary is fake; the client must not open a second connection.
 func TestHistoryExplicitAnchorRealOwnerIPC(t *testing.T) {
+	for _, tombstone := range []bool{false, true} {
+		t.Run(fmt.Sprint(tombstone), func(t *testing.T) { testHistoryExplicitAnchorRealOwnerIPC(t, tombstone) })
+	}
+}
+
+type historyAnchorRequestWriter func([]byte) (int, error)
+
+func (w historyAnchorRequestWriter) Write(b []byte) (int, error) { return w(b) }
+
+func testHistoryExplicitAnchorRealOwnerIPC(t *testing.T, tombstone bool) {
 	t.Setenv("WACLI_READONLY", "0")
 	f := &historyAnchorOwnerWA{syncStatusWA: syncStatusWA{shutdownStarted: make(chan struct{}), shutdownRelease: make(chan struct{})}}
 	close(f.shutdownRelease)
-	dir, a := draftOwnerFixtureOptions(t, app.Options{Events: out.NewEventWriter(io.Discard, true), WAFactory: func(wa.Options) (app.WAClient, error) { f.opens.Add(1); return f, nil }})
+	var fixture *sql.DB
+	writer := io.Writer(io.Discard)
+	if tombstone {
+		writer = historyAnchorRequestWriter(func(b []byte) (int, error) {
+			if bytes.Contains(b, []byte(`"event":"backfill_requesting"`)) {
+				if _, err := fixture.Exec("UPDATE messages SET deleted_for_me=1,deleted_at=1 WHERE msg_id='selected'"); err != nil {
+					t.Error(err)
+				}
+			}
+			return len(b), nil
+		})
+	}
+	dir, a := draftOwnerFixtureOptions(t, app.Options{Events: out.NewEventWriter(writer, true), WAFactory: func(wa.Options) (app.WAClient, error) { f.opens.Add(1); return f, nil }})
 	lk, err := lock.Acquire(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lk.Release()
+	fixture, err = sql.Open("sqlite3", filepath.Join(dir, "wacli.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fixture.Close()
 	chat := "123@g.us"
 	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	if err := a.DB().UpsertChat(chat, "group", "fixture", base); err != nil {
@@ -106,6 +138,20 @@ func TestHistoryExplicitAnchorRealOwnerIPC(t *testing.T) {
 	}()
 	args := []string{"--store", dir, "--agent", "--timeout", "2s", "history", "backfill", "--chat", chat, "--before-id", "selected", "--wait", "100ms", "--idle-exit", "1ms"}
 	stdout, stderr, err := runDraftBinary(t, os.Getenv("WACLI_HISTORY_E2E_BINARY"), args, false)
+	if tombstone {
+		if err == nil || !strings.Contains(stderr, `"outcome":"not_dispatched"`) || !strings.Contains(stderr, `"code":"no_local_anchor"`) || f.requests.Load() != 0 || f.opens.Load() != 1 || f.connects.Load() != 1 {
+			t.Fatalf("refusal=%s stderr=%s err=%v requests=%d opens=%d connects=%d", stdout, stderr, err, f.requests.Load(), f.opens.Load(), f.connects.Load())
+		}
+		evidence, err := a.DB().ListHistoryRecoveryEvidence(t.Context(), []string{chat})
+		if err != nil {
+			t.Fatal(err)
+		}
+		latest := evidence[0].Latest
+		if latest.DispatchPossible || latest.RequestsSent != 0 || !latest.CountersFinal {
+			t.Fatalf("evidence=%+v", latest)
+		}
+		return
+	}
 	if err != nil || !strings.Contains(stdout, `"before_id":"selected"`) || !strings.Contains(stdout, `"messages_added_before":1`) || !strings.Contains(stdout, `"stop_reason":"requested_batch_limit"`) {
 		t.Fatalf("result=%s stderr=%s err=%v", stdout, stderr, err)
 	}
