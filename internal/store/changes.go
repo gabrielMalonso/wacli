@@ -90,6 +90,14 @@ func decodeChangeCursor(token string) (changeCursor, error) {
 // checkpoint so a restarted consumer can see later commits without timestamps.
 // There are no filters: the cursor covers the whole selected archive.
 func (d *DB) ListChanges(ctx context.Context, storeRef string, limit int, token string) (ChangesPage, error) {
+	return listChanges(ctx, d.sql, storeRef, limit, token)
+}
+
+type changesTransactionReader interface {
+	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+}
+
+func listChanges(ctx context.Context, reader changesTransactionReader, storeRef string, limit int, token string) (ChangesPage, error) {
 	page := ChangesPage{Changes: []Change{}}
 	if limit < 1 || limit > 200 {
 		return page, fmt.Errorf("change limit must be between 1 and 200")
@@ -106,7 +114,7 @@ func (d *DB) ListChanges(ctx context.Context, storeRef string, limit int, token 
 			return page, &ChangesCursorError{}
 		}
 	}
-	tx, err := d.sql.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := reader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return page, err
 	}

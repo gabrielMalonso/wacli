@@ -47,8 +47,11 @@ func newChangesWatchCmd(flags *rootFlags) *cobra.Command {
 		defer stop()
 		ctx, cancel := withTimeout(signalCtx, flags)
 		defer cancel()
-		db, err := store.OpenReadOnly(filepath.Join(flags.storeDir, "wacli.db"))
+		db, err := store.OpenChangesReadOnly(ctx, filepath.Join(flags.storeDir, "wacli.db"))
 		if err != nil {
+			if ctx.Err() != nil {
+				return changesWatchContextError(ctx.Err())
+			}
 			return agentStoreError(err)
 		}
 		defer db.Close()
@@ -59,6 +62,9 @@ func newChangesWatchCmd(flags *rootFlags) *cobra.Command {
 		defer closeOutput()
 		scope := *flags.agentAccount.StoreRef + "\x00" + flags.agentAccount.Name
 		return watchChanges(ctx, db, scope, limit, flags.cursor, interval, func(page store.ChangesPage) error {
+			if err := ctx.Err(); err != nil {
+				return changesWatchContextError(err)
+			}
 			err := writeChangesFrame(output, flags, limit, page)
 			if err != nil && ctx.Err() != nil {
 				return changesWatchContextError(ctx.Err())
@@ -129,12 +135,15 @@ func watchChanges(ctx context.Context, db *store.DB, scope string, limit int, cu
 		if err := ctx.Err(); err != nil {
 			return changesWatchContextError(err)
 		}
-		page, err := db.ListChanges(ctx, scope, limit, cursor)
+		page, err := db.ListChangesWithShortWait(ctx, scope, limit, cursor)
 		if err != nil {
 			if ctx.Err() != nil {
 				return changesWatchContextError(ctx.Err())
 			}
 			return changeReadError(err)
+		}
+		if err := ctx.Err(); err != nil {
+			return changesWatchContextError(err)
 		}
 		if first || len(page.Changes) > 0 || page.NextCursor != cursor {
 			if err = emit(page); err != nil {

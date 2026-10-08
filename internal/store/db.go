@@ -31,12 +31,8 @@ func OpenReadOnly(path string) (*DB, error) {
 }
 
 func open(path string, readOnly bool) (*DB, error) {
-	if strings.TrimSpace(path) == "" {
-		return nil, fmt.Errorf("db path is required")
-	}
-	// Reject paths that could inject SQLite URI parameters (#59).
-	if strings.ContainsAny(path, "?#") {
-		return nil, fmt.Errorf("db path must not contain '?' or '#'")
+	if err := validateDBPath(path); err != nil {
+		return nil, err
 	}
 	if readOnly {
 		if _, err := os.Stat(path); err != nil {
@@ -121,8 +117,23 @@ func checkWritableSchema(path string) error {
 	return rows.Err()
 }
 
+func validateDBPath(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("db path is required")
+	}
+	// Reject paths that could inject SQLite URI parameters (#59).
+	if strings.ContainsAny(path, "?#") {
+		return fmt.Errorf("db path must not contain '?' or '#'")
+	}
+	return nil
+}
+
 func (d *DB) validateReadable() error {
-	hasMigrations, err := d.tableExists("schema_migrations")
+	return d.validateReadableContext(context.Background())
+}
+
+func (d *DB) validateReadableContext(ctx context.Context) error {
+	hasMigrations, err := d.tableExistsContext(ctx, "schema_migrations")
 	if err != nil {
 		return err
 	}
@@ -130,7 +141,7 @@ func (d *DB) validateReadable() error {
 		return fmt.Errorf("local store has no schema version; an explicit writable upgrade with wacli auth or sync is required (these commands may connect to WhatsApp)")
 	}
 	var first, version, applied int
-	if err := d.sql.QueryRow("SELECT COALESCE(MIN(version), 0), COALESCE(MAX(version), 0), COUNT(*) FROM schema_migrations").Scan(&first, &version, &applied); err != nil {
+	if err := d.sql.QueryRowContext(ctx, "SELECT COALESCE(MIN(version), 0), COALESCE(MAX(version), 0), COUNT(*) FROM schema_migrations").Scan(&first, &version, &applied); err != nil {
 		return err
 	}
 	current := schemaMigrations[len(schemaMigrations)-1].version
