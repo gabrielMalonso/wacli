@@ -21,7 +21,10 @@ import (
 	"go.mau.fi/whatsmeow/types"
 )
 
-const syncStatusKind = "sync_status_v1"
+const (
+	syncStatusKind    = "sync_status_v2"
+	syncStatusVersion = 2
+)
 
 type syncStatusRequest struct {
 	ID       string `json:"id"`
@@ -48,7 +51,7 @@ func startSyncDelegateServer(ctx context.Context, a *app.App, spacing sendSpacin
 			if err != nil || req.Version != sendDelegateVersion || req.SyncStatus == nil || req.SyncStatus.ID == "" || req.SyncStatus.StoreRef != ref {
 				return sendDelegateResponse{OK: false, Error: "sync status scope refused"}, nil
 			}
-			return sendDelegateResponse{OK: true, SyncStatus: &syncStatusReply{Version: 1, ID: req.SyncStatus.ID, StoreRef: ref, Status: status}}, nil
+			return sendDelegateResponse{OK: true, SyncStatus: &syncStatusReply{Version: syncStatusVersion, ID: req.SyncStatus.ID, StoreRef: ref, Status: status}}, nil
 		}
 		if !status.Initialized || status.State == "stopping" || status.State == "stopped" || status.State == "logged_out" || status.State == "error" {
 			return sendDelegateResponse{OK: false, Error: "sync owner is initializing or stopping; request was not dispatched"}, nil
@@ -95,8 +98,12 @@ func newSyncStatusCmd(flags *rootFlags) *cobra.Command {
 				return out.WriteJSON(os.Stdout, status)
 			}
 			tw := newTableWriter(os.Stdout)
-			fmt.Fprintln(tw, "STATE\tREADY\tCONNECTED\tREASON")
-			fmt.Fprintf(tw, "%s\t%t\t%s\t%s\n", status.State, status.Ready, status.Connected, status.Reason)
+			fmt.Fprintln(tw, "STATE\tOWNER READY\tTRANSPORT\tAUTHENTICATED\tREADY\tREASON")
+			reason := status.Reason
+			if reason == "" {
+				reason = status.ReadinessReason
+			}
+			fmt.Fprintf(tw, "%s\t%t\t%s\t%s\t%t\t%s\n", status.State, status.OwnerReady, status.TransportConnected, status.Authenticated, status.Ready, reason)
 			return tw.Flush()
 		},
 	}
@@ -104,7 +111,7 @@ func newSyncStatusCmd(flags *rootFlags) *cobra.Command {
 
 func querySyncStatus(ctx context.Context, storeRef string) syncStatusData {
 	unknown := func(reason string) syncStatusData {
-		return syncStatusData{SyncLiveStatus: app.SyncLiveStatus{State: "unknown", Connected: "unknown", ObservedAt: time.Now().UTC()}, Reason: reason}
+		return syncStatusData{SyncLiveStatus: app.SyncLiveStatus{State: "unknown", Connected: "unknown", TransportConnected: "unknown", Authenticated: "unknown", ReadinessReason: "owner_unavailable", ObservedAt: time.Now().UTC()}, Reason: reason}
 	}
 	absent := func() syncStatusData { v := unknown("owner_absent"); v.State = "absent"; return v }
 	if ctx.Err() != nil {
@@ -160,7 +167,7 @@ func querySyncStatus(ctx context.Context, storeRef string) syncStatusData {
 		return unknown(syncStatusContextReason(ctx))
 	}
 	reply := resp.SyncStatus
-	if !resp.OK || reply == nil || reply.Version != 1 {
+	if !resp.OK || reply == nil || reply.Version != syncStatusVersion {
 		return unknown("owner_incompatible")
 	}
 	if reply.ID != id || reply.StoreRef != ref {
@@ -184,17 +191,20 @@ func validSyncLiveStatus(v app.SyncLiveStatus) bool {
 		return false
 	}
 	switch v.State {
-	case "initializing", "ready", "disconnected", "reconnecting", "stopping", "stopped", "logged_out", "error", "unknown":
+	case "initializing", "disconnected", "reconnecting", "stopping", "stopped", "logged_out", "error", "unknown":
 	default:
 		return false
 	}
-	if v.Connected != "true" && v.Connected != "false" && v.Connected != "unknown" {
+	if v.Connected != "false" && v.Connected != "unknown" {
 		return false
 	}
-	if v.Ready != (v.State == "ready") || v.Ready && (!v.Initialized || v.Connected != "true") {
+	if v.Ready || v.Authenticated != "unknown" || v.ReadinessReason != "current_authentication_unsupported" {
 		return false
 	}
-	if v.Connected == "true" && v.State != "initializing" && v.State != "ready" && v.State != "stopping" && v.State != "stopped" && v.State != "error" {
+	if v.TransportConnected != "true" && v.TransportConnected != "false" && v.TransportConnected != "unknown" {
+		return false
+	}
+	if v.OwnerReady && (!v.Initialized || v.State == "stopping" || v.State == "stopped" || v.State == "logged_out" || v.State == "error") {
 		return false
 	}
 	if v.LinkedLID != "" {
@@ -203,7 +213,7 @@ func validSyncLiveStatus(v app.SyncLiveStatus) bool {
 			return false
 		}
 	}
-	if v.Ready {
+	if v.LinkedJID != "" {
 		jid, err := types.ParseJID(v.LinkedJID)
 		if err != nil || jid.IsEmpty() || jid.Server != types.DefaultUserServer {
 			return false

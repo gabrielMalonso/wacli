@@ -22,7 +22,11 @@ import (
 )
 
 func statusFixtureReply(req sendDelegateRequest, state app.SyncLiveState) sendDelegateResponse {
-	return sendDelegateResponse{OK: true, SyncStatus: &syncStatusReply{Version: 1, ID: req.SyncStatus.ID, StoreRef: req.SyncStatus.StoreRef, Status: app.SyncLiveStatus{State: state, Ready: state == "ready", Initialized: state == "ready", Connected: map[bool]string{false: "false", true: "true"}[state == "ready"], LinkedJID: "15550000001@s.whatsapp.net", ObservedAt: time.Now().UTC()}}}
+	localReady := state == "ready"
+	if localReady {
+		state = app.SyncLiveUnknown
+	}
+	return sendDelegateResponse{OK: true, SyncStatus: &syncStatusReply{Version: syncStatusVersion, ID: req.SyncStatus.ID, StoreRef: req.SyncStatus.StoreRef, Status: app.SyncLiveStatus{State: state, OwnerReady: localReady, Initialized: localReady, Connected: "unknown", TransportConnected: "true", Authenticated: "unknown", ReadinessReason: "current_authentication_unsupported", LinkedJID: "15550000001@s.whatsapp.net", ObservedAt: time.Now().UTC()}}}
 }
 
 func TestSyncStatusReadOnlyWhileWriterBusy(t *testing.T) {
@@ -70,7 +74,7 @@ func TestSyncStatusReadOnlyWhileWriterBusy(t *testing.T) {
 	if err := json.Unmarshal(env.Data, &data); err != nil {
 		t.Fatal(err)
 	}
-	if !data.Ready || env.Meta.Source != "live" || env.Meta.Completeness != "unknown" || env.Meta.Freshness != "unknown" {
+	if data.Ready || !data.OwnerReady || data.TransportConnected != "true" || data.Authenticated != "unknown" || data.ReadinessReason != "current_authentication_unsupported" || env.Meta.Source != "live" || env.Meta.Completeness != "unknown" || env.Meta.Freshness != "unknown" {
 		t.Fatalf("%s", stdout)
 	}
 	if !reflect.DeepEqual(before, snapshotStatusStore(t, dir)) {
@@ -123,6 +127,26 @@ func TestSyncStatusUnknownOwners(t *testing.T) {
 				t.Fatalf("%+v", v)
 			}
 		})
+	}
+}
+
+func TestSyncStatusRefusesOlderPositiveAuthentication(t *testing.T) {
+	skipPresenceDelegateSocketTestOnUnsupportedOS(t)
+	dir := t.TempDir()
+	stop, err := startSendDelegateServerForStore(t.Context(), dir, sendSpacing{}, func(_ context.Context, req sendDelegateRequest) (sendDelegateResponse, error) {
+		resp := statusFixtureReply(req, "ready")
+		resp.SyncStatus.Version = 1
+		resp.SyncStatus.Status.State = "ready"
+		resp.SyncStatus.Status.Ready = true
+		resp.SyncStatus.Status.Connected = "true"
+		return resp, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	if v := querySyncStatus(t.Context(), dir); v.Ready || v.OwnerReady || v.Reason != "owner_incompatible" {
+		t.Fatalf("older unsafe authentication accepted=%+v", v)
 	}
 }
 
@@ -284,7 +308,7 @@ func TestSyncStatusRealOwnerLifecycleNoSecondConnection(t *testing.T) {
 				return querySyncStatus(ctx, dir)
 			}
 			v := query()
-			if v.State != "initializing" || v.Ready || v.Initialized || v.Connected != "true" {
+			if v.State != "initializing" || v.Ready || v.OwnerReady || v.Initialized || v.Connected != "unknown" || v.TransportConnected != "true" || v.Authenticated != "unknown" {
 				t.Fatalf("bootstrap status=%+v", v)
 			}
 			close(bootstrapRelease)
@@ -293,17 +317,17 @@ func TestSyncStatusRealOwnerLifecycleNoSecondConnection(t *testing.T) {
 				deadline := time.Now().Add(5 * time.Second)
 				for time.Now().Before(deadline) {
 					v := query()
-					if v.State == want {
+					if v.State == want && (want != "unknown" || v.OwnerReady && v.TransportConnected == "true") {
 						return
 					}
 					time.Sleep(time.Millisecond)
 				}
 				t.Fatalf("state=%+v want %s", query(), want)
 			}
-			await("ready")
+			await("unknown")
 			for range 10 {
-				if !query().Ready {
-					t.Fatal("ready lost")
+				if v := query(); v.Ready || !v.OwnerReady || v.Authenticated != "unknown" || v.ReadinessReason != "current_authentication_unsupported" {
+					t.Fatalf("local readiness/auth gap: %+v", v)
 				}
 			}
 			if f.opens.Load() != 1 || f.connects.Load() != 1 {
@@ -311,7 +335,7 @@ func TestSyncStatusRealOwnerLifecycleNoSecondConnection(t *testing.T) {
 			}
 			f.Disconnect()
 			f.emit(&events.Disconnected{})
-			await("ready")
+			await("unknown")
 			if f.opens.Load() != 1 || f.connects.Load() != 2 {
 				t.Fatal("reconnect created another client")
 			}
@@ -331,8 +355,8 @@ func TestSyncStatusRealOwnerLifecycleNoSecondConnection(t *testing.T) {
 				await("stopping")
 			}
 			f.emit(&events.Connected{})
-			if query().Ready {
-				t.Fatal("late connected revived logout")
+			if v := query(); v.Ready || v.OwnerReady {
+				t.Fatalf("late connected revived local owner: %+v", v)
 			}
 			close(f.shutdownRelease)
 			if err := <-done; err != nil {

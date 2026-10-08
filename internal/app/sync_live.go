@@ -25,13 +25,17 @@ const (
 
 // SyncLiveStatus is an in-memory snapshot of the existing owner.
 type SyncLiveStatus struct {
-	State       SyncLiveState `json:"state"`
-	Ready       bool          `json:"ready"`
-	Initialized bool          `json:"initialized"`
-	Connected   string        `json:"connected"`
-	LinkedJID   string        `json:"linked_jid,omitempty"`
-	LinkedLID   string        `json:"linked_lid,omitempty"`
-	ObservedAt  time.Time     `json:"observed_at"`
+	State              SyncLiveState `json:"state"`
+	Ready              bool          `json:"ready"`
+	OwnerReady         bool          `json:"owner_ready"`
+	Initialized        bool          `json:"initialized"`
+	Connected          string        `json:"connected"`
+	TransportConnected string        `json:"transport_connected"`
+	Authenticated      string        `json:"authenticated"`
+	ReadinessReason    string        `json:"readiness_reason"`
+	LinkedJID          string        `json:"linked_jid,omitempty"`
+	LinkedLID          string        `json:"linked_lid,omitempty"`
+	ObservedAt         time.Time     `json:"observed_at"`
 }
 
 type syncLive struct {
@@ -41,7 +45,7 @@ type syncLive struct {
 	generation  uint64
 	revision    uint64 // fences SDK reads performed outside mu
 	initialized bool
-	connected   bool
+	connected   bool // latest unscoped event, never proof of current authentication
 }
 
 func (s *syncLive) terminal() bool {
@@ -74,8 +78,8 @@ func (s *syncLive) transition(state SyncLiveState) {
 	}
 	s.revision++
 	s.state = state
-	// Reconnect can race an already authenticated Connected callback. Keep that
-	// evidence; the snapshot also checks the transport, including force-close.
+	// Reconnect can race a Connected callback. Keep its lifecycle observation;
+	// the snapshot checks transport separately and never certifies authentication.
 	if state == SyncLiveDisconnected || state == SyncLiveLoggedOut || state == SyncLiveUnknown {
 		s.connected = false
 	}
@@ -125,8 +129,10 @@ func (s *syncLive) event(evt any, generation uint64) {
 	s.state, s.connected = state, connected
 }
 
-// SyncLiveSnapshot uses only this App's existing client. Connected requires an
-// authenticated Connected event as well as a currently open transport.
+// SyncLiveSnapshot separates local owner readiness and observed transport from
+// current authentication. The pinned SDK retains IsLoggedIn across normal loss
+// and dispatches Connected without transport identity. Current authentication
+// cannot be established, so strict Ready stays false even after legitimate login.
 func (a *App) SyncLiveSnapshot() SyncLiveStatus {
 	// Do not hold the lifecycle mutex across SDK getters: Disconnect may wait
 	// for handlers while holding the client mutex those getters need.
@@ -157,7 +163,13 @@ func (a *App) SyncLiveSnapshot() SyncLiveStatus {
 		}
 		revision = a.live.revision
 	}
-	v := SyncLiveStatus{State: a.live.state, Initialized: a.live.initialized, Connected: "unknown", LinkedJID: linkedJID, LinkedLID: linkedLID, ObservedAt: time.Now().UTC()}
+	v := SyncLiveStatus{
+		State: a.live.state, Initialized: a.live.initialized,
+		OwnerReady: a.live.initialized && !a.live.terminal() && !closed,
+		Connected:  "unknown", TransportConnected: "unknown", Authenticated: "unknown",
+		ReadinessReason: "current_authentication_unsupported",
+		LinkedJID:       linkedJID, LinkedLID: linkedLID, ObservedAt: time.Now().UTC(),
+	}
 	if v.State == "" {
 		v.State = SyncLiveInitializing
 	}
@@ -177,18 +189,17 @@ func (a *App) SyncLiveSnapshot() SyncLiveStatus {
 		return v
 	}
 	if client != nil {
-		connected := a.live.connected && transportConnected && a.live.state != SyncLiveLoggedOut && !closed
-		if connected {
-			v.Connected = "true"
+		if transportConnected && !closed {
+			v.TransportConnected = "true"
 		} else {
+			v.TransportConnected = "false"
 			v.Connected = "false"
 		}
-		if v.State == SyncLiveUnknown {
-			v.Connected = "unknown"
+		if v.State == SyncLiveLoggedOut || closed {
+			v.Connected = "false"
 		}
-		v.Ready = v.Initialized && connected && !a.live.terminal()
-		if v.Ready {
-			v.State = SyncLiveReady
+		if v.OwnerReady && a.live.connected && transportConnected {
+			v.State = SyncLiveUnknown
 		}
 	}
 	return v

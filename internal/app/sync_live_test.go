@@ -39,15 +39,15 @@ func TestSyncLiveBootstrapLifecycle(t *testing.T) {
 		t.Fatal("bootstrap did not start")
 	}
 	v := a.SyncLiveSnapshot()
-	if v.State != "initializing" || v.Ready || v.Initialized || v.Connected != "true" {
+	if v.State != "initializing" || v.Ready || v.Initialized || v.OwnerReady || v.Connected != "unknown" || v.TransportConnected != "true" {
 		t.Fatalf("premature readiness: %+v", v)
 	}
 	close(release)
-	awaitLiveState(t, a, "ready")
+	awaitLocalOwnerReady(t, a)
 	f.Disconnect()
 	f.emit(&events.Disconnected{})
 	// Reconnection uses the same fake client; terminal logout cannot be revived.
-	awaitLiveState(t, a, "ready")
+	awaitLocalOwnerReady(t, a)
 	f.emit(&events.LoggedOut{})
 	f.emit(&events.Connected{})
 	awaitLiveState(t, a, "logged_out")
@@ -85,7 +85,7 @@ func TestSyncLiveCancelAndFailure(t *testing.T) {
 				awaitLiveState(t, a, "error")
 				return
 			}
-			awaitLiveState(t, a, "ready")
+			awaitLocalOwnerReady(t, a)
 			cancel()
 			if err := <-done; err != nil {
 				t.Fatal(err)
@@ -109,17 +109,17 @@ func TestSyncLiveEventPrecedence(t *testing.T) {
 	generation := a.live.begin(t.Context())
 	a.live.event(&events.Connected{}, generation)
 	a.live.initialize(t.Context())
-	awaitLiveState(t, a, "ready")
+	awaitLocalOwnerReady(t, a)
 	a.live.event(&events.Disconnected{}, generation)
 	awaitLiveState(t, a, "disconnected")
 	a.live.transition("reconnecting")
 	awaitLiveState(t, a, "reconnecting")
 	a.live.event(&events.Connected{}, generation)
-	awaitLiveState(t, a, "ready")
+	awaitLocalOwnerReady(t, a)
 	a.live.event(&events.ConnectFailure{}, generation)
 	awaitLiveState(t, a, "unknown")
 	a.live.event(&events.Connected{}, generation)
-	awaitLiveState(t, a, "ready")
+	awaitLocalOwnerReady(t, a)
 	a.live.transition("stopping")
 	awaitLiveState(t, a, "stopping")
 	a.live.event(&events.Connected{}, generation)
@@ -136,6 +136,22 @@ func awaitLiveState(t *testing.T, a *App, want string) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("state=%+v, want %s", a.SyncLiveSnapshot(), want)
+}
+
+func awaitLocalOwnerReady(t *testing.T, a *App) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		v := a.SyncLiveSnapshot()
+		if v.OwnerReady && v.TransportConnected == "true" && v.State == SyncLiveUnknown {
+			if v.Ready || v.Authenticated != "unknown" || v.ReadinessReason != "current_authentication_unsupported" {
+				t.Fatalf("unsupported authentication became positive: %+v", v)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("local owner/transport not available: %+v", a.SyncLiveSnapshot())
 }
 
 func TestSyncLivePriorRunCallbackIsFenced(t *testing.T) {
@@ -199,7 +215,7 @@ func TestSyncLiveCancellationPrecedesLateLogout(t *testing.T) {
 	}
 }
 
-func TestSyncLiveForcedReconnectNeedsNewAuthenticatedEvent(t *testing.T) {
+func TestSyncLiveForcedReconnectSeparatesLocalAndTransportReadiness(t *testing.T) {
 	a := newTestApp(t)
 	f := newFakeWA()
 	a.wa = f
@@ -209,8 +225,8 @@ func TestSyncLiveForcedReconnectNeedsNewAuthenticatedEvent(t *testing.T) {
 	generation := a.live.begin(t.Context())
 	a.live.event(&events.Connected{}, generation)
 	a.live.initialize(t.Context())
-	if !a.SyncLiveSnapshot().Ready {
-		t.Fatal("initial connection not ready")
+	if v := a.SyncLiveSnapshot(); v.Ready || !v.OwnerReady || v.TransportConnected != "true" {
+		t.Fatalf("initial local owner: %+v", v)
 	}
 	// Explicit SDK Disconnect does not emit Disconnected. Its caller records
 	// loss before a new handshake so an old Connected cannot certify that socket.
@@ -220,15 +236,15 @@ func TestSyncLiveForcedReconnectNeedsNewAuthenticatedEvent(t *testing.T) {
 	f.mu.Lock()
 	f.connected = true
 	f.mu.Unlock()
-	if v := a.SyncLiveSnapshot(); v.Ready || v.State != SyncLiveReconnecting || v.Connected != "false" {
+	if v := a.SyncLiveSnapshot(); v.Ready || v.State != SyncLiveReconnecting || v.TransportConnected != "true" || v.Connected != "unknown" || !v.OwnerReady {
 		t.Fatalf("handshake became ready: %+v", v)
 	}
 	a.live.event(&events.Connected{}, generation)
-	if !a.SyncLiveSnapshot().Ready {
-		t.Fatal("new authenticated connection not ready")
+	if v := a.SyncLiveSnapshot(); v.Ready || !v.OwnerReady || v.Connected != "unknown" {
+		t.Fatalf("unscoped Connected certified authentication: %+v", v)
 	}
 	a.live.transition(SyncLiveStopping)
-	if v := a.SyncLiveSnapshot(); v.Ready || v.Connected != "true" {
+	if v := a.SyncLiveSnapshot(); v.Ready || v.OwnerReady || v.TransportConnected != "true" {
 		t.Fatalf("cleanup connection evidence lost: %+v", v)
 	}
 }
@@ -243,9 +259,7 @@ func TestSyncLiveTransportLossInvalidatesPriorAuthentication(t *testing.T) {
 	f.connected = true
 	f.mu.Unlock()
 	a.live.event(&events.Connected{}, generation)
-	if !a.SyncLiveSnapshot().Ready {
-		t.Fatal("fixture never became ready")
-	}
+	awaitLocalOwnerReady(t, a)
 
 	// The SDK can expose a lost transport before asynchronous Disconnected.
 	f.Disconnect()
@@ -261,13 +275,11 @@ func TestSyncLiveTransportLossInvalidatesPriorAuthentication(t *testing.T) {
 	f.connected = true
 	f.mu.Unlock()
 	replacement := a.SyncLiveSnapshot()
-	if replacement.Ready {
+	if replacement.Ready || replacement.State != SyncLiveDisconnected || replacement.TransportConnected != "true" {
 		t.Fatalf("new unauthenticated transport inherited old Connected: %+v", replacement)
 	}
 	a.live.event(&events.Connected{}, generation)
-	if !a.SyncLiveSnapshot().Ready {
-		t.Fatal("new authenticated event did not restore readiness")
-	}
+	awaitLocalOwnerReady(t, a)
 	a.live.transition(SyncLiveStopping)
 	f.Disconnect()
 	if v := a.SyncLiveSnapshot(); v.State != SyncLiveStopping || v.Ready || v.Connected != "false" {
@@ -331,13 +343,13 @@ func TestSyncLiveTransportReadConcurrentWithNewAuthentication(t *testing.T) {
 				t.Fatal("transport getter held lifecycle mutex")
 			}
 			close(f.release)
-			if v := <-snapshots; v.Ready || v.State != SyncLiveUnknown || v.Connected != "unknown" {
+			if v := <-snapshots; v.Ready || !v.OwnerReady || v.State != SyncLiveUnknown || v.Connected != "unknown" || v.TransportConnected != "unknown" {
 				t.Fatalf("mixed observations certified readiness: %+v", v)
 			}
 			next := a.SyncLiveSnapshot()
 			if !test.priorTransport {
-				if !next.Ready {
-					t.Fatalf("stale loss erased newer authenticated event: %+v", next)
+				if next.Ready || !next.OwnerReady || next.TransportConnected != "true" {
+					t.Fatalf("stale loss erased newer connection evidence: %+v", next)
 				}
 			} else {
 				if next.Ready || next.State != SyncLiveDisconnected {
@@ -346,7 +358,7 @@ func TestSyncLiveTransportReadConcurrentWithNewAuthentication(t *testing.T) {
 				f.mu.Lock()
 				f.connected = true
 				f.mu.Unlock()
-				if v := a.SyncLiveSnapshot(); v.Ready {
+				if v := a.SyncLiveSnapshot(); v.Ready || v.State != SyncLiveDisconnected || v.TransportConnected != "true" {
 					t.Fatalf("replacement inherited lost authentication: %+v", v)
 				}
 			}

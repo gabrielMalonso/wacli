@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Sync: add readonly `sync status` (including `--agent`) over the existing follow owner IPC, distinguishing bootstrap, readiness, reconnection and terminal/unknown observations without opening stores or creating another WhatsApp connection. Readiness is local initialization plus current authenticated connectivity, never history completeness; offline auth/doctor remain honest and Windows IPC is explicitly unsupported.
+- Sync: add readonly `sync status` (including `--agent`) over the existing follow owner IPC, distinguishing bootstrap, readiness, reconnection and terminal/unknown observations without opening stores or creating another WhatsApp connection. Local `owner_ready` and transport observations are separate; the pinned SDK cannot prove current authentication, so strict `ready=false` has an explicit unsupported reason, never history completeness; offline auth/doctor remain honest and Windows IPC is explicitly unsupported.
 
 - Agents: add unbound `capabilities` discovery from this binary's command tree and agent guards, with contract version/limits, static requirements and explicit unknown account availability. Preserve v1 envelopes, legacy JSON/tables/text helpers, error exits and query broken-pipe behavior; discovery reads no config/store/session and performs no connection or migration. Validate with isolated CLI fixtures only.
 

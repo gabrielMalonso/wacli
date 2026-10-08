@@ -123,6 +123,10 @@ func TestCapabilitiesCatalogMatchesExecutablePolicy(t *testing.T) {
 	if commands["sync status"].Source != "live" || !*commands["sync status"].ReadOnly || commands["sync status"].Capability != "sync_status" {
 		t.Fatal("incorrect sync status policy")
 	}
+	statusConstraints := strings.Join(commands["sync status"].Constraints, " ")
+	if !strings.Contains(statusConstraints, "owner_ready") || !strings.Contains(statusConstraints, "transport_connected") || !strings.Contains(statusConstraints, "current_authentication_unsupported") {
+		t.Fatal("discovery omits local readiness or pinned authentication gap")
+	}
 	if *commands["outbound send"].ReadOnly || !*commands["media download"].ReadOnly || !*commands["media transcribe"].ReadOnly || commands["outbound send"].Source != "live" || commands["media transcribe"].Source != "local" {
 		t.Fatal("incorrect effect policy")
 	}

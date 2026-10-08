@@ -25,66 +25,82 @@ the operation slot. It does not start or reconnect an owner. No heartbeat or
 schema is persisted for this query. `sync --once` and `auth --follow` do not expose
 this status endpoint.
 
-`ready=true` means the owner's required local startup sequence has returned
+`owner_ready=true` means the owner's required local startup sequence has returned
 (LID migration, initial app-state reconciliation attempts, requested bootstrap
-refresh attempts and follow history runtime), it is answering IPC, and an
-authenticated `Connected` event is supported by the existing client's currently
-open transport. Startup warnings/reconciliation debt can remain. Readiness does
-not certify message history, successful replay, complete app-state reconciliation,
-webhook delivery, queue capacity or a future send. A `Connected` event alone is
-not readiness. The follow socket now opens immediately before Sync connects, ahead of bootstrap;
-mutation requests arriving before initialization or during terminal cleanup are
-refused before dispatch. Existing post-initialization operation semantics remain.
+refresh attempts and follow history runtime), it is answering IPC, and it has not
+entered terminal cleanup. This is positive local readiness for IPC/queries even
+while disconnected. `transport_connected` separately reports the existing SDK's
+`IsConnected()` observation. Startup warnings/reconciliation debt can remain.
+Neither field proves current authentication, dispatch ability, history/replay
+completeness, successful reconciliation, webhook delivery or queue capacity.
+The socket opens immediately before Sync connects, ahead of bootstrap; mutations
+before initialization or during terminal cleanup are refused before dispatch.
+Existing post-initialization operation semantics remain.
+
+Current authenticated readiness remains a gap in the pinned SDK. `IsLoggedIn()`
+remains true across normal disconnects, while asynchronous `Connected` callbacks
+have no transport identity and can arrive after a replacement opens.
+`WaitForConnection()` uses the same signals. They cannot certify current
+transport authentication, including after legitimate reconnection. This build
+therefore always returns `authenticated="unknown"`, strict `ready=false`, and
+`readiness_reason="current_authentication_unsupported"` from a reachable owner.
+It does not probe WhatsApp, fabricate an epoch, or expose positive auth readiness
+available only in tests. `ready=false` does not mean local queries are unavailable;
+`owner_ready=true` does not authorize dispatch or guarantee a future send. Offline
+archive queries retain their independent readonly path.
 
 Legacy `--json` uses its usual success/data envelope. `--agent` uses v1 with
 `meta.source=live`, `meta.completeness=unknown`, `meta.freshness=unknown`; compact
-and full have the same bounded DTO. `data` contains `state`, boolean `ready` and
-`initialized`, `connected` (`true|false|unknown` strings), UTC `observed_at`, and
-optional exact public `linked_jid` / `linked_lid` from this owner. LIDs are never
-converted into inferred phone identities. `observed_at` dates this point-in-time
-snapshot, not a last-message or last-successful-keepalive timestamp. A stopping
-owner can still report `connected=true` while its existing socket is being cleaned
-up; only `ready=true` permits treating the owner as available. An observed transport
-loss invalidates prior authenticated connection evidence even if `Disconnected`
-has not arrived; a replacement needs a new `Connected` event. If connection events
-or a new run change during the unlocked SDK read, that query cannot certify
-readiness and may return `unknown`; a fresh query can observe the newer evidence.
+and full have the same bounded DTO. `data` contains `state`, booleans `ready`,
+`owner_ready` and `initialized`, `transport_connected` (`true|false|unknown`
+strings), `authenticated`, `readiness_reason`, legacy `connected`, UTC
+`observed_at`, and optional exact public `linked_jid` / `linked_lid` from this
+owner. LIDs are never converted into inferred phone identities. `observed_at`
+dates this snapshot, not the last message or successful keepalive. Legacy
+`connected` describes authenticated connectivity: it stays unknown for an open
+transport, and can be false after loss/revocation. A stopping owner can still
+report `transport_connected=true` while its socket is cleaned up, with
+`owner_ready=false`. Observed transport loss invalidates prior connection event
+evidence even before `Disconnected` arrives; a new `Connected` still cannot
+certify the replacement. If events or a new run change during unlocked SDK reads,
+transport evidence stays unknown and identities are omitted for that query.
+A fresh query can observe the newer transport. Terminal precedence remains.
 
 | State | Meaning |
 | --- | --- |
-| `absent` | No reachable owner at the selected socket (missing or refused connection); current WhatsApp connectivity stays unknown. |
-| `initializing` | Owner answers, but local bootstrap has not completed; it may already report `connected=true`. |
-| `ready` | Local initialization complete and current authenticated connection observed. |
-| `disconnected` / `reconnecting` | Owner observed a disconnect or is attempting reconnection; not ready. |
-| `logged_out` | Owner observed terminal session revocation; late Connected events cannot revive it. |
-| `stopping` / `stopped` | Cancellation/cleanup or completed run while the endpoint is still reachable. |
-| `error` | Sync failed while the endpoint is still reachable. |
-| `unknown` | Connectivity or IPC evidence cannot be validated. |
+| `absent` | No reachable owner at the selected socket; WhatsApp connectivity stays unknown. |
+| `initializing` | Owner answers before local bootstrap completes; transport may already be connected. |
+| `disconnected` / `reconnecting` | Owner observed a disconnect or is attempting reconnection; local queries can remain available. |
+| `logged_out` | Terminal session revocation; late Connected cannot revive it. |
+| `stopping` / `stopped` | Cancellation/cleanup or completed run while the endpoint is reachable; local readiness is false. |
+| `error` | Sync failed while the endpoint is reachable; local readiness is false. |
+| `unknown` | Authentication or IPC evidence cannot be validated; inspect local/transport fields and reasons separately. |
 
-After socket closure/removal, terminal state is no longer queryable and the result
-becomes `absent`; use offline [doctor](doctor.md) for retained historical evidence.
-Before the socket opens, including initial App/session setup, the result is also
-`absent`; this means endpoint absence, not proof that no process owns LOCK.
-Disconnection/reconnection can be too brief to observe. Connectivity reflects the
-SDK's observation, not an independent WhatsApp health probe, and can change as
-soon as the reply is produced.
+After socket closure, terminal state is no longer queryable and becomes `absent`.
+Before socket opening, including App/session setup, the result is also `absent`;
+endpoint absence does not prove no process owns LOCK. Use offline [doctor](doctor.md)
+for historical evidence. Disconnect/reconnect can be too brief to observe.
+Transport reflects the SDK observation, not a WhatsApp health probe, and can
+change immediately after the reply.
 
-The query is bounded to 5s by default; explicit global `--timeout` accepts positive
-durations up to 1m. Interrupt/cancellation closes IPC promptly. There is no
-wait-for-ready service or network fallback: callers may make a separately bounded
-query again and proceed only on positive `ready=true`. A completed status query,
-including `absent`/`unknown`, exits 0; invalid arguments exit 2, and selection/config
-failures preserve their existing exit contracts. Never equate exit 0 with readiness.
+Default budget is 5s; explicit global `--timeout` accepts positive durations up to
+1m. Cancellation closes IPC promptly. There is no wait-for-ready service or
+network fallback; callers may make a separately bounded query again. Use
+`owner_ready` only for local readiness: this build offers no positive
+authenticated readiness gate. Status IPC v2 rejects older status owners rather
+than accepting their unsafe positive claim; the outer legacy delegate protocol
+and agent v1 envelope remain unchanged. Completed status queries, including
+absent/unknown, exit 0. Invalid arguments exit 2; selection/config failures retain
+their existing contracts. Exit 0 alone never means ready.
 
-For unavailable evidence, `reason` is one of `owner_absent`, `ipc_unsupported`,
-`scope_unavailable`, `ipc_unavailable`, `timeout`, `cancelled`, `owner_incompatible`,
-`scope_mismatch` or `invalid_reply`. Older owners, mismatched/uncorrelated responses,
-malformed or stale snapshots never produce readiness. Each reply must match the
-query's nonce, protocol version and absolute selected store reference; the owner
-checks that reference against its own store. This follows account selection's
-store isolation, not a permanent database fingerprint: copied/replaced archives
-and different account names pointing at the same store are not distinguished.
-Treat the returned linked identities as observations of that scoped owner.
+For unavailable IPC evidence, `readiness_reason=owner_unavailable` and `reason` is
+`owner_absent`, `ipc_unsupported`, `scope_unavailable`, `ipc_unavailable`, `timeout`,
+`cancelled`, `owner_incompatible`, `scope_mismatch` or `invalid_reply`. Old owners,
+uncorrelated/malformed/stale responses never grant local or authenticated
+readiness. Replies must match nonce, status version and absolute selected store;
+the owner checks its own store. Scope is a selected path, not a permanent database
+fingerprint: restored archives and account names pointing at the same store are
+not distinguished. Returned identities are observations of that scoped owner.
 
 Windows returns `unknown` / `ipc_unsupported`: this status contract uses the
 project's existing Unix IPC, with no named-pipe implementation. Unsupported socket
@@ -94,7 +110,7 @@ platforms never fall back to a connection or an offline auth claim. Offline
 Example data while bootstrap is connected but incomplete:
 
 ```json
-{"state":"initializing","ready":false,"initialized":false,"connected":"true","linked_jid":"15550000001@s.whatsapp.net","linked_lid":"100000000001@lid","observed_at":"2026-10-08T13:00:00Z"}
+{"state":"initializing","ready":false,"owner_ready":false,"initialized":false,"connected":"unknown","transport_connected":"true","authenticated":"unknown","readiness_reason":"current_authentication_unsupported","linked_jid":"15550000001@s.whatsapp.net","linked_lid":"100000000001@lid","observed_at":"2026-10-08T13:00:00Z"}
 ```
 
 ## Command

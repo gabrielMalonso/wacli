@@ -325,9 +325,12 @@ Static image drafts expose `kind=image` and `image={mime,caption,size,sha256,wid
 [`sync status`](sync.md#live-owner-readiness) is a readonly `sync_status` capability
 with `source=live`. It queries only the existing follow owner's scoped Unix IPC,
 without writer LOCK, archive/session open, migration or a second WhatsApp client.
-Read `data.ready` positively; an exit-0 status can be `absent` or `unknown`.
-Local initialization plus current authenticated connectivity means ready, never
-history completeness or guaranteed future dispatch. Timeout, incompatible/mismatched
+`data.owner_ready` positively reports completed local initialization without
+terminal cleanup; `transport_connected` separately observes the socket. Current
+authenticated readiness remains a pinned SDK gap: `authenticated=unknown`,
+strict `ready=false`, `readiness_reason=current_authentication_unsupported`.
+The owner can serve local queries despite this gap, including while disconnected.
+These observations never prove history completeness or future dispatch. Timeout, incompatible/mismatched
 owners and Windows unsupported IPC remain explicit unknown observations. Offline
 `auth status` / `doctor` retain `connected=unknown`; no auth-history fallback occurs.
 

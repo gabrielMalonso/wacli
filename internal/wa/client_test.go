@@ -10,9 +10,11 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/appstate"
+	waBinary "go.mau.fi/whatsmeow/binary"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	waStore "go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -34,6 +36,30 @@ func TestNewEnablesRetryMessageStore(t *testing.T) {
 	}
 	if got := c.LinkedJID(); got != "" {
 		t.Fatalf("LinkedJID before auth = %q", got)
+	}
+}
+
+func TestClientPinnedLoginDoesNotProveCurrentTransport(t *testing.T) {
+	jid := types.NewJID("15550000001", types.DefaultUserServer)
+	noop := &waStore.NoopStore{Error: errors.New("isolated fixture has no keys")}
+	sdk := whatsmeow.NewClient(&waStore.Device{ID: &jid, PreKeys: noop, PrivacyTokens: noop}, nil)
+	c := &Client{client: sdk} // Real wrapper and SDK, in-memory stores, no socket.
+	defer c.Close()
+	connectedEvent := make(chan struct{}, 1)
+	sdk.AddEventHandler(func(evt any) {
+		if _, ok := evt.(*events.Connected); ok {
+			connectedEvent <- struct{}{}
+		}
+	})
+	sdk.DangerousInternals().HandleConnectSuccess(t.Context(), &waBinary.Node{Tag: "success"})
+	select {
+	case <-connectedEvent:
+	case <-time.After(time.Second):
+		t.Fatal("real SDK did not dispatch success")
+	}
+	c.Disconnect()
+	if c.IsConnected() || !c.IsAuthed() || !sdk.IsLoggedIn() {
+		t.Fatalf("pinned evidence changed: transport=%t stored_auth=%t sdk_login=%t; revisit live readiness contract", c.IsConnected(), c.IsAuthed(), sdk.IsLoggedIn())
 	}
 }
 
