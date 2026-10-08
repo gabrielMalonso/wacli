@@ -10,13 +10,13 @@ Read when: you need the user-facing command map, global flags, store model, or l
 - Existing Linux `~/.wacli` stores are reused when no XDG store exists.
 - Override the store with `--store DIR` or `WACLI_STORE_DIR`.
 - Bind an invocation to an existing named account with [`-a NAME` / `--for-account NAME`](accounts.md#strict-invocation-binding): overrides env/default and refuses conflicting selectors. Legacy `--account NAME` remains available; global `accounts` commands run without binding.
-- Human-readable tables are the default.
+- Human-readable tables are the default; `changes watch` always streams NDJSON pages.
 - Use `--json` for scriptable output.
 - Use [`--agent` with `--detail compact|full`](agent.md) for bounded, versioned offline agent queries and typed errors.
 - Run `capabilities --agent` without account/store selectors to discover this binary's commands, agent support and static requirements/limits. It opens no account or store; availability remains unknown.
 - Libsignal warnings and errors go to stderr, not stdout. With `--events`, they use NDJSON `warning` events with `data.code=libsignal_diagnostic`, the original `level`, `source`, `caller`, and a safe `message`. These diagnostics can precede a successful fallback and do not themselves mean the command failed.
 - Libsignal diagnostics retain known operation labels or safe error categories, redact dynamic details, and report unknown messages generically. Debug and info logging are disabled to avoid exposing cryptographic material; libsignal v0.2.2 has no production info calls.
-- A successful JSON query exits successfully if its pipe reader closes early. Draft writes instead report an uncertain result if output fails after mutation. Other output errors and command failures still return a nonzero exit status.
+- A finite successful JSON query exits successfully if its pipe reader closes early. `changes watch` instead stops with exit 1 on broken/partial output, without a final checkpoint. Draft writes instead report an uncertain result if output fails after mutation. Other output errors and command failures still return a nonzero exit status.
 - Use `--full` to avoid table truncation.
 - Local archive queries are read-only by default, need an existing current-schema store, and work alongside sync without a writer lock; see [store compatibility](store.md#local-reads-by-default).
 - Write commands acquire the store lock; use `--lock-wait DURATION` to wait.
@@ -34,7 +34,7 @@ Read when: you need the user-facing command map, global flags, store model, or l
 - [capabilities](agent.md#static-capability-discovery) - discover static CLI/agent support without opening an account.
 - [sync](sync.md) - sync messages, contacts, groups, channels and optional media; query existing follow owner local readiness and transport with `sync status`; current authenticated readiness remains a pinned SDK gap.
 - [messages](messages.md) - list, search, show, and contextualize stored messages.
-- [changes](changes.md) - consume durable local message mutations and receipt observations with restartable cursors.
+- [changes](changes.md) - consume durable local message mutations and receipt observations with restartable cursors through list or continuous NDJSON watch.
 - [calls](calls.md) - list stored WhatsApp call events.
 - [draft](drafts.md) - prepare and inspect durable local revisions without sending.
 - [outbound](outbound.md) - dispatch an exact reviewed revision/hash and inspect retained evidence.

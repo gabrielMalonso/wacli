@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Changes: add readonly `changes watch` streaming NDJSON pages from the existing retained feed, with list-compatible resume cursors, bounded cancellable polling and strict output failure handling. Emit an initial empty checkpoint, drain backlog and keep awaiting future WAL commits without starting sync/connection or persisting consumer state. Processing is at-least-once; save a cursor only after processing a complete frame. Document limits, timeout, discovery encoding and offline fixtures.
+
 - History: add explicit `backfill --before-id` for one bounded batch before a real persisted message, with strict anchor/author validation, no anchor/identity retry, selected-window growth after callback draining, and a distinct owner IPC kind that older owners refuse. Preserve default backfill, readonly guards and existing evidence; no schema/SDK/dependency change or remote completeness claim. Offline fixtures only.
 
 - Sync: add readonly `sync status` (including `--agent`) over the existing follow owner IPC, distinguishing bootstrap, readiness, reconnection and terminal/unknown observations without opening stores or creating another WhatsApp connection. Local `owner_ready` and transport observations are separate; the pinned SDK cannot prove current authentication, so strict `ready=false` has an explicit unsupported reason, never history completeness; offline auth/doctor remain honest and Windows IPC is explicitly unsupported.

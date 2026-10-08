@@ -197,7 +197,10 @@ func writeAgentPolicy(w io.Writer, value any, limit int, ignoreBrokenPipe bool) 
 		recovery := "Narrow the query with smaller list/context limits, fewer resolve inputs, or one selected item."
 		return &AgentError{Code: "payload_too_large", Message: fmt.Sprintf("agent output exceeds %d bytes", limit), Recovery: recovery, ExitCode: 1}
 	}
-	_, err = fmt.Fprintln(w, string(b))
+	n, err := fmt.Fprintln(w, string(b))
+	if err == nil && n != len(b)+1 {
+		err = io.ErrShortWrite
+	}
 	if ignoreBrokenPipe && isPlatformBrokenPipe(err) {
 		return nil
 	}

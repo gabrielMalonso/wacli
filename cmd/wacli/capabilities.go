@@ -33,6 +33,7 @@ type capabilityContract struct {
 
 type capabilityCommand struct {
 	Command      string   `json:"command"`
+	Encoding     string   `json:"encoding,omitempty"`
 	AgentMode    string   `json:"agent_mode"`
 	Capability   string   `json:"capability,omitempty"`
 	Source       string   `json:"source,omitempty"`
@@ -101,6 +102,8 @@ func discoverCapabilities(root *cobra.Command) capabilitiesData {
 				entry.Capability, entry.Requirements, entry.ReadOnly = capabilityRequirements(capability)
 				entry.Constraints = capabilityConstraints(path)
 				switch path {
+				case "changes watch":
+					entry.Encoding = "ndjson"
 				case "auth status":
 					entry.Requirements = []string{"existing_store_directory", "readable_local_auth_state"}
 				case "draft cleanup apply":
@@ -189,6 +192,8 @@ func capabilityConstraints(path string) []string {
 		return []string{"Requires locally observed public account/recipient identity; no network send or approval is implied."}
 	case "draft cleanup apply":
 		return []string{"Exact eligible document revision/hash and current head required; removes local snapshot bytes only."}
+	case "changes watch":
+		return []string{"NDJSON page envelopes, including the first empty page; no repeated unchanged empty frames. Save next_cursor after processing each complete frame; has_more=false keeps waiting. Existing local archive only, no owner or connection required. --interval 100ms..1m (default 1s), --limit 1..200, --timeout 0 or 100ms..24h (default 5m); cancellation/timeout/output failure exit 1 without a final checkpoint."}
 	case "changes list":
 		return []string{"Save next_cursor even on empty/final pages; local references begin at schema 33, not a remote completeness or universal restore guarantee."}
 	}

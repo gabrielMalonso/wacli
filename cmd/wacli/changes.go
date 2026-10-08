@@ -66,7 +66,7 @@ func newChangesCmd(flags *rootFlags) *cobra.Command {
 		_, err = fmt.Fprintf(os.Stdout, "has_more: %t\nnext_cursor: %s\n", page.HasMore, page.NextCursor)
 		return err
 	}
-	parent.AddCommand(cmd)
+	parent.AddCommand(cmd, newChangesWatchCmd(flags))
 	return parent
 }
 
