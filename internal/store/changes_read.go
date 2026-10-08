@@ -4,12 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
-	"errors"
 	"fmt"
 	"os"
 	"time"
 
-	"github.com/mattn/go-sqlite3"
 	"github.com/openclaw/wacli/internal/sqliteutil"
 	"github.com/openclaw/wacli/internal/store/storedb"
 )
@@ -101,8 +99,7 @@ func retryChangeRead(ctx context.Context, read func() error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		var sqliteErr sqlite3.Error
-		if !errors.As(err, &sqliteErr) || (sqliteErr.Code != sqlite3.ErrBusy && sqliteErr.Code != sqlite3.ErrLocked) || !time.Now().Before(until) {
+		if !isChangeReadContention(err) || !time.Now().Before(until) {
 			return err
 		}
 		timer := time.NewTimer(min(changeReadBusyWait, time.Until(until)))
