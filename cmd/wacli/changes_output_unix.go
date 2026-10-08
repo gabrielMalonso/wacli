@@ -9,14 +9,27 @@ import (
 )
 
 func changesWatchOutputFile(stdout *os.File) (*os.File, func(), error) {
-	fd := stdout.Fd()
-	flags, err := unix.FcntlInt(fd, unix.F_GETFL, 0)
+	raw, err := stdout.SyscallConn()
 	if err != nil {
 		return nil, nil, err
 	}
-	duplicate, err := unix.Dup(int(fd))
+	var fd uintptr
+	var flags, duplicate int
+	var operationErr error
+	// Fd() can itself switch a Go-owned descriptor to blocking mode. Control
+	// observes and duplicates it without changing the caller's poller or flags.
+	err = raw.Control(func(descriptor uintptr) {
+		fd = descriptor
+		flags, operationErr = unix.FcntlInt(fd, unix.F_GETFL, 0)
+		if operationErr == nil {
+			duplicate, operationErr = unix.Dup(int(fd))
+		}
+	})
 	if err != nil {
 		return nil, nil, err
+	}
+	if operationErr != nil {
+		return nil, nil, operationErr
 	}
 	unix.CloseOnExec(duplicate)
 	if err = unix.SetNonblock(duplicate, true); err != nil {
