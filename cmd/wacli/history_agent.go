@@ -71,13 +71,15 @@ func classifyHistoryAgentError(err error, attemptID string) *out.AgentError {
 }
 
 type historyAgentBackfillData struct {
-	Chat          string                 `json:"chat"`
-	AttemptID     string                 `json:"attempt_id"`
-	RequestsSent  int                    `json:"requests_sent"`
-	ResponsesSeen int                    `json:"responses_seen"`
-	MessagesAdded int64                  `json:"messages_added"`
-	StopReason    app.BackfillStopReason `json:"stop_reason"`
-	Evidence      *historyObservationDTO `json:"evidence"`
+	BeforeID            string                 `json:"before_id,omitempty"`
+	MessagesAddedBefore *int64                 `json:"messages_added_before,omitempty"`
+	Chat                string                 `json:"chat"`
+	AttemptID           string                 `json:"attempt_id"`
+	RequestsSent        int                    `json:"requests_sent"`
+	ResponsesSeen       int                    `json:"responses_seen"`
+	MessagesAdded       int64                  `json:"messages_added"`
+	StopReason          app.BackfillStopReason `json:"stop_reason"`
+	Evidence            *historyObservationDTO `json:"evidence"`
 }
 
 func writeHistoryBackfillResult(flags *rootFlags, res app.BackfillResult) error {
@@ -90,7 +92,7 @@ func writeHistoryBackfillResult(flags *rootFlags, res app.BackfillResult) error 
 		return historyIPCUncertain(sendDelegateRequest{Backfill: &backfillDelegateOptions{AttemptID: flags.agentHistoryAttemptID}}, fmt.Errorf("missing correlated recovery observation"))
 	}
 	current := app.HistoryIdentity{} // No post-action identity query or freshness assertion.
-	data := historyAgentBackfillData{Chat: res.ChatJID, AttemptID: res.AttemptID, RequestsSent: res.RequestsSent, ResponsesSeen: res.ResponsesSeen,
+	data := historyAgentBackfillData{BeforeID: res.BeforeID, MessagesAddedBefore: res.MessagesAddedBefore, Chat: res.ChatJID, AttemptID: res.AttemptID, RequestsSent: res.RequestsSent, ResponsesSeen: res.ResponsesSeen,
 		MessagesAdded: res.MessagesAdded, StopReason: res.StopReason, Evidence: historyObservation(res.Evidence, current, flags.detail == "full")}
 	meta := agentMeta(flags)
 	meta.Recovery = "Inspect history coverage --chat JID --evidence for retained observations; primary end markers do not certify remote completeness."

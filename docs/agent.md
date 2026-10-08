@@ -59,7 +59,7 @@ The CLI release version, agent envelope version, SQLite migration version, diagn
 | `contacts list/search` / `contacts show` | `contacts` array / one contact DTO | System name, tags, metadata update timestamp |
 | `contacts resolve` | `resolutions` array, one per input | Untruncated names |
 | `history coverage` | `coverage` array with local counts/dates/anchor status; opt-in `--evidence` adds independent `recovery_evidence` | Untruncated names; evidence options, anchors and checkpoint measurements |
-| `history backfill --chat JID` | Explicit live action: chat, attempt ID, requests/responses, net growth, stop reason and persisted `evidence` | Evidence options, anchors and scoped global sync counter |
+| `history backfill --chat JID` | Explicit live action: chat, attempt ID, requests/responses, net growth, stop reason and persisted `evidence`; explicit `--before-id` adds selector and before-window growth | Evidence options, anchors and scoped global sync counter |
 | `draft show/create/update/discard` | Frozen local revision, identity, payload hash and state | Untruncated content and document/image expected snapshot path |
 | `draft list` | Stored summary array with page metadata | Same bounded summaries |
 | `draft cleanup preview D` | Catalogue revision eligibility, full hashes, page-only counts and navigation | Derived expected document snapshot paths, without stat |
@@ -142,13 +142,13 @@ Existing recovery debt, late persistence and handler draining before DB/LOCK rel
 
 ## History recovery
 
-`--agent history backfill --chat JID` explicitly requests recovery using the existing standalone runner or connected sync owner. It does not authorize any other mutation, connection command, or download. The central command capability remains an explicit allowlist: unsupported, local read, media observation/download, explicit local adapter transcription, standalone exact media recovery, local draft write, history recovery, outbound dispatch, or the four explicit read/unread/archive actions. `--read-only` and `WACLI_READONLY=1` reject this action with `read_only` (exit 2); malformed options and `--events` fail with exit 2 before opening/delegating. Bounds remain count 1–500, up to 100 batches, wait/idle up to five minutes (legacy nonpositive defaults preserved). There is no new executor, replay, journal or automatic retry policy.
+`--agent history backfill --chat JID` explicitly requests recovery using the existing standalone runner or connected sync owner. It does not authorize any other mutation, connection command, or download. The central command capability remains an explicit allowlist: unsupported, local read, media observation/download, explicit local adapter transcription, standalone exact media recovery, local draft write, history recovery, outbound dispatch, or the four explicit read/unread/archive actions. `--read-only` and `WACLI_READONLY=1` reject this action with `read_only` (exit 2); malformed options and `--events` fail with exit 2 before opening/delegating. Bounds remain count 1–500, up to 100 batches, wait/idle up to five minutes (legacy nonpositive defaults preserved). There is no new executor, replay, journal or automatic retry policy. Optional `--before-id MESSAGE_ID` selects one exact persisted DM/group message and requires one batch (`--requests 1`); it never retries another anchor/identity. See [explicit recovery anchors](history.md#explicit-recovery-anchor).
 
 `meta.source="live"` describes the action's capability, including parsing, policy and pre-dispatch failures; it does not assert a request reached the primary. Coverage remains `source="local"`. Both freshness and completeness stay `unknown`. Success exposes only the final successful operation observation; partial results on errors are available through retained evidence when persistence succeeded.
 
 Recovery failures may include optional typed `error.history = {attempt_id, phase, outcome, correlation_confirmed}`. Other commands omit it. Phases are `preparing`, `observing`, `dispatch_possible`, `finalizing`; outcomes are `not_dispatched` or `uncertain`. A generated 32-hex attempt ID is carried unchanged through IPC, persistence and replies. It is internal correlation, not an idempotency/replay key or public flag. A missing/mismatched reply or old owner cannot confirm retention: correlation is false, and the outcome is uncertain after possible dispatch. An ID can already have been replaced in the latest slot. Do not parse `recovery` prose to recover correlation.
 
-`no_local_anchor` (exit 3) and `store_state` (exit 4) describe proven pre-dispatch conditions only. Operational refusal is exit 1. Once dispatch is possible, errors/cancellation/lost output prioritize `backfill_outcome_uncertain` (exit 1), with safe phase/correlation and no SQL/path/anchor causes. `not_dispatched` does not mean the archive was untouched: standalone connection or ordinary owner sync may have persisted messages. A delivered success followed by output failure also never proves rollback. A broken stdout pipe after an agent action reports that uncertainty with the attempt ID and confirmed correlation; read queries and legacy JSON retain their closed-pipe behavior. Inspect evidence and local coverage before deciding whether another explicit attempt is appropriate.
+`no_local_anchor` (exit 3, including an absent/invalid/tombstoned explicit anchor or contradictory author/account) and `store_state` (exit 4) describe proven pre-dispatch conditions only. Operational refusal is exit 1. Once dispatch is possible, errors/cancellation/lost output prioritize `backfill_outcome_uncertain` (exit 1), with safe phase/correlation and no SQL/path/anchor causes. `not_dispatched` does not mean the archive was untouched: standalone connection or ordinary owner sync may have persisted messages. A delivered success followed by output failure also never proves rollback. A broken stdout pipe after an agent action reports that uncertainty with the attempt ID and confirmed correlation; read queries and legacy JSON retain their closed-pipe behavior. Inspect evidence and local coverage before deciding whether another explicit attempt is appropriate.
 
 `history coverage --evidence` retains legacy `data.coverage` and adds top-level `data.recovery_evidence`, independent of chat rows. Explicit `--chat` inputs and their currently verified aliases are consulted even without a chat/anchor or when coverage excludes blocked chats; without `--chat`, only returned coverage scopes are consulted. At most 200 inputs / 400 deduplicated keys are fetched by primary key; no entire evidence catalogue scan. Each requested key has nullable `latest` and `last_success`: null means **no retained record**, not never executed. Two slots per input bound retained attempts for that input; new inputs grow the table. Reads never migrate, repair or write evidence.
 
@@ -158,6 +158,15 @@ Compact evidence contains state, ID, operation times, immutable scope, useful co
 wacli --account personal --agent history coverage --chat 123@s.whatsapp.net --evidence
 wacli --account personal --agent history backfill --chat 123@s.whatsapp.net --requests 1
 ```
+
+Explicit-anchor success adds `data.before_id` and `data.messages_added_before`
+(net retained IDs strictly before its timestamp, excluding equal-second rows and
+tombstones after the idle drain). `messages_added` and `evidence` growth remain the
+whole-conversation metric. The existing evidence records actual anchors and
+request identity, not a separately retained selector/window count. Keep the
+action result and attempt ID. Preflight refusals can precede evidence creation.
+The distinct owner request kind prevents ignored fields on old owners from
+selecting the default anchor; refusal/lost replies never authorize fallback.
 
 ## Envelope and identity
 
@@ -273,7 +282,7 @@ These are live local search pages with the same limits described above, without 
 
 For local queries, `meta.source` is `local`; `completeness` and `freshness` are **unknown** in v1. Local message bounds, row counts and anchor status describe only the archive. Coverage `ready` means a local anchor exists, not complete history. Missing timestamps are null. `last_message_at` is a message date, never a synchronization date. `last_activity_at` is the heartbeat date (possibly stale); a lock or heartbeat does not prove connectivity. Offline `connected` is always **unknown**.
 
-An empty local search after successful sync/offline replay is still only a local observation. `history backfill` paginates before its oldest local anchor and does not automatically target a newer offline gap. Keep coverage unknown, retain authorized sync lifecycle evidence, and never resend an uncertain operation to fill a missing archive row; see [missing offline messages](sync.md#missing-messages-after-an-offline-interval).
+An empty local search after successful sync/offline replay is still only a local observation. `history backfill` defaults to pagination before its oldest local anchor; an explicit `--before-id` can request the window before a genuine newer local message, without automatic gap detection or a completeness claim. Keep coverage unknown, retain authorized sync lifecycle evidence, and never resend an uncertain operation to fill a missing archive row; see [missing offline messages](sync.md#missing-messages-after-an-offline-interval).
 
 | Exit | Error code | Meaning |
 | --- | --- | --- |

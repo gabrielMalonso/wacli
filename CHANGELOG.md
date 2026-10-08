@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- History: add explicit `backfill --before-id` for one bounded batch before a real persisted message, with strict anchor/author validation, no anchor/identity retry, selected-window growth after callback draining, and a distinct owner IPC kind that older owners refuse. Preserve default backfill, readonly guards and existing evidence; no schema/SDK/dependency change or remote completeness claim. Offline fixtures only.
+
 - Sync: add readonly `sync status` (including `--agent`) over the existing follow owner IPC, distinguishing bootstrap, readiness, reconnection and terminal/unknown observations without opening stores or creating another WhatsApp connection. Local `owner_ready` and transport observations are separate; the pinned SDK cannot prove current authentication, so strict `ready=false` has an explicit unsupported reason, never history completeness; offline auth/doctor remain honest and Windows IPC is explicitly unsupported.
 
 - Agents: add unbound `capabilities` discovery from this binary's command tree and agent guards, with contract version/limits, static requirements and explicit unknown account availability. Preserve v1 envelopes, legacy JSON/tables/text helpers, error exits and query broken-pipe behavior; discovery reads no config/store/session and performs no connection or migration. Validate with isolated CLI fixtures only.

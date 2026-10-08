@@ -145,7 +145,7 @@ func delegateSend(ctx context.Context, flags *rootFlags, req sendDelegateRequest
 		return sendDelegateResponse{}, fmt.Errorf("%w: %v", errSendDelegateUnavailable, err)
 	}
 	defer conn.Close()
-	if req.Kind == historyBackfillKind || req.Kind == draftWriteKind || req.Kind == outboundSendKind || req.Kind == agentChatStateKind || req.Kind == draftCleanupKind {
+	if isHistoryBackfillKind(req.Kind) || req.Kind == draftWriteKind || req.Kind == outboundSendKind || req.Kind == agentChatStateKind || req.Kind == draftCleanupKind {
 		// Closing the client transport interrupts its wait, not the owner's
 		// operation: this protocol has no cancellation acknowledgement.
 		stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })
@@ -213,7 +213,7 @@ func delegateSend(ctx context.Context, flags *rootFlags, req sendDelegateRequest
 		responseDecoder.DisallowUnknownFields()
 	}
 	if err := responseDecoder.Decode(&resp); err != nil {
-		if req.Kind == historyBackfillKind || req.Kind == draftWriteKind || req.Kind == outboundSendKind {
+		if isHistoryBackfillKind(req.Kind) || req.Kind == draftWriteKind || req.Kind == outboundSendKind {
 			return sendDelegateResponse{}, historyTransportError(req, err)
 		}
 		var netErr net.Error
@@ -246,12 +246,12 @@ func delegateSend(ctx context.Context, flags *rootFlags, req sendDelegateRequest
 		return resp, nil
 	}
 	if !resp.OK {
-		if req.Kind == historyBackfillKind {
+		if isHistoryBackfillKind(req.Kind) {
 			return sendDelegateResponse{}, historyIPCError(req, resp.HistoryFailure, resp.Error)
 		}
 		return sendDelegateResponse{}, errors.New(resp.Error)
 	}
-	if req.Kind == historyBackfillKind && (req.Backfill == nil || resp.Backfill == nil || resp.Backfill.AttemptID != req.Backfill.AttemptID) {
+	if isHistoryBackfillKind(req.Kind) && (req.Backfill == nil || resp.Backfill == nil || resp.Backfill.AttemptID != req.Backfill.AttemptID || resp.Backfill.BeforeID != req.Backfill.BeforeID || req.Kind == historyBeforeKind && resp.Backfill.MessagesAddedBefore == nil) {
 		return sendDelegateResponse{}, historyIPCUncertain(req, fmt.Errorf("history recovery result correlation not confirmed; history may already have been persisted; check before retrying"))
 	}
 	return resp, nil
@@ -448,9 +448,13 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 		writeDelegateResult(conn, requestCtx, req, resp, err)
 		return
 	}
-	if req.Kind == historyBackfillKind {
+	if isHistoryBackfillKind(req.Kind) {
 		if req.Version != sendDelegateVersion || req.Backfill == nil {
 			_ = json.NewEncoder(conn).Encode(historyRefusal(req, "invalid_arguments", "invalid history backfill request before dispatch; no history was requested"))
+			return
+		}
+		if (req.Kind == historyBeforeKind) != (req.Backfill.BeforeID != "") {
+			_ = json.NewEncoder(conn).Encode(historyRefusal(req, "invalid_arguments", "explicit anchor requires its specific history request kind before dispatch"))
 			return
 		}
 		if _, err := req.Backfill.options(); err != nil {
@@ -509,7 +513,7 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 
 	refuse := func() {
 		msg := "request timed out in the send queue before dispatch; it was not sent"
-		if req.Kind == historyBackfillKind {
+		if isHistoryBackfillKind(req.Kind) {
 			msg = "history backfill expired in the operation queue before dispatch; no history was requested"
 		} else if pacer.enabled() {
 			msg = "send spacing exceeded request timeout before dispatch; it was not sent"
@@ -524,7 +528,7 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 		if req.Kind == draftWriteKind {
 			resp = draftRefusal(req, store.DraftFailure("local_write_not_dispatched", "", "", "", nil))
 		}
-		if req.Kind == historyBackfillKind {
+		if isHistoryBackfillKind(req.Kind) {
 			resp = historyRefusal(req, "backfill_not_dispatched", msg)
 		}
 		_ = json.NewEncoder(conn).Encode(resp)
@@ -546,7 +550,7 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 
 	// Space this send from the previous one while serialized. Bound the wait by
 	// the same deadline. Disabled spacing leaves the path untouched.
-	if req.Kind != historyBackfillKind && req.Kind != draftWriteKind && req.Kind != draftCleanupKind && req.Kind != outboundSendKind && pacer.enabled() {
+	if !isHistoryBackfillKind(req.Kind) && req.Kind != draftWriteKind && req.Kind != draftCleanupKind && req.Kind != outboundSendKind && pacer.enabled() {
 		if !pacer.wait(requestCtx) {
 			refuse()
 			return
@@ -563,7 +567,7 @@ func handleSendDelegateConn(ctx context.Context, conn net.Conn, execute sendDele
 		requestCtx = context.WithValue(requestCtx, outboundPacerKey{}, pacer)
 	}
 	resp, err := execute(requestCtx, req)
-	if req.Kind != historyBackfillKind && req.Kind != draftWriteKind && req.Kind != draftCleanupKind && req.Kind != outboundSendKind && pacer.enabled() {
+	if !isHistoryBackfillKind(req.Kind) && req.Kind != draftWriteKind && req.Kind != draftCleanupKind && req.Kind != outboundSendKind && pacer.enabled() {
 		// Record completion, not handler entry: recipient resolution, media
 		// preparation, and the actual wire send all happen inside execute.
 		// Starting the gap here prevents a slow operation from consuming it.
@@ -595,13 +599,13 @@ func writeDelegateResult(conn net.Conn, requestCtx context.Context, req sendDele
 			_ = json.NewEncoder(conn).Encode(draftRefusal(req, err))
 			return
 		}
-		if req.Kind == historyBackfillKind {
+		if isHistoryBackfillKind(req.Kind) {
 			err = fmt.Errorf("delegated history backfill failed after dispatch; already persisted history may remain; check before retrying: %w", err)
 		} else if requestCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			err = fmt.Errorf("delegated %s failed after dispatch and may still have gone through; check before retrying: %w", req.Kind, err)
 		}
 		resp = sendDelegateResponse{OK: false, Error: err.Error()}
-		if req.Kind == historyBackfillKind {
+		if isHistoryBackfillKind(req.Kind) {
 			var typed *app.BackfillError
 			if errors.As(err, &typed) {
 				copy := typed.History
@@ -631,7 +635,7 @@ func executeDelegatedSend(parent context.Context, a *app.App, req sendDelegateRe
 		return executeDelegatedOutbound(ctx, a, req)
 	case draftWriteKind:
 		return executeDelegatedDraft(ctx, a, req)
-	case historyBackfillKind:
+	case historyBackfillKind, historyBeforeKind:
 		return executeDelegatedBackfill(ctx, a, req)
 	case "text":
 		return executeDelegatedText(ctx, a, req)
@@ -1017,7 +1021,7 @@ func historyTransportError(req sendDelegateRequest, err error) error {
 	if req.Kind == draftWriteKind {
 		return draftIPCUncertain(req.Draft, err)
 	}
-	if req.Kind == historyBackfillKind {
+	if isHistoryBackfillKind(req.Kind) {
 		return historyIPCUncertain(req, delegateTransportError(req.Kind, err))
 	}
 	return delegateTransportError(req.Kind, err)
