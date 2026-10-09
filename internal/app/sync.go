@@ -117,7 +117,10 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 	a.waMu.Lock()
 	a.appStateRecoveryOnClose = run
 	a.waMu.Unlock()
-	run.diagnostic = newDiagnosticRun(a, opts.Mode, run)
+	diagnostic := newDiagnosticRun(a, opts.Mode, run)
+	a.waMu.Lock()
+	run.diagnostic = diagnostic
+	a.waMu.Unlock()
 	a.live.mu.Lock()
 	a.live.recovery, a.live.runID = run, run.diagnostic.sync.ExecutionID
 	a.live.mu.Unlock()
