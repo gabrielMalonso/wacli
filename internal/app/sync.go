@@ -118,6 +118,16 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 	a.appStateRecoveryOnClose = run
 	a.waMu.Unlock()
 	run.diagnostic = newDiagnosticRun(a, opts.Mode, run)
+	a.live.mu.Lock()
+	a.live.recovery, a.live.runID = run, run.diagnostic.sync.ExecutionID
+	a.live.mu.Unlock()
+	finishBootstrap := a.measureSyncStage(ctx, "bootstrap", "")
+	bootstrapFinished := false
+	defer func() {
+		if !bootstrapFinished {
+			finishBootstrap(errors.Join(syncErr, ctx.Err()))
+		}
+	}()
 	defer func() {
 		result.recovery, result.storeDir = run, a.StoreDir()
 		run.diagnostic.finishSync(syncErr, ctx.Err(), result.MessagesStored)
@@ -243,7 +253,10 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 		}
 	}
 	connectionEpoch.Store(nowUTC().UnixNano())
-	if err := a.connectForSync(syncCtx, opts); err != nil {
+	finishConnect := a.measureSyncStage(syncCtx, "connect", "")
+	connectErr := a.connectForSync(syncCtx, opts)
+	finishConnect(connectErr)
+	if err := connectErr; err != nil {
 		return SyncResult{}, err
 	}
 	// Ensure unavailable presence is sent on ALL post-connect exits
@@ -274,14 +287,29 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 	}()
 	now = nowUTC().UnixNano()
 	lastEvent.Store(now)
-	if err := a.migrateHistoricalLIDs(syncCtx); err != nil {
+	finishMigration := a.measureSyncStage(syncCtx, "lid_migration", "")
+	migrationErr := a.migrateHistoricalLIDs(syncCtx)
+	finishMigration(migrationErr)
+	if err := migrationErr; err != nil {
 		return SyncResult{MessagesStored: messagesStored.Load()}, err
 	}
+	if opts.Mode == SyncModeFollow {
+		runtime := a.startHistoryRuntime(syncCtx, &messagesStored)
+		defer a.stopHistoryRuntime(runtime)
+		// Keep Initialized/OwnerReady at the end of metadata bootstrap. Only the
+		// typed draft/outbound IPC family uses this earlier admission boundary.
+		a.live.enableSend(syncCtx, opts.liveGeneration)
+	}
+	finishMetadata := a.measureSyncStage(syncCtx, "metadata", "")
 	a.syncAppStateDeltas(syncCtx, appStateRecoveries)
+	finishMetadata(syncCtx.Err())
 
 	// Optional: bootstrap imports (helps contacts/groups management without waiting for events).
 	if opts.RefreshContacts {
-		if err := a.refreshContacts(syncCtx); err != nil {
+		finish := a.measureSyncStage(syncCtx, "refresh_contacts", "")
+		err := a.refreshContacts(syncCtx)
+		finish(err)
+		if err != nil {
 			a.emitWarning(
 				"refresh_contacts_failed",
 				fmt.Sprintf("warning: failed to refresh contacts: %v", err),
@@ -290,7 +318,10 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 		}
 	}
 	if opts.RefreshGroups {
-		if err := a.refreshGroups(syncCtx); err != nil {
+		finish := a.measureSyncStage(syncCtx, "refresh_groups", "")
+		err := a.refreshGroups(syncCtx)
+		finish(err)
+		if err != nil {
 			a.emitWarning(
 				"refresh_groups_failed",
 				fmt.Sprintf("warning: failed to refresh groups: %v", err),
@@ -299,17 +330,16 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 		}
 	}
 	if opts.RefreshChannels {
-		if err := a.refreshNewsletters(syncCtx); err != nil {
+		finish := a.measureSyncStage(syncCtx, "refresh_channels", "")
+		err := a.refreshNewsletters(syncCtx)
+		finish(err)
+		if err != nil {
 			a.emitWarning(
 				"refresh_channels_failed",
 				fmt.Sprintf("warning: failed to refresh channels: %v", err),
 				map[string]any{"error": err.Error()},
 			)
 		}
-	}
-	if opts.Mode == SyncModeFollow {
-		runtime := a.startHistoryRuntime(syncCtx, &messagesStored)
-		defer a.stopHistoryRuntime(runtime)
 	}
 	if opts.AfterConnect != nil {
 		if err := opts.AfterConnect(syncCtx); err != nil {
@@ -318,6 +348,8 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 	}
 
 	a.live.initialize(syncCtx)
+	finishBootstrap(syncCtx.Err())
+	bootstrapFinished = true
 	defer func() {
 		if syncErr != nil {
 			a.live.transition(SyncLiveError)

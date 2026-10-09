@@ -33,9 +33,36 @@ while disconnected. `transport_connected` separately reports the existing SDK's
 `IsConnected()` observation. Startup warnings/reconciliation debt can remain.
 Neither field proves current authentication, dispatch ability, history/replay
 completeness, successful reconciliation, webhook delivery or queue capacity.
-The socket opens immediately before Sync connects, ahead of bootstrap; mutations
-before initialization or during terminal cleanup are refused before dispatch.
-Existing post-initialization operation semantics remain.
+The socket opens immediately before Sync connects, ahead of bootstrap. Typed
+`draft` writes and `outbound send` can be admitted earlier, after LID migration
+and installation of the follow history runtime and lifetime observers. Metadata
+reconciliation or optional refreshes can still be running, with `owner_ready=false`.
+Legacy sends, history, cleanup and chat-state retain the full startup gate.
+Terminal cleanup refuses new actions. No second owner, writer or supervisor is
+started to bypass an absent, incompatible or busy owner.
+
+### Admission by operation
+
+Static [`capabilities`](agent.md#static-capability-discovery) describe CLI support.
+Live `operations` describe this owner's local admission of an explicitly authorized
+attempt at `observed_at`, with a typed `reason`. Admission is neither authorization
+nor current authentication, a queue reservation, remote acceptance or delivery.
+
+| Operation | Meaning |
+| --- | --- |
+| `local_read` | `owner_required=false`, `reason=owner_not_required`, `availability=not_checked`, even without IPC. The status query does not check whether the archive exists or is readable; execute the local query to find out. |
+| `draft_write` | Local typed draft preparation through this migrated writer can be attempted once `send_initialized=true`; it does not require a connected transport. Identity, input, file and SQLite checks remain in execution. |
+| `send_attempt` | Applies only to typed `outbound send`. Its attempt can be admitted after the same prerequisites and an observed connected transport, outside a disconnected/reconnecting/terminal state. Frozen identity, revision/hash, idempotency key, archive checkpoints and existing outcome/receipt contracts remain required. |
+| `chat_state_write` | Global admission after full bootstrap and observed transport. It does not certify any collection or recipient: execution still serializes, reconciles the relevant collection and validates identity/message boundaries before mutation. |
+
+Reasons are `attempt_permitted`, `owner_unavailable`, `owner_initializing`,
+`owner_stopping`, `owner_reconnecting`, `transport_unavailable` or
+`transport_unknown`. Local reads use the separate `owner_not_required` reason.
+A remote mutation can fail after admission. A lost/mismatched IPC reply retains
+the existing uncertainty contract; retain the exact outbound key and inspect it,
+without automatically replaying or falling back to a standalone writer. A previous
+ACK, a login timestamp or an unscoped Connected callback cannot authenticate a
+new socket. `send_initialized` is a local prerequisite, not an authenticated epoch.
 
 Current authenticated readiness remains a gap in the pinned SDK. `IsLoggedIn()`
 remains true across normal disconnects, while asynchronous `Connected` callbacks
@@ -52,7 +79,7 @@ archive queries retain their independent readonly path.
 Legacy `--json` uses its usual success/data envelope. `--agent` uses v1 with
 `meta.source=live`, `meta.completeness=unknown`, `meta.freshness=unknown`; compact
 and full have the same bounded DTO. `data` contains `state`, booleans `ready`,
-`owner_ready` and `initialized`, `transport_connected` (`true|false|unknown`
+`owner_ready`, `send_initialized` and `initialized`, `transport_connected` (`true|false|unknown`
 strings), `authenticated`, `readiness_reason`, legacy `connected`, UTC
 `observed_at`, and optional exact public `linked_jid` / `linked_lid` from this
 owner. LIDs are never converted into inferred phone identities. `observed_at`
@@ -65,6 +92,37 @@ evidence even before `Disconnected` arrives; a new `Connected` still cannot
 certify the replacement. If events or a new run change during unlocked SDK reads,
 transport evidence stays unknown and identities are omitted for that query.
 A fresh query can observe the newer transport. Terminal precedence remains.
+
+`owner_run_id` identifies the existing diagnostic Sync execution, not a socket
+epoch; it changes for a new owner run. `observations` reuses the bounded historical
+connection/Sync facts of that run, including dated login/replay/recovery observations.
+These dates are historical SDK events, not proof that the current socket is logged
+in. `app_state` reads debt from the owner's already-open archive and adds existing
+recovery observations by collection/phase with sanitized codes. Unknown debt remains
+unknown; no snapshot ACK clears debt or confirms remote application.
+
+`stages` contains the latest WACLI invocation per phase/known collection, sorted by
+start time: overall `bootstrap`, `connect`, `lid_migration`, `metadata`, optional
+`refresh_contacts/groups/channels`, collection `lock_wait`, `delta`, `delta_fetch`,
+`full_sync` and `snapshot`. `started_at`, nullable `finished_at`, `elapsed_ms` and
+nullable `budget_ms` measure the WACLI call or its current wait. Budget is the
+remaining context deadline at stage entry, or null when there is none; an internal
+SDK timeout without a WACLI deadline is unknown. Fetch includes ordered local
+persistence; snapshot includes the recovery exchange and persistence. SDK mutex,
+blob and CDN durations cannot be separated and are not reported. Durations can
+exceed a budget when the SDK/persistence does not stop at cancellation. A returned
+bootstrap/metadata stage means attempts returned, not successful reconciliation.
+An active phase has `finished_at=null`; a failed phase adds only a fixed
+`error_code` (`cancelled`, `deadline_exceeded`, `completion_unconfirmed`,
+`lthash_mismatch`, `key_unavailable` or `operation_failed`). Repeated phases replace
+their timing entry, while recovery outcome sets retain earlier failures. Metrics
+are bounded in memory for the run, including later recovery; they add no heartbeat,
+durable timing journal, schema, flags, retry or timeout extension.
+
+The status request uses distinct IPC kind `sync_status_v3` and reply version 3.
+A v2/older owner returns explicit `owner_incompatible` rather than a partial
+positive admission report. The CLI does not restart it. Existing draft/outbound
+wire contracts are unchanged; an old CLI querying a new owner also fails closed.
 
 | State | Meaning |
 | --- | --- |

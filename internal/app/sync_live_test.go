@@ -16,7 +16,7 @@ func TestSyncLiveBootstrapLifecycle(t *testing.T) {
 	a.wa = f
 	connected := make(chan struct{})
 	release := make(chan struct{})
-	// Pause a real local bootstrap step after Connected, before the runtime is ready.
+	// Pause metadata bootstrap after Connected and the history runtime boundary.
 	f.appStateFetchEvent = func(string, bool, bool) any {
 		select {
 		case <-connected:
@@ -41,6 +41,15 @@ func TestSyncLiveBootstrapLifecycle(t *testing.T) {
 	v := a.SyncLiveSnapshot()
 	if v.State != "initializing" || v.Ready || v.Initialized || v.OwnerReady || v.Connected != "unknown" || v.TransportConnected != "true" {
 		t.Fatalf("premature readiness: %+v", v)
+	}
+	if !v.SendInitialized || !v.Operations.SendAttempt.Attemptable || !v.Operations.DraftWrite.Attemptable || v.Operations.ChatStateWrite.Attemptable || v.Operations.LocalRead.Availability != "not_checked" {
+		t.Fatalf("typed admission should be independent of metadata: %+v", v)
+	}
+	a.historyMu.Lock()
+	runtime := a.historyRuntime
+	a.historyMu.Unlock()
+	if runtime == nil || runtime.ctx.Err() != nil || v.Observations == nil || v.OwnerRunID != v.Observations.Sync.ExecutionID {
+		t.Fatal("send admission preceded run/history prerequisites")
 	}
 	close(release)
 	awaitLocalOwnerReady(t, a)

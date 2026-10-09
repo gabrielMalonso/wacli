@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Sync: expose operation admission, bounded WACLI stage durations/budgets, historical owner-run observations and retained app-state debt through fail-closed status IPC v3. Admit only typed draft/outbound requests after identity migration and history/lifetime setup while metadata bootstrap continues; preserve full `owner_ready`, strict `ready=false`/`authenticated=unknown`, local-read independence, collection guards, idempotency and uncertain outcomes. No schema, flags, SDK, dependencies, retries or timeout changes; fixture validation only.
+
 - Changes watch: bound native SQLite lock waits during readonly opening and polls, with synchronous context-aware retries and timeout/cancelled exits under WAL/DELETE contention. Preserve legacy connection defaults and release snapshots before retrying; no frame follows observed cancellation. Validate exclusive-lock timeouts, SIGINT during opening and transient recovery with offline production CLI fixtures.
 
 - Changes: add readonly `changes watch` streaming NDJSON pages from the existing retained feed, with list-compatible resume cursors, bounded cancellable polling and strict output failure handling. Emit an initial empty checkpoint, drain backlog and keep awaiting future WAL commits without starting sync/connection or persisting consumer state. Processing is at-least-once; save a cursor only after processing a complete frame. Document limits, timeout, discovery encoding and offline fixtures.

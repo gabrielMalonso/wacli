@@ -169,7 +169,7 @@ func capabilityConstraints(path string) []string {
 	case "capabilities":
 		return []string{"Global discovery; account/store selectors are rejected."}
 	case "sync status":
-		return []string{"Existing follow owner IPC only; no store/session open, writer LOCK or second connection. owner_ready is local initialization without terminal cleanup; transport_connected is the existing socket observation. Current authentication is unsupported by the pinned SDK: authenticated=unknown, ready=false, readiness_reason=current_authentication_unsupported. Local query readiness is separate from dispatch ability and history completeness."}
+		return []string{"Existing follow owner IPC v3 only; older owners are explicitly incompatible, with no automatic restart. No caller store/session open, writer LOCK or second connection. owner_ready is full local initialization without terminal cleanup; transport_connected is the existing socket observation. operations reports attemptable admission for typed draft_write/outbound send_attempt and guarded chat_state_write, never authorization or delivery. local_read has owner_not_required and archive availability not_checked. App-state debt and WACLI stage durations/budgets are observations, not completeness. Current authentication is unsupported by the pinned SDK: authenticated=unknown, ready=false, readiness_reason=current_authentication_unsupported."}
 	case "doctor":
 		return []string{"--connect is unsupported with --agent; local and historical observations do not prove current liveness."}
 	case "auth status":
