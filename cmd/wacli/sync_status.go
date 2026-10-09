@@ -47,14 +47,15 @@ type syncStatusData struct {
 // identity/lifetime prerequisites. All other kinds retain the full startup gate.
 func startSyncDelegateServer(ctx context.Context, a *app.App, spacing sendSpacing) (func(), error) {
 	return startSendDelegateServerForStore(context.WithoutCancel(ctx), a.StoreDir(), spacing, func(requestCtx context.Context, req sendDelegateRequest) (sendDelegateResponse, error) {
-		status := a.SyncLiveSnapshot()
 		if req.Kind == syncStatusKind {
+			status := a.SyncLiveSnapshot()
 			ref, err := filepath.Abs(a.StoreDir())
 			if err != nil || req.Version != sendDelegateVersion || req.SyncStatus == nil || req.SyncStatus.ID == "" || req.SyncStatus.StoreRef != ref {
 				return sendDelegateResponse{OK: false, Error: "sync status scope refused"}, nil
 			}
 			return sendDelegateResponse{OK: true, SyncStatus: &syncStatusReply{Version: syncStatusVersion, ID: req.SyncStatus.ID, StoreRef: ref, Status: status}}, nil
 		}
+		status := a.SyncAdmissionSnapshot()
 		permitted := status.OwnerReady
 		switch req.Kind {
 		case draftWriteKind:

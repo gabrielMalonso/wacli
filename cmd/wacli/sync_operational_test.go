@@ -123,6 +123,15 @@ func TestSyncTypedOperationsDuringBlockedMetadata(t *testing.T) {
 	if err != nil || !duplicate.Duplicate || duplicate.Entry.Operation.ID != result.Entry.Operation.ID || f.sends.Load() != 1 {
 		t.Fatalf("duplicate=%+v %v", duplicate, err)
 	}
+	// Admission cannot bypass SQLite's reservation/checkpoint safeguards.
+	retryFixtureSQL(t, dir, `CREATE TRIGGER fixture_early_reserve_failure BEFORE INSERT ON outbound_operations BEGIN SELECT RAISE(ABORT,'fixture SQLite failure'); END`)
+	newSend := send
+	newSend.Key = "early-send-sqlite-failure"
+	_, err = delegateSend(t.Context(), flags, sendDelegateRequest{Kind: outboundSendKind, Outbound: &newSend})
+	if err == nil || f.sends.Load() != 1 {
+		t.Fatalf("SQLite failure reached dispatch: %v", err)
+	}
+	retryFixtureSQL(t, dir, `DROP TRIGGER fixture_early_reserve_failure`)
 	chat := app.ChatStateRequest{Version: 1, StoreRef: dir, Requested: localReadPN, Action: app.ChatStateArchive}
 	resp, err = delegateSend(t.Context(), flags, sendDelegateRequest{Kind: agentChatStateKind, AgentChatState: &chat})
 	var chatFailure *app.ChatStateError

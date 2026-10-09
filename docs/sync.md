@@ -145,8 +145,8 @@ Default budget is 5s; explicit global `--timeout` accepts positive durations up 
 1m. Cancellation closes IPC promptly. There is no wait-for-ready service or
 network fallback; callers may make a separately bounded query again. Use
 `owner_ready` only for local readiness: this build offers no positive
-authenticated readiness gate. Status IPC v2 rejects older status owners rather
-than accepting their unsafe positive claim; the outer legacy delegate protocol
+authenticated readiness gate. Status IPC v3 rejects older status owners rather
+than accepting an unsupported admission claim; the outer legacy delegate protocol
 and agent v1 envelope remain unchanged. Completed status queries, including
 absent/unknown, exit 0. Invalid arguments exit 2; selection/config failures retain
 their existing contracts. Exit 0 alone never means ready.
@@ -165,10 +165,11 @@ project's existing Unix IPC, with no named-pipe implementation. Unsupported sock
 platforms never fall back to a connection or an offline auth claim. Offline
 `auth status` and `doctor` continue to report connectivity as `unknown`.
 
-Example data while bootstrap is connected but incomplete:
+Partial data while bootstrap is connected but incomplete, after typed admission
+prerequisites (timing stages and historical observations omitted):
 
 ```json
-{"state":"initializing","ready":false,"owner_ready":false,"initialized":false,"connected":"unknown","transport_connected":"true","authenticated":"unknown","readiness_reason":"current_authentication_unsupported","linked_jid":"15550000001@s.whatsapp.net","linked_lid":"100000000001@lid","observed_at":"2026-10-08T13:00:00Z"}
+{"owner_run_id":"0123456789abcdef0123456789abcdef","state":"initializing","ready":false,"owner_ready":false,"send_initialized":true,"initialized":false,"connected":"unknown","transport_connected":"true","authenticated":"unknown","readiness_reason":"current_authentication_unsupported","operations":{"local_read":{"owner_required":false,"availability":"not_checked","reason":"owner_not_required"},"draft_write":{"attemptable":true,"reason":"attempt_permitted"},"send_attempt":{"attemptable":true,"reason":"attempt_permitted"},"chat_state_write":{"attemptable":false,"reason":"owner_initializing"}},"app_state":{"reconciliation":"required","pending_collections":["regular"],"recovery_observations":[]},"observed_at":"2026-10-09T13:00:00Z"}
 ```
 
 ## Command

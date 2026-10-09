@@ -2,12 +2,15 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"go.mau.fi/whatsmeow/types/events"
 )
 
@@ -113,5 +116,65 @@ func TestSyncStageNoopWithoutPublishedRun(t *testing.T) {
 	after := a.SyncLiveSnapshot()
 	if len(after.Stages) != 0 || before.Reconciliation != after.AppState.Reconciliation || len(before.PendingCollections) != len(after.AppState.PendingCollections) || after.SendInitialized || a.WA() != nil {
 		t.Fatalf("unpublished measurement changed operational/debt state: %+v", after)
+	}
+}
+
+func TestSyncAdmissionDoesNotWaitForBlockedSQLiteDiagnostics(t *testing.T) {
+	a := newTestApp(t)
+	f := newFakeWA()
+	a.wa = f
+	f.mu.Lock()
+	f.connected = true
+	f.mu.Unlock()
+	generation := beginOperationalTestRun(t, a)
+	a.live.event(&events.Connected{}, generation)
+	a.live.initialize(t.Context())
+	// A real SQLite writer blocks debt/diagnostic writes. Hold the diagnostic
+	// mutex through the wait and until this test explicitly releases it.
+	writer, err := sql.Open("sqlite3", filepath.Join(a.StoreDir(), "wacli.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	writer.SetMaxOpenConns(1)
+	if _, err := writer.Exec("BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Exec("ROLLBACK")
+	probe, err := sql.Open("sqlite3", filepath.Join(a.StoreDir(), "wacli.db")+"?_busy_timeout=0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer probe.Close()
+	_, err = probe.Exec("BEGIN IMMEDIATE")
+	var locked sqlite3.Error
+	if !errors.As(err, &locked) || locked.Code != sqlite3.ErrBusy {
+		t.Fatalf("fixture did not block SQLite writes: %v", err)
+	}
+	r := a.live.recovery.diagnostic
+	started, finished, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		r.mu.Lock()
+		close(started)
+		r.persistLocked(false)
+		<-release
+		r.mu.Unlock()
+		close(finished)
+	}()
+	<-started
+	defer func() {
+		writer.Exec("ROLLBACK")
+		close(release)
+		<-finished
+	}()
+	done := make(chan SyncLiveStatus, 1)
+	go func() { done <- a.SyncAdmissionSnapshot() }()
+	select {
+	case v := <-done:
+		if !v.Operations.SendAttempt.Attemptable || v.Ready || v.Authenticated != "unknown" || v.Observations != nil || len(v.Stages) != 0 {
+			t.Fatalf("admission=%+v", v)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SQLite/diagnostic lock delayed admission")
 	}
 }

@@ -166,6 +166,15 @@ func syncStageErrorCode(err error) string {
 	}
 }
 
+// SyncAdmissionSnapshot uses only lifecycle/SDK observations, without diagnostic
+// DB reads or historical copies. Action admission must not wait on metadata reads;
+// execution still validates its archive and identity before dispatch.
+func (a *App) SyncAdmissionSnapshot() SyncLiveStatus {
+	v := a.syncLiveSnapshot()
+	v.Operations = SyncOperationAdmission(v)
+	return v
+}
+
 // SyncLiveSnapshot adds bounded local/historical observations to the lifecycle
 // snapshot. No historical event or successful operation establishes current auth.
 func (a *App) SyncLiveSnapshot() SyncLiveStatus {
