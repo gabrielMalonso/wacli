@@ -67,7 +67,9 @@ func (a *App) recoverAppStateCollection(ctx context.Context, name string, recove
 		}
 	}()
 	lockCtx, cancelLock := context.WithTimeout(ctx, timeout)
+	finishLock := a.measureSyncStage(lockCtx, "lock_wait", name)
 	release, err := a.acquireChatStateSync(lockCtx)
+	finishLock(err)
 	cancelLock()
 	if err != nil {
 		recordAppStateRecovery(ctx, name, appStateRecoveryPrepare, err)
@@ -168,8 +170,12 @@ func (a *App) syncAppStateDeltas(ctx context.Context, recoveries *sync.Map) {
 	}
 }
 
-func (a *App) syncAndPersistAppStateDelta(ctx context.Context, name appstate.WAPatchName, fullSync bool) error {
+func (a *App) syncAndPersistAppStateDelta(ctx context.Context, name appstate.WAPatchName, fullSync bool) (syncErr error) {
+	finish := a.measureSyncStage(ctx, "delta", string(name))
+	defer func() { finish(syncErr) }()
+	finishLock := a.measureSyncStage(ctx, "lock_wait", string(name))
 	release, err := a.acquireChatStateSync(ctx)
+	finishLock(err)
 	if err != nil {
 		return err
 	}

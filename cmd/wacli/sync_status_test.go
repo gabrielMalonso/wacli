@@ -26,7 +26,10 @@ func statusFixtureReply(req sendDelegateRequest, state app.SyncLiveState) sendDe
 	if localReady {
 		state = app.SyncLiveUnknown
 	}
-	return sendDelegateResponse{OK: true, SyncStatus: &syncStatusReply{Version: syncStatusVersion, ID: req.SyncStatus.ID, StoreRef: req.SyncStatus.StoreRef, Status: app.SyncLiveStatus{State: state, OwnerReady: localReady, Initialized: localReady, Connected: "unknown", TransportConnected: "true", Authenticated: "unknown", ReadinessReason: "current_authentication_unsupported", LinkedJID: "15550000001@s.whatsapp.net", ObservedAt: time.Now().UTC()}}}
+	status := app.SyncLiveStatus{OwnerRunID: "0123456789abcdef0123456789abcdef", State: state, OwnerReady: localReady, SendInitialized: localReady, Initialized: localReady, Connected: "unknown", TransportConnected: "true", Authenticated: "unknown", ReadinessReason: "current_authentication_unsupported", LinkedJID: "15550000001@s.whatsapp.net", ObservedAt: time.Now().UTC()}
+	status.AppState.Reconciliation = app.AppStateReconciliationUnknown
+	status.Operations = app.SyncOperationAdmission(status)
+	return sendDelegateResponse{OK: true, SyncStatus: &syncStatusReply{Version: syncStatusVersion, ID: req.SyncStatus.ID, StoreRef: req.SyncStatus.StoreRef, Status: status}}
 }
 
 func TestSyncStatusReadOnlyWhileWriterBusy(t *testing.T) {

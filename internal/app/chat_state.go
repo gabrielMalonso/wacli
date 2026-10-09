@@ -314,7 +314,9 @@ func (a *App) replayRequiredAppState(ctx context.Context, collection appstate.WA
 	}
 }
 
-func (a *App) recoverMismatchingAppState(ctx context.Context, collection appstate.WAPatchName, tracker *appStatePersistenceTracker, onRequested func(types.MessageID)) error {
+func (a *App) recoverMismatchingAppState(ctx context.Context, collection appstate.WAPatchName, tracker *appStatePersistenceTracker, onRequested func(types.MessageID)) (recoveryErr error) {
+	finish := a.measureSyncStage(ctx, "snapshot", string(collection))
+	defer func() { finish(recoveryErr) }()
 	ticket := a.appStatePersist.reserve()
 	eventsToPersist, recoveryErr := a.waitForPrimaryAppStateRecovery(ctx, collection, onRequested)
 	persistCtx := context.WithoutCancel(ctx)
@@ -371,6 +373,12 @@ func (a *App) waitForPrimaryAppStateRecovery(ctx context.Context, collection app
 }
 
 func (a *App) fetchAndPersistAppState(ctx context.Context, collection appstate.WAPatchName, fullSync bool, tracker *appStatePersistenceTracker) (fetchErr, persistenceErr error) {
+	phase := "delta_fetch"
+	if fullSync {
+		phase = "full_sync"
+	}
+	finish := a.measureSyncStage(ctx, phase, string(collection))
+	defer func() { finish(errors.Join(fetchErr, persistenceErr, ctx.Err())) }()
 	ticket := a.appStatePersist.reserve()
 	var eventsToPersist []any
 	func() {

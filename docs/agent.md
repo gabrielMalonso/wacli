@@ -345,6 +345,17 @@ These observations never prove history completeness or future dispatch. Timeout,
 owners and Windows unsupported IPC remain explicit unknown observations. Offline
 `auth status` / `doctor` retain `connected=unknown`; no auth-history fallback occurs.
 
+IPC v3 adds `owner_run_id`, `send_initialized`, `operations`, retained app-state
+debt, historical `observations` and bounded WACLI timing `stages`. Typed draft
+writes and `outbound send` can be attempted after identity/lifetime/history
+prerequisites, before metadata bootstrap returns. `attemptable` is local admission,
+not authorization/authentication/acceptance. Chat-state still uses full bootstrap
+and execution-time collection/identity guards. `local_read` explicitly reports
+`owner_not_required` and archive `availability=not_checked`, even without a socket;
+local queries keep their independent path. Old owners are explicitly incompatible,
+with no automatic restart or second writer. See [admission by operation](sync.md#admission-by-operation)
+for reasons, timing/debt limits and preserved uncertain outcomes.
+
 ## Doctor historical evidence
 
 Doctor compact/full add `data.observations` version 1 with independent nullable

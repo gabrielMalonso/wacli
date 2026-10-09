@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,13 +18,14 @@ import (
 
 	"github.com/openclaw/wacli/internal/app"
 	"github.com/openclaw/wacli/internal/out"
+	"github.com/openclaw/wacli/internal/store"
 	"github.com/spf13/cobra"
 	"go.mau.fi/whatsmeow/types"
 )
 
 const (
-	syncStatusKind    = "sync_status_v2"
-	syncStatusVersion = 2
+	syncStatusKind    = "sync_status_v3"
+	syncStatusVersion = 3
 )
 
 type syncStatusRequest struct {
@@ -41,19 +43,37 @@ type syncStatusData struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-// The early follow socket serves status during bootstrap. Mutation requests
-// retain their existing dispatch path only after local initialization finishes.
+// The early follow socket admits only typed draft/outbound requests after local
+// identity/lifetime prerequisites. All other kinds retain the full startup gate.
 func startSyncDelegateServer(ctx context.Context, a *app.App, spacing sendSpacing) (func(), error) {
 	return startSendDelegateServerForStore(context.WithoutCancel(ctx), a.StoreDir(), spacing, func(requestCtx context.Context, req sendDelegateRequest) (sendDelegateResponse, error) {
-		status := a.SyncLiveSnapshot()
 		if req.Kind == syncStatusKind {
+			status := a.SyncLiveSnapshot()
 			ref, err := filepath.Abs(a.StoreDir())
 			if err != nil || req.Version != sendDelegateVersion || req.SyncStatus == nil || req.SyncStatus.ID == "" || req.SyncStatus.StoreRef != ref {
 				return sendDelegateResponse{OK: false, Error: "sync status scope refused"}, nil
 			}
 			return sendDelegateResponse{OK: true, SyncStatus: &syncStatusReply{Version: syncStatusVersion, ID: req.SyncStatus.ID, StoreRef: ref, Status: status}}, nil
 		}
-		if !status.Initialized || status.State == "stopping" || status.State == "stopped" || status.State == "logged_out" || status.State == "error" {
+		status := a.SyncAdmissionSnapshot()
+		permitted := status.OwnerReady
+		switch req.Kind {
+		case draftWriteKind:
+			permitted = status.Operations.DraftWrite.Attemptable
+		case outboundSendKind:
+			permitted = status.Operations.SendAttempt.Attemptable
+		case agentChatStateKind:
+			permitted = status.Operations.ChatStateWrite.Attemptable
+		}
+		if !permitted {
+			switch req.Kind {
+			case outboundSendKind:
+				return outboundRefusal(req, "not_dispatched"), nil
+			case draftWriteKind:
+				return draftRefusal(req, store.DraftFailure("local_write_not_dispatched", "", "", "", nil)), nil
+			case agentChatStateKind:
+				return agentChatStateRefusal(req, "not_dispatched"), nil
+			}
 			return sendDelegateResponse{OK: false, Error: "sync owner is initializing or stopping; request was not dispatched"}, nil
 		}
 		// Keep the original Sync cancellation budget for mutations while status
@@ -98,12 +118,12 @@ func newSyncStatusCmd(flags *rootFlags) *cobra.Command {
 				return out.WriteJSON(os.Stdout, status)
 			}
 			tw := newTableWriter(os.Stdout)
-			fmt.Fprintln(tw, "STATE\tOWNER READY\tTRANSPORT\tAUTHENTICATED\tREADY\tREASON")
+			fmt.Fprintln(tw, "STATE\tOWNER READY\tTRANSPORT\tAUTHENTICATED\tREADY\tDRAFT ATTEMPT\tSEND ATTEMPT\tCHAT ATTEMPT\tREASON")
 			reason := status.Reason
 			if reason == "" {
 				reason = status.ReadinessReason
 			}
-			fmt.Fprintf(tw, "%s\t%t\t%s\t%s\t%t\t%s\n", status.State, status.OwnerReady, status.TransportConnected, status.Authenticated, status.Ready, reason)
+			fmt.Fprintf(tw, "%s\t%t\t%s\t%s\t%t\t%t (%s)\t%t (%s)\t%t (%s)\t%s\n", status.State, status.OwnerReady, status.TransportConnected, status.Authenticated, status.Ready, status.Operations.DraftWrite.Attemptable, status.Operations.DraftWrite.Reason, status.Operations.SendAttempt.Attemptable, status.Operations.SendAttempt.Reason, status.Operations.ChatStateWrite.Attemptable, status.Operations.ChatStateWrite.Reason, reason)
 			return tw.Flush()
 		},
 	}
@@ -111,7 +131,7 @@ func newSyncStatusCmd(flags *rootFlags) *cobra.Command {
 
 func querySyncStatus(ctx context.Context, storeRef string) syncStatusData {
 	unknown := func(reason string) syncStatusData {
-		return syncStatusData{SyncLiveStatus: app.SyncLiveStatus{State: "unknown", Connected: "unknown", TransportConnected: "unknown", Authenticated: "unknown", ReadinessReason: "owner_unavailable", ObservedAt: time.Now().UTC()}, Reason: reason}
+		return syncStatusData{SyncLiveStatus: app.SyncLiveStatus{State: "unknown", Connected: "unknown", TransportConnected: "unknown", Authenticated: "unknown", ReadinessReason: "owner_unavailable", Operations: app.UnknownSyncOperations(), AppState: app.AppStateDiagnostics{Reconciliation: app.AppStateReconciliationUnknown}, ObservedAt: time.Now().UTC()}, Reason: reason}
 	}
 	absent := func() syncStatusData { v := unknown("owner_absent"); v.State = "absent"; return v }
 	if ctx.Err() != nil {
@@ -187,6 +207,27 @@ func syncStatusContextReason(ctx context.Context) string {
 }
 
 func validSyncLiveStatus(v app.SyncLiveStatus) bool {
+	id, err := hex.DecodeString(v.OwnerRunID)
+	if v.OwnerRunID != "" && (err != nil || len(id) != 16 || v.OwnerRunID != hex.EncodeToString(id)) {
+		return false
+	}
+	if v.OwnerRunID == "" && (v.SendInitialized || v.Initialized) || v.Operations != app.SyncOperationAdmission(v) {
+		return false
+	}
+	if v.Observations != nil && v.Observations.Sync != nil {
+		s := v.Observations.Sync
+		if v.OwnerRunID == "" || s.ExecutionID != v.OwnerRunID || s.Ingestion != nil && s.Ingestion.ExecutionID != v.OwnerRunID {
+			return false
+		}
+	}
+	if v.OwnerReady && !v.SendInitialized || v.SendInitialized && (v.State == "stopping" || v.State == "stopped" || v.State == "logged_out" || v.State == "error") {
+		return false
+	}
+	switch v.AppState.Reconciliation {
+	case app.AppStateReconciliationUnknown, app.AppStateReconciliationRequired, app.AppStateReconciliationNoneRecorded:
+	default:
+		return false
+	}
 	if v.ObservedAt.IsZero() || v.ObservedAt.After(time.Now().Add(time.Second)) || time.Since(v.ObservedAt) > time.Minute {
 		return false
 	}

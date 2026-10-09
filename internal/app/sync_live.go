@@ -25,27 +25,38 @@ const (
 
 // SyncLiveStatus is an in-memory snapshot of the existing owner.
 type SyncLiveStatus struct {
-	State              SyncLiveState `json:"state"`
-	Ready              bool          `json:"ready"`
-	OwnerReady         bool          `json:"owner_ready"`
-	Initialized        bool          `json:"initialized"`
-	Connected          string        `json:"connected"`
-	TransportConnected string        `json:"transport_connected"`
-	Authenticated      string        `json:"authenticated"`
-	ReadinessReason    string        `json:"readiness_reason"`
-	LinkedJID          string        `json:"linked_jid,omitempty"`
-	LinkedLID          string        `json:"linked_lid,omitempty"`
-	ObservedAt         time.Time     `json:"observed_at"`
+	revision           uint64
+	OwnerRunID         string                  `json:"owner_run_id,omitempty"`
+	SendInitialized    bool                    `json:"send_initialized"`
+	Operations         SyncOperations          `json:"operations"`
+	Stages             []SyncStageObservation  `json:"stages"`
+	AppState           AppStateDiagnostics     `json:"app_state"`
+	Observations       *DiagnosticObservations `json:"observations,omitempty"`
+	State              SyncLiveState           `json:"state"`
+	Ready              bool                    `json:"ready"`
+	OwnerReady         bool                    `json:"owner_ready"`
+	Initialized        bool                    `json:"initialized"`
+	Connected          string                  `json:"connected"`
+	TransportConnected string                  `json:"transport_connected"`
+	Authenticated      string                  `json:"authenticated"`
+	ReadinessReason    string                  `json:"readiness_reason"`
+	LinkedJID          string                  `json:"linked_jid,omitempty"`
+	LinkedLID          string                  `json:"linked_lid,omitempty"`
+	ObservedAt         time.Time               `json:"observed_at"`
 }
 
 type syncLive struct {
-	mu          sync.Mutex
-	state       SyncLiveState
-	ctx         context.Context
-	generation  uint64
-	revision    uint64 // fences SDK reads performed outside mu
-	initialized bool
-	connected   bool // latest unscoped event, never proof of current authentication
+	mu              sync.Mutex
+	state           SyncLiveState
+	ctx             context.Context
+	generation      uint64
+	revision        uint64 // fences SDK reads performed outside mu
+	initialized     bool
+	connected       bool // latest unscoped event, never proof of current authentication
+	runID           string
+	sendInitialized bool
+	recovery        *appStateRecoveryRun
+	stages          map[syncStageKey]SyncStageObservation
 }
 
 func (s *syncLive) terminal() bool {
@@ -59,6 +70,8 @@ func (s *syncLive) begin(ctx context.Context) uint64 {
 	s.generation++
 	s.revision++
 	s.state, s.initialized, s.connected = SyncLiveInitializing, false, false
+	s.runID, s.sendInitialized, s.recovery = "", false, nil
+	s.stages = make(map[syncStageKey]SyncStageObservation)
 	return s.generation
 }
 
@@ -67,6 +80,17 @@ func (s *syncLive) initialize(ctx context.Context) {
 	defer s.mu.Unlock()
 	s.ctx = ctx
 	s.initialized = true
+	s.sendInitialized = true
+}
+
+// enableSend admits only the typed draft/outbound family after identity migration
+// and lifetime/history observers exist. It does not establish authentication.
+func (s *syncLive) enableSend(ctx context.Context, generation uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if generation == s.generation && !s.terminal() && ctx.Err() == nil {
+		s.sendInitialized = true
+	}
 }
 
 func (s *syncLive) transition(state SyncLiveState) {
@@ -129,11 +153,11 @@ func (s *syncLive) event(evt any, generation uint64) {
 	s.state, s.connected = state, connected
 }
 
-// SyncLiveSnapshot separates local owner readiness and observed transport from
+// syncLiveSnapshot separates local owner readiness and observed transport from
 // current authentication. The pinned SDK retains IsLoggedIn across normal loss
 // and dispatches Connected without transport identity. Current authentication
 // cannot be established, so strict Ready stays false even after legitimate login.
-func (a *App) SyncLiveSnapshot() SyncLiveStatus {
+func (a *App) syncLiveSnapshot() SyncLiveStatus {
 	// Do not hold the lifecycle mutex across SDK getters: Disconnect may wait
 	// for handlers while holding the client mutex those getters need.
 	a.live.mu.Lock()
@@ -164,6 +188,8 @@ func (a *App) SyncLiveSnapshot() SyncLiveStatus {
 		revision = a.live.revision
 	}
 	v := SyncLiveStatus{
+		revision:   a.live.revision,
+		OwnerRunID: a.live.runID, SendInitialized: a.live.sendInitialized && !a.live.terminal() && !closed,
 		State: a.live.state, Initialized: a.live.initialized,
 		OwnerReady: a.live.initialized && !a.live.terminal() && !closed,
 		Connected:  "unknown", TransportConnected: "unknown", Authenticated: "unknown",

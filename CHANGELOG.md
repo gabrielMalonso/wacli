@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Sync: expose operation admission, bounded WACLI stage durations/budgets, historical owner-run observations and retained app-state debt through fail-closed status IPC v3. Admit only typed draft/outbound requests after identity migration and history/lifetime setup while metadata bootstrap continues; preserve full `owner_ready`, strict `ready=false`/`authenticated=unknown`, local-read independence, collection guards, idempotency and uncertain outcomes. No schema, flags, SDK, dependencies, retries or timeout changes; fixture validation only.
 - Ingestion: report sanitized live persistence failures and per-response history received/valid/content/processed/skipped/failed counts, with fixed discard reasons and bounded run observations in the existing Sync diagnostic slot. Keep replay/update/purge processing distinct from unmeasured additions, propagate ON_DEMAND errors and preserve lifecycle, authorship, idempotency and backfill contracts. No schema/flags/dependencies or automatic gap recovery; fixture and race validation only.
 
 - Changes watch: bound native SQLite lock waits during readonly opening and polls, with synchronous context-aware retries and timeout/cancelled exits under WAL/DELETE contention. Preserve legacy connection defaults and release snapshots before retrying; no frame follows observed cancellation. Validate exclusive-lock timeouts, SIGINT during opening and transient recovery with offline production CLI fixtures.

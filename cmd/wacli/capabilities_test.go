@@ -131,6 +131,11 @@ func TestCapabilitiesCatalogMatchesExecutablePolicy(t *testing.T) {
 	if !strings.Contains(statusConstraints, "owner_ready") || !strings.Contains(statusConstraints, "transport_connected") || !strings.Contains(statusConstraints, "current_authentication_unsupported") {
 		t.Fatal("discovery omits local readiness or pinned authentication gap")
 	}
+	for _, contract := range []string{"IPC v3", "attemptable", "send_attempt", "owner_not_required", "not_checked", "older owners", "durations/budgets"} {
+		if !strings.Contains(statusConstraints, contract) {
+			t.Fatalf("discovery omits operational constraint %s", contract)
+		}
+	}
 	if *commands["outbound send"].ReadOnly || !*commands["media download"].ReadOnly || !*commands["media transcribe"].ReadOnly || commands["outbound send"].Source != "live" || commands["media transcribe"].Source != "local" {
 		t.Fatal("incorrect effect policy")
 	}
