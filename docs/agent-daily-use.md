@@ -9,7 +9,7 @@ Read this first for routine WhatsApp work. Use the linked command references whe
 
 The daily loop is **verify executable → bind account → keep sync and change stream running → select recipient → read context → prepare and review → dispatch → inspect result → finish or hand off**. The [browser CLI coverage checklist](browser-cli-coverage.md) maps every command in the reference browser workflow to this guide, including differences and missing equivalents.
 
-**For live work, complete steps 1 and 2 before reviewing the inbox/conversation, preparing a reply, sending or changing chat state.** Reuse compatible managed processes for the selected account; keep both sync and the change consumer running throughout the session. An explicitly offline archive review can use local readonly queries without starting either process; its results do not establish current WhatsApp state.
+**For live work, complete process setup in steps 1 and 2, then check admission for the intended operation.** Reuse compatible managed processes for the selected account; keep both sync and the change consumer running throughout the session. Full `owner_ready=true` is not a global gate for local reads or typed draft/outbound attempts; follow the operation checklist below. An explicitly offline archive review can use local readonly queries without starting either process; its results do not establish current WhatsApp state.
 
 WhatsApp operations belong here. Business rules, approved templates, customer memory, appointment lookup, authorization and work assignment belong to the calling agent/application. Selecting an account or preparing a draft does not authorize sending.
 
@@ -66,9 +66,11 @@ wacli -a "$wacli_account" --read-only --agent sync status --timeout 2s || exit "
 
 Startup can include migration and app-state recovery. The status socket opens before bootstrap completes; `data.owner_ready=true` means local initialization has returned, the owner answers scoped IPC and has not entered terminal cleanup. `data.transport_connected` separately observes the SDK transport. Neither establishes current authentication, replay completeness or successful sending. A `connected` event, lock, socket file or heartbeat alone is insufficient.
 
+Status IPC v3 reports `data.operations`: after migration and history/lifetime setup, typed `draft_write` and `send_attempt` may be `attemptable=true` with `reason=attempt_permitted` while `owner_ready=false` and metadata reconciliation remains pending. With the owner and managed consumer installed, use the respective admission for an authorized typed draft write or `outbound send`. Admission permits an attempt, not authorization, acceptance or delivery; identity, frozen revision/hash, SQLite and idempotency checks remain in execution. History recovery, legacy sends and chat-state keep the full startup gate; chat-state also requires its operation admission and execution-time collection/recipient guards. Global chat-state admission does not mean the relevant debt is cleared.
+
 Current authenticated readiness is still unsupported by the pinned SDK: a reachable owner returns `authenticated="unknown"`, strict `ready=false` and `readiness_reason="current_authentication_unsupported"`. Do not wait indefinitely for `ready=true` or block local archive reads because it is false. Local readiness can remain true while disconnected. Inspect state/reason and dated observations; unavailable, incompatible or unsupported IPC stays unknown, and exit 0 alone does not mean ready. There is no automatic wait-for-ready/restart service. Manage the caller's process lifecycle explicitly, and never repeat a possibly dispatched action when a reply is lost.
 
-Owner status uses Unix IPC; Windows reports it explicitly unsupported. The new feature acceptance used offline fixtures, not live WhatsApp or native Windows validation; local/transport observations do not change those verification limits.
+Owner status uses Unix IPC v3; older owners are explicitly incompatible without automatic restart or a second writer. Windows reports IPC explicitly unsupported; native Windows validation remains outside this workflow.
 
 `--events` emits lifecycle diagnostics on stderr, not a durable message stream. Follow reconnects within its configured budget; `--max-reconnect 0` permits indefinite reconnect attempts, but logout remains terminal. A completed `sync --once` only ingests what arrived during that run; it does not establish complete history or ongoing freshness. Stop only a process the caller owns when the session ends; leave a shared owner to its supervisor.
 
@@ -94,14 +96,17 @@ The consumer saves `meta.page.next_cursor` only after processing the complete pa
 
 ### Live-session startup checklist
 
-| Check before continuing to step 3 | Required observation |
+| Check before a live operation | Required observation |
 | --- | --- |
 | Executable and account | The verified fork binary supports the required commands; every process uses the reviewed account/store. Local auth is paired and not reported revoked. |
-| Sync owner | One compatible owner is running; `owner_ready=true` and `transport_connected="true"` are observed within the caller's bounded startup deadline. |
+| Sync owner | One compatible IPC v3 owner is running and returns validated status within the caller's bounded startup deadline. Inspect `state`, `operations`, typed reasons and dated observations. |
 | Change consumer | A managed reader is running for that account/store, has emitted a valid complete initial frame and processes pages before saving their cursors. |
+| Local read | `operations.local_read` reports `owner_not_required` and archive availability `not_checked`. Archive reads remain independent of owner/auth; execute the query to check local availability. |
+| Typed draft/outbound | With owner and consumer installed, require the respective `operations.draft_write` / `operations.send_attempt` to report `attemptable=true`, `reason=attempt_permitted`. Pending metadata and `owner_ready=false` alone do not block these authorized attempts. |
+| History recovery, legacy send, chat-state | Retain `owner_ready=true` and execution guards. Chat-state also requires `operations.chat_state_write.attemptable=true`; this global admission certifies no collection or recipient. |
 | Lifecycle | The caller knows who owns both processes, where to inspect failures and which consumer checkpoint to resume. |
 
-These are live-session prerequisites, not proof of current authentication or complete replay. Do not wait for strict `ready=true`: the SDK limitation above leaves it false. If initialization/connection is not observed within the startup deadline, or a consumer fails, pause live work and diagnose; explicit offline archive reads remain available. An idle watcher or `has_more=false` does not prove remote freshness. Recheck the owner/processes after disconnection, exit or stream failure; reconcile any pending outbound operation before continuing. Stop only processes owned by this session at handoff; leave shared managed processes running.
+These observations do not prove current authentication or complete replay; completeness remains unknown. Do not wait for strict `ready=true`: the SDK limitation above leaves it false. If the intended operation remains blocked within the startup deadline, pause that attempt and diagnose its typed reason; pending metadata alone does not require pausing an admitted typed draft/outbound attempt. A missing/incompatible owner or failed consumer requires diagnosing the managed processes; local archive reads remain independent. An idle watcher or `has_more=false` does not prove remote freshness. Recheck admission/processes after disconnection, exit or stream failure; reconcile any pending outbound operation before continuing. Stop only processes owned by this session at handoff; leave shared managed processes running.
 
 References: [sync](sync.md), [concurrent use](concurrent-use.md), [changes](changes.md).
 
@@ -138,7 +143,7 @@ References: [chats](chats.md), [contacts](contacts.md), [messages](messages.md),
 
 ## 4. Prepare, review, send and inspect
 
-Prepare text locally with real newlines. The caller can render its approved template into a UTF-8 file and pass `--message-file PATH`; wacli does not generate business templates.
+Check `operations.draft_write` before typed draft writes and `operations.send_attempt` before authorized dispatch, using the checklist above. Prepare text locally with real newlines. The caller can render its approved template into a UTF-8 file and pass `--message-file PATH`; wacli does not generate business templates.
 
 ```bash
 wacli -a "$wacli_account" --agent draft create --to "$wacli_chat" --message-file - --detail full <<'EOF'
@@ -208,7 +213,7 @@ wacli -a "$wacli_account" --agent chats mark-unread --chat "$wacli_chat"
 wacli -a "$wacli_account" --agent chats archive --chat "$wacli_chat"
 ```
 
-These are separate examples, not a sequence to run on every chat. Agent mark-read uses an exact stored message boundary and no sender receipts; it refuses missing/invalid anchors. Archive also unpins, so check caller exclusions/protected chats before using it. Results distinguish SDK completion, uncertainty and local mirror persistence; they do not certify current remote state. Do not automatically repeat an uncertain mutation.
+These actions require full `owner_ready` and `operations.chat_state_write` admission, plus execution guards for the relevant collection/recipient. They are separate examples, not a sequence to run on every chat. Agent mark-read uses an exact stored message boundary and no sender receipts; it refuses missing/invalid anchors. Archive also unpins, so check caller exclusions/protected chats before using it. Results distinguish SDK completion, uncertainty and local mirror persistence; they do not certify current remote state. Do not automatically repeat an uncertain mutation.
 
 Record the task outcome, outstanding question and outbound evidence in the caller's memory/work system. Mark-unread is a WhatsApp handoff signal, not that task record. Re-list the queue for the next target. Wacli has no selected conversation, parking chat, modal or browser tabs: record completed and pending drafts/attempts before ending the logical task. Browser cleanup is unnecessary; it is not a reason to logout or delete a session.
 
@@ -224,7 +229,7 @@ wacli -a "$wacli_account" --read-only --agent history coverage --chat "$wacli_ch
 wacli -a "$wacli_account" --agent history backfill --chat "$wacli_chat" --before-id "$wacli_anchor_id" --count 50 --requests 1
 ```
 
-The explicit anchor must have valid retained timestamp/author/account facts and usable content; an arbitrary ID/date or a message visible only in a browser cannot anchor this request. This mode uses one batch, without alternate-anchor/identity retries. It can delegate through a compatible follow owner; an older owner is refused without silently falling back to the oldest anchor or a second writer. Without `--before-id`, default backfill still starts before the oldest local message.
+The explicit anchor must have valid retained timestamp/author/account facts and usable content; an arbitrary ID/date or a message visible only in a browser cannot anchor this request. This mode uses one batch, without alternate-anchor/identity retries. Delegation through a compatible follow owner retains the full `owner_ready` gate and execution guards; an older owner is refused without silently falling back to the oldest anchor or a second writer. Without `--before-id`, default backfill still starts before the oldest local message.
 
 Inspect the returned `before_id`, `messages_added_before`, attempt correlation and coverage evidence. Keep the explicit action result with the attempt ID: coverage evidence does not separately retain the selector mode/window count. Net growth before the anchor is an observation, not a completeness certificate; zero growth does not prove unavailability. The request cannot recover messages after its anchor, automatically detect every gap or guarantee that the phone returns the missing message. Do not repeat a refused/uncertain request automatically.
 
@@ -234,7 +239,7 @@ Inspect the returned `before_id`, `messages_added_before`, attempt correlation a
 | Relevant text truncated/unclear | Retrieve the exact full message/revision and surrounding context. |
 | Missing expected messages | Inspect coverage/evidence, then explicitly choose default oldest-anchor backfill or one `--before-id` window as above. Missing history never authorizes another send. |
 | Old/missing store or revoked session | Diagnose with offline doctor/auth status; authorize setup/upgrade separately. |
-| Writer lock, missing/incompatible owner, startup not finished | Inspect `sync status` and the managed process; distinguish local initialization, transport and unknown authentication. Do not remove LOCK, start a competing connection or kill a shared owner. |
+| Writer lock, missing/incompatible owner, startup not finished | Inspect IPC v3 `sync status`, the intended operation's `attemptable` / typed `reason` and the managed processes. With owner/consumer installed, typed draft/outbound can proceed when their own admission permits, even with pending metadata and `owner_ready=false`. History recovery/legacy send/chat-state retain full startup and execution guards; local reads need no owner. Do not remove LOCK, start a competing connection or kill a shared owner. |
 | Watch idle, timeout or broken output | Idle is not a freshness/liveness check. Handle complete frames, retain the last processed cursor and resume explicitly; do not reset it or save partial JSON. |
 | Local draft write lost its reply | Inspect correlated draft/revision IDs; do not automatically recreate/update it. |
 | Send timeout, lost reply, pending/uncertain result | Inspect outbound by operation ID or key + frozen own PN. Do not switch keys, use legacy sending or replay to resolve uncertainty. |
