@@ -244,6 +244,7 @@ func (a *App) SyncLiveSnapshot() SyncLiveStatus {
 	a.live.mu.Lock()
 	changed := v.OwnerRunID != currentID || currentID != a.live.runID || v.revision != a.live.revision
 	cancelled := a.live.ctx != nil && a.live.ctx.Err() != nil
+	currentState, terminal := a.live.state, a.live.terminal()
 	a.live.mu.Unlock()
 	if changed {
 		v.OwnerReady, v.SendInitialized, v.Initialized = false, false, false
@@ -251,6 +252,10 @@ func (a *App) SyncLiveSnapshot() SyncLiveStatus {
 		v.OwnerRunID, v.LinkedJID, v.LinkedLID = "", "", ""
 		v.Observations, v.Stages = nil, nil
 		v.AppState.RecoveryObservations = nil
+		if terminal {
+			// Drop stale evidence without erasing the current terminal lifecycle.
+			v.State = currentState
+		}
 	}
 	if cancelled {
 		v.OwnerReady, v.SendInitialized = false, false

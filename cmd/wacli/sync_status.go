@@ -214,9 +214,9 @@ func validSyncLiveStatus(v app.SyncLiveStatus) bool {
 	if v.OwnerRunID == "" && (v.SendInitialized || v.Initialized) || v.Operations != app.SyncOperationAdmission(v) {
 		return false
 	}
-	if v.Observations != nil && v.Observations.Sync != nil && v.Observations.Sync.Ingestion != nil {
+	if v.Observations != nil && v.Observations.Sync != nil {
 		s := v.Observations.Sync
-		if v.OwnerRunID == "" || s.ExecutionID != v.OwnerRunID || s.Ingestion.ExecutionID != v.OwnerRunID {
+		if v.OwnerRunID == "" || s.ExecutionID != v.OwnerRunID || s.Ingestion != nil && s.Ingestion.ExecutionID != v.OwnerRunID {
 			return false
 		}
 	}

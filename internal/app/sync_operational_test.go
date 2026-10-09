@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -153,6 +154,57 @@ func TestSyncStatusIngestionIsDefensiveAndRunCorrelated(t *testing.T) {
 	a.waMu.Unlock()
 	if next := a.SyncLiveSnapshot().Observations.Sync.Ingestion; next != nil {
 		t.Fatal("new run ingestion attributed to old owner")
+	}
+}
+
+func TestSyncStatusPreservesTerminalDuringBlockedDiagnostics(t *testing.T) {
+	for _, state := range []SyncLiveState{SyncLiveLoggedOut, SyncLiveStopping, SyncLiveStopped, SyncLiveError} {
+		t.Run(string(state), func(t *testing.T) {
+			a := newTestApp(t)
+			f := newFakeWA()
+			a.wa = f
+			f.mu.Lock()
+			f.connected = true
+			f.mu.Unlock()
+			generation := beginOperationalTestRun(t, a)
+			a.live.event(&events.Connected{}, generation)
+			a.live.initialize(t.Context())
+			r := a.live.recovery.diagnostic
+			r.mu.Lock()
+			done := make(chan SyncLiveStatus, 1)
+			go func() { done <- a.SyncLiveSnapshot() }()
+			// Wait for the diagnostic mutex, without depending on source line
+			// numbers or an arbitrary sleep before changing the lifecycle.
+			blocked := false
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				stack := make([]byte, 1<<18)
+				stack = stack[:runtime.Stack(stack, true)]
+				for _, goroutine := range strings.Split(string(stack), "\n\n") {
+					if strings.Contains(goroutine, "(*App).SyncLiveSnapshot(") && strings.Contains(goroutine, "(*Mutex).lockSlow(") {
+						blocked = true
+					}
+				}
+				if blocked {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if !blocked {
+				r.mu.Unlock()
+				<-done
+				t.Fatal("snapshot did not reach diagnostic mutex")
+			}
+			a.live.transition(state)
+			r.mu.Unlock()
+			v := <-done
+			if v.State != state || v.OwnerReady || v.SendInitialized || v.Initialized || v.Ready || v.Authenticated != "unknown" || v.Operations.SendAttempt.Reason != SyncOwnerStopping || v.Operations.DraftWrite.Attemptable || v.Operations.ChatStateWrite.Attemptable {
+				t.Fatalf("terminal precedence lost: want=%s snapshot=%+v", state, v)
+			}
+			if v.OwnerRunID != "" || v.LinkedJID != "" || v.LinkedLID != "" || v.Observations != nil || v.Stages != nil || v.TransportConnected != "unknown" || v.AppState.RecoveryObservations != nil {
+				t.Fatalf("stale evidence survived revision change: %+v", v)
+			}
+		})
 	}
 }
 

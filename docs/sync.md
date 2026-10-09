@@ -92,10 +92,14 @@ evidence even before `Disconnected` arrives; a new `Connected` still cannot
 certify the replacement. If events or a new run change during unlocked SDK reads,
 transport evidence stays unknown and identities are omitted for that query.
 A fresh query can observe the newer transport. Terminal precedence remains.
+If lifecycle changes while historical diagnostics are copied, the snapshot drops
+stale evidence and preserves the currently observed terminal state.
 
 `owner_run_id` identifies the existing diagnostic Sync execution, not a socket
 epoch; it changes for a new owner run. `observations` reuses the bounded historical
 connection/Sync facts of that run, including dated login/replay/recovery observations.
+When present, `observations.sync.execution_id` must match `owner_run_id` even
+without the optional ingestion field; a divergent reply is refused as `invalid_reply`.
 These dates are historical SDK events, not proof that the current socket is logged
 in. Optional `observations.sync.ingestion` projects the existing defensive
 `IngestionSnapshot()` only when its `execution_id` matches `owner_run_id` and the

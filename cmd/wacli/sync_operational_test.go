@@ -167,7 +167,7 @@ func TestSyncTypedOperationsDuringBlockedMetadata(t *testing.T) {
 
 func TestSyncStatusV2DowngradeAndOperationValidation(t *testing.T) {
 	skipPresenceDelegateSocketTestOnUnsupportedOS(t)
-	for _, mutation := range []string{"v2", "missing_operations", "positive_auth", "stopping_send", "missing_run", "uncorrelated_ingestion"} {
+	for _, mutation := range []string{"v2", "missing_operations", "positive_auth", "stopping_send", "missing_run", "uncorrelated_ingestion", "uncorrelated_sync", "empty_sync"} {
 		t.Run(mutation, func(t *testing.T) {
 			dir := t.TempDir()
 			stop, err := startSendDelegateServerForStore(t.Context(), dir, sendSpacing{}, func(_ context.Context, req sendDelegateRequest) (sendDelegateResponse, error) {
@@ -185,6 +185,10 @@ func TestSyncStatusV2DowngradeAndOperationValidation(t *testing.T) {
 					resp.SyncStatus.Status.OwnerRunID = ""
 				case "uncorrelated_ingestion":
 					resp.SyncStatus.Status.Observations = &app.DiagnosticObservations{Sync: &app.SyncObservation{ExecutionID: resp.SyncStatus.Status.OwnerRunID, Ingestion: &app.IngestionObservation{ExecutionID: strings.Repeat("f", 32)}}}
+				case "uncorrelated_sync":
+					resp.SyncStatus.Status.Observations = &app.DiagnosticObservations{Sync: &app.SyncObservation{ExecutionID: strings.Repeat("f", 32)}}
+				case "empty_sync":
+					resp.SyncStatus.Status.Observations = &app.DiagnosticObservations{Sync: &app.SyncObservation{}}
 				}
 				return resp, nil
 			})
@@ -201,6 +205,24 @@ func TestSyncStatusV2DowngradeAndOperationValidation(t *testing.T) {
 				t.Fatalf("unsafe downgrade=%+v", v)
 			}
 		})
+	}
+}
+
+func TestSyncStatusAcceptsCorrelatedSyncWithoutIngestion(t *testing.T) {
+	skipPresenceDelegateSocketTestOnUnsupportedOS(t)
+	dir := t.TempDir()
+	stop, err := startSendDelegateServerForStore(t.Context(), dir, sendSpacing{}, func(_ context.Context, req sendDelegateRequest) (sendDelegateResponse, error) {
+		resp := statusFixtureReply(req, "ready")
+		resp.SyncStatus.Status.Observations = &app.DiagnosticObservations{Version: 1, Historical: true, Sync: &app.SyncObservation{ExecutionID: resp.SyncStatus.Status.OwnerRunID}}
+		return resp, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	v := querySyncStatus(t.Context(), dir)
+	if v.Reason != "" || !v.OwnerReady || !v.Operations.SendAttempt.Attemptable || v.Observations.Sync.Ingestion != nil || v.Ready || v.Authenticated != "unknown" {
+		t.Fatalf("optional ingestion required or auth became positive: %+v", v)
 	}
 }
 
