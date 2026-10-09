@@ -117,7 +117,10 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (result SyncResult, sy
 	a.waMu.Lock()
 	a.appStateRecoveryOnClose = run
 	a.waMu.Unlock()
-	run.diagnostic = newDiagnosticRun(a, opts.Mode, run)
+	diagnostic := newDiagnosticRun(a, opts.Mode, run)
+	a.waMu.Lock()
+	run.diagnostic = diagnostic
+	a.waMu.Unlock()
 	defer func() {
 		result.recovery, result.storeDir = run, a.StoreDir()
 		run.diagnostic.finishSync(syncErr, ctx.Err(), result.MessagesStored)
