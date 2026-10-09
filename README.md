@@ -80,11 +80,14 @@ Write commands take a per-store lock. After a `sync --follow` process finishes s
 
 ## Start an agent workflow
 
-Discover static capabilities without an account, then list accounts with legacy JSON and choose a name explicitly for bounded queries:
+Start with [Agent daily use](docs/agent-daily-use.md) for the routine workflow: continuous sync, live owner status, cursor watching, inbox/context review, immutable drafts, sending, files/audio, anchored history recovery and handoff. For live work, complete its [startup checklist](docs/agent-daily-use.md#live-session-startup-checklist) first: verify the executable/account and keep one compatible sync owner plus a managed change consumer running. The [browser CLI coverage checklist](docs/browser-cli-coverage.md) records equivalents and limitations for a complete reference service-desk workflow. Use the full command references when the task needs more detail.
+
+The following are offline archive queries; they do not start sync or the stream. Discover static capabilities without an account, then list accounts with legacy JSON and choose a name explicitly for bounded queries:
 
 ```sh
-wacli --read-only capabilities --agent
-wacli --read-only accounts list --json
+command -v wacli || exit "$?"
+wacli --read-only capabilities --agent || exit "$?"
+wacli --read-only accounts list --json || exit "$?"
 # Bind to the exact requested name reviewed in data.accounts; this name is illustrative.
 wacli_account='example-account'
 wacli --account "$wacli_account" --read-only --agent auth status
@@ -95,7 +98,7 @@ Start with [account selection](docs/accounts.md) and the [agent contract](docs/a
 
 For an authorized write, read [drafts](docs/drafts.md) to prepare/review an exact revision, then [outbound](docs/outbound.md) for explicit dispatch and retained evidence. A preview/hash records no approval; an uncertain result calls for inspection, not automatic replay. Use [media](docs/media.md) only when that task needs file observation, download or recovery.
 
-These checkout docs describe this fork's implementation. Installation and hosted-site links above remain upstream references; verify the installed binary's version and command help. [Fork maintenance](docs/fork-maintenance.md) defines the fork-only PR/push workflow and separate release authorization.
+These checkout docs describe this fork's implementation. Installation and hosted-site links above remain upstream references; [verify the resolved executable and capabilities](docs/install.md#verify-the-executable-for-agent-work) before using the guide. A source build in `dist/` does not automatically update PATH or a running owner. [Fork maintenance](docs/fork-maintenance.md) defines the fork-only PR/push workflow and separate release authorization.
 
 ## Commands
 

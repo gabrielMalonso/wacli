@@ -2,6 +2,8 @@
 
 Read when: integrating a coding agent with bounded archive queries, explicit history recovery, local drafts, durable outbound dispatch, explicit read/unread/archive actions, exact media recovery, explicit local transcription, and stable errors.
 
+For routine operations, start with [Agent daily use](agent-daily-use.md). This page is the complete contract; the [browser CLI coverage checklist](browser-cli-coverage.md) records workflow equivalents and limitations.
+
 `--agent` enables JSON contract **v1**. `--detail compact|full` chooses its public detail level; compact is the default. Flags work before or after the subcommand. `--agent --json` still returns v1. Existing `--json` envelopes, field names, list defaults, tables, and `--full` table behavior remain unchanged. `--detail` without `--agent` is an error; `--full` does not select full agent detail.
 
 Discover this binary's capabilities first, then use legacy account discovery and bind the exact requested/listed name explicitly. The name below is illustrative, not a default; automated callers bind it from validated task input and the response without an interactive prompt:

@@ -7,6 +7,8 @@ description: "Use wacli for account selection, local WhatsApp archive queries, e
 
 Use the installed `wacli`, or `./dist/wacli` after building the current checkout. Check `--version` and command `--help` against the documentation for that build. Repository work follows [AGENTS.md](../../../AGENTS.md); see the [command map](../../../docs/overview.md) for task-specific pages.
 
+For routine WhatsApp work, start with [Agent daily use](../../../docs/agent-daily-use.md), then fetch the full command references only as needed. Its [browser CLI coverage checklist](../../../docs/browser-cli-coverage.md) records task equivalents and remaining limitations.
+
 Discover this binary's static CLI/agent support before account selection:
 
 ```sh
