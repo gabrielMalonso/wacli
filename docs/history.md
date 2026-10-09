@@ -73,8 +73,11 @@ dated evidence, not current health. Old saved snapshots without this field remai
 readable and carry no ingestion health observation.
 
 A known comparison found an own text visible on WhatsApp Web but absent locally
-after a correctly anchored ON_DEMAND request. The response had entries without
-IDs and no measured growth; the cause was not attributed to these ingestion bugs.
+after a correctly anchored ON_DEMAND request. The response contained two entries
+whose IDs were not captured, and no local growth was measured. Its raw payload
+was unavailable, so we do not know whether those entries lacked IDs; the cause
+was not attributed to these ingestion bugs. Missing-ID discards were reproduced
+with fixtures, not diagnosed from that response.
 These diagnostics expose failure/discard evidence, preserve PN/LID, Unicode,
 idempotency and purges, and do not automatically recover that gap. No row count,
 response, replay completion or progress value proves complete history.
