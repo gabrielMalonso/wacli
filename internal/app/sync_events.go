@@ -610,7 +610,9 @@ func (a *App) handleLiveSyncMessage(ctx context.Context, opts SyncOptions, v *ev
 		a.decryptEncryptedReaction(ctx, &pm, v)
 	}
 	incrementUnread := a.shouldIncrementLiveUnread(ctx, pm)
-	if err := a.storeParsedMessageForSync(ctx, pm, limits...); err == nil {
+	storeErr := a.storeParsedMessageForSync(ctx, pm, limits...)
+	a.observeLiveIngestion(ctx, storeErr)
+	if storeErr == nil {
 		if incrementUnread {
 			a.incrementLiveUnread(ctx, pm)
 		}
@@ -624,7 +626,7 @@ func (a *App) handleLiveSyncMessage(ctx context.Context, opts SyncOptions, v *ev
 		}
 		a.handlePollSideEffects(sideEffectCtx, pm, v)
 	}
-	if opts.DownloadMedia && pm.Media != nil && pm.ID != "" {
+	if storeErr == nil && opts.DownloadMedia && pm.Media != nil && pm.ID != "" {
 		enqueueMedia(canonicalJIDString(a.canonicalStoreJID(ctx, pm.Chat)), pm.ID)
 	}
 }
@@ -716,6 +718,9 @@ func (w *historyUnhandledPayloadWarnings) flush(a *App) {
 }
 
 func (a *App) handleHistorySync(ctx context.Context, opts SyncOptions, v *events.HistorySync, messagesStored, lastEvent *atomic.Int64, enqueueMedia func(string, string), limits ...*syncStorageLimits) {
+	if v == nil || v.Data == nil {
+		return
+	}
 	if opts.outboundHistory == nil {
 		batch, done, ok := a.outboundHistoryBatch(ctx)
 		if !ok {
@@ -724,6 +729,11 @@ func (a *App) handleHistorySync(ctx context.Context, opts SyncOptions, v *events
 		defer done()
 		opts.outboundHistory = batch
 	}
+	summary := HistoryIngestionSummary{SyncType: v.Data.GetSyncType().String()}
+	for _, conv := range v.Data.Conversations {
+		summary.Received += int64(len(conv.GetMessages()))
+	}
+	defer a.finishHistoryIngestion(ctx, &summary)
 	var unhandledWarnings historyUnhandledPayloadWarnings
 	defer unhandledWarnings.flush(a)
 	observeHistorySync(ctx, v.Data)
@@ -739,13 +749,18 @@ func (a *App) handleHistorySync(ctx context.Context, opts SyncOptions, v *events
 		lastEvent.Store(nowUTC().UnixNano())
 		chatID := strings.TrimSpace(conv.GetID())
 		if chatID == "" {
+			n := int64(len(conv.GetMessages()))
+			summary.Skipped += n
+			summary.SkipReasons.MissingChat += n
 			continue
 		}
 		a.storeHistoryUnreadCount(ctx, chatID, conv)
 		var pendingPolls []historyPollSideEffect
-		for _, m := range conv.Messages {
+		for _, m := range conv.GetMessages() {
 			lastEvent.Store(nowUTC().UnixNano())
-			if m.Message == nil {
+			if m.GetMessage() == nil {
+				summary.Skipped++
+				summary.SkipReasons.MissingInfo++
 				continue
 			}
 			if opts.outboundHistory != nil {
@@ -753,8 +768,19 @@ func (a *App) handleHistorySync(ctx context.Context, opts SyncOptions, v *events
 			}
 			pm := wa.ParseHistoryMessage(chatID, m.Message)
 			assertions := pm.SenderAssertions
-			if pm.ID == "" || pm.Chat.IsEmpty() {
+			if pm.ID == "" {
+				summary.Skipped++
+				summary.SkipReasons.MissingID++
 				continue
+			}
+			if pm.Chat.IsEmpty() {
+				summary.Skipped++
+				summary.SkipReasons.MissingChat++
+				continue
+			}
+			summary.Valid++
+			if pm.HasContent() {
+				summary.Content++
 			}
 			unwrapped := (&events.Message{RawMessage: m.Message.GetMessage()}).UnwrapRaw()
 			if isSecretEdit(unwrapped.Message) {
@@ -765,10 +791,14 @@ func (a *App) handleHistorySync(ctx context.Context, opts SyncOptions, v *events
 						fmt.Sprintf("warning: failed to parse encrypted edit %s: %v", pm.ID, err),
 						map[string]any{"message_id": pm.ID, "error": err.Error()},
 					)
+					summary.Skipped++
+					summary.SkipReasons.UnusableEdit++
 					continue
 				}
 				evt, ok := a.decryptSecretEdit(ctx, evt)
 				if !ok {
+					summary.Skipped++
+					summary.SkipReasons.UnusableEdit++
 					continue
 				}
 				pm = wa.ParseLiveMessage(evt)
@@ -812,18 +842,22 @@ func (a *App) handleHistorySync(ctx context.Context, opts SyncOptions, v *events
 			if storeErr == nil {
 				storeErr = a.retainHistoryMessageSender(ctx, storedPM)
 			}
+			failureReason := "author_unverified"
 			if storeErr == nil {
+				failureReason = "persistence_failed"
 				storeErr = a.storeParsedMessageForSync(ctx, storedPM, limits...)
 			} else {
 				a.emitWarning("history_author_unavailable", "history message was not imported because its author could not be verified", map[string]any{"message_id": pm.ID})
 			}
 			if err := storeErr; err == nil {
+				summary.Processed++
 				unhandledWarnings.observe(a, pm)
 				a.emitSyncProgress(ctx, messagesStored.Add(1))
 				if sender != "" && (pm.Poll != nil || pm.PollAdd != nil || pm.PollVote != nil) {
 					pendingPolls = append(pendingPolls, historyPollSideEffect{pm: pm, evt: pollEvt, hist: m.Message})
 				}
 			} else {
+				summary.failure(failureReason)
 				if opts.historyStoreError != nil && v.Data.GetSyncType() == waHistorySync.HistorySync_ON_DEMAND {
 					opts.historyStoreError(pm.Chat, err)
 				}

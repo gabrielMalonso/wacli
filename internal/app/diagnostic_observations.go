@@ -61,6 +61,7 @@ type SyncObservation struct {
 	StopReason             string                        `json:"stop_reason,omitempty"`
 	MessagesStored         *int64                        `json:"messages_stored"`
 	LastHistorySync        *HistorySyncObservation       `json:"last_history_sync"`
+	Ingestion              *IngestionObservation         `json:"ingestion,omitempty"`
 	OfflinePreviewAt       *time.Time                    `json:"offline_preview_at"`
 	OfflineCompletedAt     *time.Time                    `json:"offline_completed_at"`
 	OfflineCompletedCount  *int                          `json:"offline_completed_count"`
@@ -95,6 +96,7 @@ func newDiagnosticRun(a *App, mode SyncMode, recovery *appStateRecoveryRun) *dia
 		r.connection = &ConnectionObservation{ExecutionID: id, StartedAt: at, ObservedAt: at, LastEvent: "unobserved"}
 	} else {
 		r.sync = &SyncObservation{ExecutionID: id, Mode: mode, StartedAt: at, ObservedAt: at, State: "unfinalized", RecoveryObservations: []AppStateRecoveryObservation{}}
+		r.sync.Ingestion = &IngestionObservation{ExecutionID: id, StartedAt: at, ObservedAt: at}
 	}
 	r.mu.Lock()
 	r.persistLocked(true)
@@ -330,6 +332,9 @@ func ReadDiagnosticObservations(db *store.DB) DiagnosticObservations {
 			if _, ok := waHistorySync.HistorySync_HistorySyncType_value[h.SyncType]; !ok {
 				return fail()
 			}
+		}
+		if !validIngestionObservation(s.Ingestion, s.ExecutionID) {
+			return fail()
 		}
 		result.Sync = &s
 	}

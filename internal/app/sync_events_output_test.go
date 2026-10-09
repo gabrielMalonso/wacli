@@ -29,7 +29,7 @@ func TestHistorySyncMetadataPreservesAbsentOptionalValues(t *testing.T) {
 		Event string                     `json:"event"`
 		Data  map[string]json.RawMessage `json:"data"`
 	}
-	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &evt); err != nil {
+	if err := json.NewDecoder(&output).Decode(&evt); err != nil {
 		t.Fatal(err)
 	}
 	if evt.Event != "history_sync" || string(evt.Data["sync_type"]) != `"RECENT"` || string(evt.Data["conversations"]) != "0" || string(evt.Data["chunk_order"]) != "null" || string(evt.Data["progress"]) != "null" {

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Ingestion: report sanitized live persistence failures and per-response history received/valid/content/processed/skipped/failed counts, with fixed discard reasons and bounded run observations in the existing Sync diagnostic slot. Keep replay/update/purge processing distinct from unmeasured additions, propagate ON_DEMAND errors and preserve lifecycle, authorship, idempotency and backfill contracts. No schema/flags/dependencies or automatic gap recovery; fixture and race validation only.
+
 - Changes watch: bound native SQLite lock waits during readonly opening and polls, with synchronous context-aware retries and timeout/cancelled exits under WAL/DELETE contention. Preserve legacy connection defaults and release snapshots before retrying; no frame follows observed cancellation. Validate exclusive-lock timeouts, SIGINT during opening and transient recovery with offline production CLI fixtures.
 
 - Changes: add readonly `changes watch` streaming NDJSON pages from the existing retained feed, with list-compatible resume cursors, bounded cancellable polling and strict output failure handling. Emit an initial empty checkpoint, drain backlog and keep awaiting future WAL commits without starting sync/connection or persisting consumer state. Processing is at-least-once; save a cursor only after processing a complete frame. Document limits, timeout, discovery encoding and offline fixtures.

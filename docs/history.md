@@ -19,6 +19,66 @@ wacli history backfill --chat JID [--before-id MESSAGE_ID] [--count 50] [--reque
 - `blocked` / `no_local_anchor` chats have no local message yet; run `wacli sync` first.
 - `history fill --dry-run` lists matching ready chats that would be selected for a future multi-chat fill workflow. It does not connect to WhatsApp or write state.
 
+## Ingestion diagnostics
+
+Live message persistence failures now emit a sanitized warning on stderr. With
+`--events`, the warning remains one NDJSON event (`code=ingestion_persistence_failed`)
+with fixed `operation=live` and `reason=persistence_failed`; no raw SQLite error,
+chat/message identifier, payload, key or URL is included. Sync continues under its
+existing lifecycle policy; the warning does not retry the message or certify recovery.
+Media/webhook/poll work for that live message requires successful persistence.
+
+Each admitted history response emits `history_ingestion` on the existing stderr
+event stream, or a human summary on stderr without `--events`. Its `summary` contains:
+
+| Field | Observation |
+| --- | --- |
+| `received` | All entries in conversation message lists, including malformed entries. |
+| `valid` | Entries that reached parsing with WebMessageInfo, a nonempty ID and chat. Structural validity does not prove usable content, verified authorship or successful storage. |
+| `content` | Valid entries whose initial parser result reports content. Not distinct messages, retained content or recovery. |
+| `processed` | Successful persistence calls, including replay/update and suppression by existing purge protections. |
+| `skipped` / `skip_reasons` | Discarded entries: `missing_info`, `missing_id`, `missing_chat`, or `unusable_edit`. Missing chat takes precedence for its whole list. |
+| `failed` / `failure_reasons` | Failed author verification/retention (`author_unverified`) or persistence (`persistence_failed`, including limits). |
+| `unprocessed` | Received entries left without a processing outcome when the handler returns early. |
+| `additions`, `replays`, `purge_suppressed` | Always `null`: the current persistence API does not measure these separately. |
+| `last_failure` | Last failure date and fixed operation/reason, without message content or identity. |
+
+Legacy `messages_synced`/`messages_stored` still count successful processing,
+including replays; they are not additions. Backfill `responses_seen` still counts
+matching transport responses and its response `messages` counts list entries,
+including malformed ones. Neither certifies useful content. The new response
+summary covers all conversations in that response, not just a selected backfill
+chat; existing selected-window growth/evidence and ON_DEMAND error propagation
+remain unchanged. A partial write can leave retained rows before a later failure;
+`failed` does not mean rollback.
+
+The existing Sync diagnostic slot adds optional `ingestion`: a bounded aggregate
+with execution ID, start/observation dates, live received/processed/failure counts
+(for messages that reached persistence),
+history response/count/reason totals and only the latest response/failure.
+`degraded=true` stays set within the run after any skip, failure or unprocessed
+entry. Discards are ingestion observations, not network/authentication failures.
+It resets for each new Sync run; no observations means unknown, and a zero counter
+only describes what this run observed. It cannot detect messages that never arrived.
+
+Updates stay in memory on the live hot path. Existing lifecycle checkpoints and
+one checkpoint at the end of each history response retain the aggregate in the
+existing diagnostic snapshot; no schema, journal, flag or environment variable
+is added. Saved checkpoints can lag active work or be absent/unconfirmed after a
+store failure. Doctor and Sync result observations show historical snapshots.
+`App.IngestionSnapshot()` offers a synchronized defensive copy of this invocation's
+latest run for owner status integration, with `nil` before a run is published;
+it opens no store/client and changes no readiness contract. A stopped run remains
+dated evidence, not current health. Old saved snapshots without this field remain
+readable and carry no ingestion health observation.
+
+A known comparison found an own text visible on WhatsApp Web but absent locally
+after a correctly anchored ON_DEMAND request. The response had entries without
+IDs and no measured growth; the cause was not attributed to these ingestion bugs.
+These diagnostics expose failure/discard evidence, preserve PN/LID, Unicode,
+idempotency and purges, and do not automatically recover that gap. No row count,
+response, replay completion or progress value proves complete history.
+
 ## Imported authors and retained history
 
 Newly imported own messages use the observed local account's public PN, never
