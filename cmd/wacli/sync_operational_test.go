@@ -17,7 +17,9 @@ import (
 	"github.com/openclaw/wacli/internal/wa"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waHistorySync"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 )
 
 func TestSyncTypedOperationsDuringBlockedMetadata(t *testing.T) {
@@ -91,6 +93,15 @@ func TestSyncTypedOperationsDuringBlockedMetadata(t *testing.T) {
 	if v.Reason != "" || v.OwnerReady || v.Initialized || !v.SendInitialized || !v.Operations.SendAttempt.Attemptable || !v.Operations.DraftWrite.Attemptable || v.Operations.ChatStateWrite.Attemptable || v.Ready || v.Authenticated != "unknown" || v.AppState.Reconciliation != app.AppStateReconciliationRequired || v.Observations == nil || v.Observations.Connection.LoginConfirmedAt == nil {
 		t.Fatalf("metadata=%+v", v)
 	}
+	f.emit(&events.HistorySync{Data: &waHistorySync.HistorySync{SyncType: waHistorySync.HistorySync_RECENT.Enum()}})
+	withHistory := querySyncStatus(t.Context(), dir)
+	if withHistory.Reason != "" || withHistory.Observations == nil || withHistory.Observations.Sync == nil {
+		t.Fatalf("history status=%+v", withHistory)
+	}
+	ingestion := withHistory.Observations.Sync.Ingestion
+	if ingestion == nil || ingestion.ExecutionID != v.OwnerRunID || ingestion.HistoryResponses != 1 || ingestion.LastHistory == nil || ingestion.LastHistory.SyncType != "RECENT" || ingestion.History.Additions != nil || withHistory.Ready || withHistory.Authenticated != "unknown" || withHistory.OwnerReady || !withHistory.Operations.SendAttempt.Attemptable {
+		t.Fatalf("history did not preserve run/admission contract: %+v", withHistory)
+	}
 	resp, err := delegateSend(t.Context(), flags, sendDelegateRequest{Kind: draftWriteKind, Draft: &draft})
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +167,7 @@ func TestSyncTypedOperationsDuringBlockedMetadata(t *testing.T) {
 
 func TestSyncStatusV2DowngradeAndOperationValidation(t *testing.T) {
 	skipPresenceDelegateSocketTestOnUnsupportedOS(t)
-	for _, mutation := range []string{"v2", "missing_operations", "positive_auth", "stopping_send", "missing_run"} {
+	for _, mutation := range []string{"v2", "missing_operations", "positive_auth", "stopping_send", "missing_run", "uncorrelated_ingestion"} {
 		t.Run(mutation, func(t *testing.T) {
 			dir := t.TempDir()
 			stop, err := startSendDelegateServerForStore(t.Context(), dir, sendSpacing{}, func(_ context.Context, req sendDelegateRequest) (sendDelegateResponse, error) {
@@ -172,6 +183,8 @@ func TestSyncStatusV2DowngradeAndOperationValidation(t *testing.T) {
 					resp.SyncStatus.Status.State = app.SyncLiveStopping
 				case "missing_run":
 					resp.SyncStatus.Status.OwnerRunID = ""
+				case "uncorrelated_ingestion":
+					resp.SyncStatus.Status.Observations = &app.DiagnosticObservations{Sync: &app.SyncObservation{ExecutionID: resp.SyncStatus.Status.OwnerRunID, Ingestion: &app.IngestionObservation{ExecutionID: strings.Repeat("f", 32)}}}
 				}
 				return resp, nil
 			})

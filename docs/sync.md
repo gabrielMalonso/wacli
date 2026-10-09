@@ -97,7 +97,15 @@ A fresh query can observe the newer transport. Terminal precedence remains.
 epoch; it changes for a new owner run. `observations` reuses the bounded historical
 connection/Sync facts of that run, including dated login/replay/recovery observations.
 These dates are historical SDK events, not proof that the current socket is logged
-in. `app_state` reads debt from the owner's already-open archive and adds existing
+in. Optional `observations.sync.ingestion` projects the existing defensive
+`IngestionSnapshot()` only when its `execution_id` matches `owner_run_id` and the
+Sync observation. It contains bounded sanitized counts, fixed skip/failure reasons
+and dated summaries for this run. Absent/older snapshots mean unknown; a stopped
+run remains dated evidence. `degraded=false` and processed counts do not certify
+completeness, freshness or authentication. Additions, replays and purge suppression
+remain null because they are not measured; no message/chat IDs or raw errors are
+included. This diagnostic projection is excluded from the lightweight action
+admission path. `app_state` reads debt from the owner's already-open archive and adds existing
 recovery observations by collection/phase with sanitized codes. Unknown debt remains
 unknown; no snapshot ACK clears debt or confirms remote application.
 

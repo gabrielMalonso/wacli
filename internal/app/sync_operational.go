@@ -216,12 +216,17 @@ func (a *App) SyncLiveSnapshot() SyncLiveStatus {
 		r := run.diagnostic
 		r.mu.Lock()
 		// Keep dated facts defensive, including nested optional observations.
-		raw, _ := json.Marshal(r.sync)
+		copy := *r.sync
+		copy.Ingestion = nil // Project the run-scoped getter after releasing r.mu.
+		raw, _ := json.Marshal(copy)
 		var s SyncObservation
 		_ = json.Unmarshal(raw, &s)
 		s.RecoveryObservations = run.snapshot()
 		connection := r.connectionRun
 		r.mu.Unlock()
+		if ingestion := a.IngestionSnapshot(); ingestion != nil && ingestion.ExecutionID == v.OwnerRunID && s.ExecutionID == v.OwnerRunID {
+			s.Ingestion = ingestion
+		}
 		v.AppState.RecoveryObservations = s.RecoveryObservations
 		v.Observations = &DiagnosticObservations{Version: 1, Historical: true, Sync: &s}
 		if connection != nil {

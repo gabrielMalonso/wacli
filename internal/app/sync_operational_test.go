@@ -119,6 +119,43 @@ func TestSyncStageNoopWithoutPublishedRun(t *testing.T) {
 	}
 }
 
+func TestSyncStatusIngestionIsDefensiveAndRunCorrelated(t *testing.T) {
+	a := newTestApp(t)
+	beginOperationalTestRun(t, a)
+	run := a.live.recovery
+	a.waMu.Lock()
+	a.appStateRecoveryOnClose = run
+	a.waMu.Unlock()
+	ctx := context.WithValue(t.Context(), appStateRecoveryRunKey{}, run)
+	a.observeLiveIngestion(ctx, errors.New("private persistence error"))
+	v := a.SyncLiveSnapshot()
+	i := v.Observations.Sync.Ingestion
+	if i == nil || i.ExecutionID != v.OwnerRunID || i.ExecutionID != v.Observations.Sync.ExecutionID || i.LiveReceived != 1 || i.LiveFailures != 1 || !i.Degraded || i.LastFailure == nil || i.LastFailure.Reason != "persistence_failed" || i.History.Additions != nil || v.Ready || v.Authenticated != "unknown" {
+		t.Fatalf("uncorrelated ingestion: %+v", v)
+	}
+	i.LiveFailures = 99
+	i.LastFailure.Reason = "mutated"
+	if next := a.SyncLiveSnapshot().Observations.Sync.Ingestion; next.LiveFailures != 1 || next.LastFailure.Reason != "persistence_failed" {
+		t.Fatal("status exposed mutable ingestion references")
+	}
+	// A newly published diagnostic run cannot be attributed to the old live
+	// owner, including the nil interval before that new run is initialized.
+	other := &appStateRecoveryRun{}
+	a.waMu.Lock()
+	a.appStateRecoveryOnClose = other
+	a.waMu.Unlock()
+	if next := a.SyncLiveSnapshot().Observations.Sync.Ingestion; next != nil {
+		t.Fatal("unpublished ingestion retained in live projection")
+	}
+	diagnostic := newDiagnosticRun(a, SyncModeFollow, other)
+	a.waMu.Lock()
+	other.diagnostic = diagnostic
+	a.waMu.Unlock()
+	if next := a.SyncLiveSnapshot().Observations.Sync.Ingestion; next != nil {
+		t.Fatal("new run ingestion attributed to old owner")
+	}
+}
+
 func TestSyncAdmissionDoesNotWaitForBlockedSQLiteDiagnostics(t *testing.T) {
 	a := newTestApp(t)
 	f := newFakeWA()

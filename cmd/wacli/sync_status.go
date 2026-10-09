@@ -214,6 +214,12 @@ func validSyncLiveStatus(v app.SyncLiveStatus) bool {
 	if v.OwnerRunID == "" && (v.SendInitialized || v.Initialized) || v.Operations != app.SyncOperationAdmission(v) {
 		return false
 	}
+	if v.Observations != nil && v.Observations.Sync != nil && v.Observations.Sync.Ingestion != nil {
+		s := v.Observations.Sync
+		if v.OwnerRunID == "" || s.ExecutionID != v.OwnerRunID || s.Ingestion.ExecutionID != v.OwnerRunID {
+			return false
+		}
+	}
 	if v.OwnerReady && !v.SendInitialized || v.SendInitialized && (v.State == "stopping" || v.State == "stopped" || v.State == "logged_out" || v.State == "error") {
 		return false
 	}
